@@ -1,0 +1,52 @@
+[
+  {
+    "concurrency": 1,
+    "file_chars": 5546,
+    "chunk_chars": 6000,
+    "overlap": 500,
+    "max_tokens": 512,
+    "timeout_seconds": 200.0,
+    "elapsed_seconds": 202.122,
+    "files": [
+      {
+        "file": "synthetic-0.txt",
+        "status": "ok",
+        "seconds": 127.652,
+        "detections": 1,
+        "audit_risky": false
+      },
+      {
+        "file": "synthetic-1.txt",
+        "status": "ok",
+        "seconds": 202.078,
+        "detections": 1,
+        "audit_risky": false
+      }
+    ]
+  },
+  {
+    "concurrency": 2,
+    "file_chars": 5546,
+    "chunk_chars": 6000,
+    "overlap": 500,
+    "max_tokens": 512,
+    "timeout_seconds": 200.0,
+    "elapsed_seconds": 158.832,
+    "files": [
+      {
+        "file": "synthetic-0.txt",
+        "status": "ok",
+        "seconds": 157.935,
+        "detections": 1,
+        "audit_risky": false
+      },
+      {
+        "file": "synthetic-1.txt",
+        "status": "ok",
+        "seconds": 158.812,
+        "detections": 1,
+        "audit_risky": false
+      }
+    ]
+  }
+]

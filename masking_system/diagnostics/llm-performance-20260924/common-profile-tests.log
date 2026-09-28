@@ -1,0 +1,27 @@
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 41a96747a9b4, SQLite baslangic semasi
+INFO  [alembic.runtime.migration] Running upgrade 41a96747a9b4 -> 9f21a6b8e4c3, SQLite baslangic seed verisi
+INFO  [alembic.runtime.migration] Running upgrade 9f21a6b8e4c3 -> c7b3f5a8d1e2, deger_eslemeleri.orijinal_deger_duz_metin kolonu ekle
+INFO  [alembic.runtime.migration] Running upgrade c7b3f5a8d1e2 -> 64918dac8066, ic domain local ve xmlns namespace allow-list
+INFO  [alembic.runtime.migration] Running upgrade 64918dac8066 -> 93e30d3e6141, generic secret assignment turkce parola sifre eklendi
+INFO  [alembic.runtime.migration] Running upgrade 93e30d3e6141 -> 112f965a7763, unc ag paylasim yolu ve baglamsal sicil no kurallari
+INFO  [alembic.runtime.migration] Running upgrade 112f965a7763 -> 41f61751e3c7, contextual personnel id genisletildi daha fazla varyant
+INFO  [alembic.runtime.migration] Running upgrade 41f61751e3c7 -> 5a1c9e7d4b62, generic secret assignment tirnakli anahtar (JSON/TOML) destegi
+INFO  [alembic.runtime.migration] Running upgrade 5a1c9e7d4b62 -> 8d2f6c19a4e7, xml element secret kurali ekle
+INFO  [alembic.runtime.migration] Running upgrade 8d2f6c19a4e7 -> 3f7b1e9c6a24, kurumsal terim sozlugu - turkce ek siniri duzeltmesi
+INFO  [alembic.runtime.migration] Running upgrade 3f7b1e9c6a24 -> d4e8a1b7c2f9, Kurumsal terim listeleme ve gecmisi koruyan soft-delete alanlari.
+INFO  [alembic.runtime.migration] Running upgrade d4e8a1b7c2f9 -> e6f1c9a4b2d7, Legacy \b...\b kurumsal terimlerini listeleme alanina backfill et.
+INFO  [alembic.runtime.migration] Running upgrade e6f1c9a4b2d7 -> a8c4d2e7f901, Context scoped learned sensitive and suppression decisions.
+INFO  [alembic.runtime.migration] Running upgrade a8c4d2e7f901 -> 1c04eb3b4eae, generic secret assignment sadece deger degistir
+INFO  [alembic.runtime.migration] Running upgrade 1c04eb3b4eae -> b6f209a731cd, Keep mapping records and a failed run when output publication fails.
+INFO  [alembic.runtime.migration] Running upgrade b6f209a731cd -> f2a9c7d1e6b4, Scope new placeholder mappings and counters to each masking job.
+........................................................................ [ 96%]
+...                                                                      [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/defusedxml/__init__.py:30
+  /home/aipc/Desktop/OWASP_PROJE/masking_system/masking_service/.venv/lib/python3.13/site-packages/defusedxml/__init__.py:30: DeprecationWarning: defusedxml.cElementTree is deprecated, import from defusedxml.ElementTree instead.
+    from . import cElementTree
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+75 passed, 1 warning in 6.23s

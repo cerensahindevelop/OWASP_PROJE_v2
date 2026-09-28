@@ -1,0 +1,21 @@
+{
+  "widget_files": 1000,
+  "http_204": 1000,
+  "browser_errors": {},
+  "elapsed": 19.82,
+  "queue": {
+    "version": 1,
+    "limit": 4,
+    "active": 0,
+    "queued": 0,
+    "peak": 4
+  },
+  "received_by_python": 1000,
+  "queue_after_rerun": {
+    "version": 1,
+    "limit": 4,
+    "active": 0,
+    "queued": 0,
+    "peak": 4
+  }
+}

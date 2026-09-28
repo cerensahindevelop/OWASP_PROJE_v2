@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-09-24T07:32:47.820452+00:00",
+  "purpose": "Tarama sırasında arayüz/backend ve backend/LLM hata türü, süre ve HTTP durum kodunu ayırt eden tanılama güncellemesi. İntra olayının kök nedeni henüz kesinleşmedi.",
+  "backup": "/media/aipc/4D72-8BF5/masking/.update_backups/before-scan-network-diagnostics-20260924T073247Z-6c920752.zip",
+  "validation": "33 tests passed before packaging; Python 3.11 syntax checked; SHA-256 source/target verified",
+  "files": [
+    {
+      "path": "app/core/http_diagnostics.py",
+      "existed_before": false,
+      "before_sha256": null,
+      "after_sha256": "9958c86df02a5c30ddbaf62dfc3ef733fa29439867a0613398d99747836d7ebd"
+    },
+    {
+      "path": "app/webapp/api_client.py",
+      "existed_before": true,
+      "before_sha256": "af77552c68cdb0ea0f9e31644685811b4c4f245a0b74b71783afc9c151f4f208",
+      "after_sha256": "abe85389f5ef9f43f17ea1777e772c121cbe8baa84302ad694fb822126f02c9e"
+    },
+    {
+      "path": "app/webapp/common.py",
+      "existed_before": true,
+      "before_sha256": "518e15fb9ad42c79a7f238e957f3ed0c4955c0ca485c2128cfec7342fcc1113c",
+      "after_sha256": "bd24733367db4f5b39b094215b93fe518ef3755221110f0fb41a736de29b7148"
+    },
+    {
+      "path": "app/services/llm_recognizer.py",
+      "existed_before": true,
+      "before_sha256": "f247ee9e25eb8bd00c513bdd8a6e58c2c8111f1070cf2285c423b508798206fe",
+      "after_sha256": "492fd7b751ae1589e27cf5292b8f2a7d373579a22ac9835585c7640a4177623b"
+    }
+  ]
+}

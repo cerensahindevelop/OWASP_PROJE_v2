@@ -1,0 +1,20 @@
+[
+  {
+    "count": 10000,
+    "concurrency": 10000,
+    "peak": 10000,
+    "statuses": {
+      "204": 10000
+    },
+    "errors": {},
+    "elapsed": 9.00020000000298,
+    "browser_errors": {},
+    "queue": {
+      "version": 1,
+      "limit": 4,
+      "active": 0,
+      "queued": 0,
+      "peak": 4
+    }
+  }
+]

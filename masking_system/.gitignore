@@ -1,0 +1,40 @@
+# Ortam / secret dosyalari - gercek kimlik bilgileri asla commit edilmez
+.env
+*.env
+!.env.example
+
+# SQLite veritabani (hassas veri iceren gercek DB dosyasi commit edilmez)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+
+# Intra/offline deployment artefact'leri
+deployment/wheels/
+deployment/*-py*-*/
+deployment/*.zip
+*.whl
+
+# Test / cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Streamlit UI - dosya yukleme modunda uretilen gecici/ara ciktilar
+masking_service/uploads_output/
+
+# Web UI (FastAPI) - kaynak yukleme ve indirme icin gecici klasorler
+web_uploads/
+web_outputs/
+
+# IDE
+.vscode/
+.idea/

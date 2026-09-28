@@ -1,0 +1,39 @@
+[
+  {
+    "count": 2000,
+    "concurrency": 2000,
+    "peak": 2000,
+    "statuses": {
+      "204": 2000
+    },
+    "errors": {},
+    "elapsed": 1.7117999999970197,
+    "browser_errors": {}
+  },
+  {
+    "count": 10000,
+    "concurrency": 10000,
+    "peak": 10000,
+    "statuses": {
+      "204": 8961
+    },
+    "errors": {
+      "ERR_NETWORK: Network Error": 1039
+    },
+    "elapsed": 7.91859999999404,
+    "browser_errors": {
+      "net::ERR_INSUFFICIENT_RESOURCES": 1039
+    }
+  },
+  {
+    "count": 10000,
+    "concurrency": 4,
+    "peak": 4,
+    "statuses": {
+      "204": 10000
+    },
+    "errors": {},
+    "elapsed": 9.26289999999851,
+    "browser_errors": {}
+  }
+]

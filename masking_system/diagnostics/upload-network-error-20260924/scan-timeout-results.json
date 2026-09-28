@@ -1,0 +1,17 @@
+[
+  {
+    "layer": "backend_llm",
+    "error": "vLLM istegi basarisiz: katman=backend_llm; hata=ReadTimeout; gecen_saniye=0.10; timeout_ayari_saniye=0.05. Yanıt verisi bekleme süresi aşıldı.",
+    "original_type": "ReadTimeout",
+    "original_message_empty": true,
+    "real_network": true
+  },
+  {
+    "layer": "arayuz_backend",
+    "error": "Backend isteği zaman aşımına uğradı.",
+    "detail": "katman=arayuz_backend; hata=ReadTimeout; gecen_saniye=0.05; timeout_ayari_saniye=0.05. Yanıt verisi bekleme süresi aşıldı.",
+    "original_type": "ReadTimeout",
+    "original_message_empty": false,
+    "real_network": true
+  }
+]

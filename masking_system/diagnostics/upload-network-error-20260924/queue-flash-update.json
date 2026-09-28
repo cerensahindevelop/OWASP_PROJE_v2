@@ -1,0 +1,38 @@
+{
+  "created_at": "2026-09-24T08:09:03.234389+00:00",
+  "purpose": "Same-origin Streamlit file upload queue, maximum 4 concurrent requests; cancellation/error-safe.",
+  "validation": {
+    "browser_regressions_passed": 2,
+    "transport_requests_successful": 10000,
+    "streamlit_163_full_folder_received": 1000,
+    "streamlit_158_full_folder_received": 500,
+    "limitation": "5000-file widget test incomplete after 241.12 seconds; 1264 uploaded without network errors. UI rendering remains slow."
+  },
+  "backup": "/media/aipc/4D72-8BF5/masking/.update_backups/before-upload-queue-20260924T080903Z-615b5626.zip",
+  "files": [
+    {
+      "path": "app/webapp/app.py",
+      "existed_before": true,
+      "before_sha256": "886c8b1cbbc88285e3e663d7fcc7982e2964914ef41bd30b0005c0807f5afee3",
+      "after_sha256": "a024c4596a611e79d936837e1026bebeb849b92fcf829482355f63870e5f83cb"
+    },
+    {
+      "path": "app/webapp/upload_queue.py",
+      "existed_before": false,
+      "before_sha256": null,
+      "after_sha256": "427640319356df5502bc72ef2a225e2aa24353c7b73ccdf09674052d8d4a7e74"
+    },
+    {
+      "path": "app/webapp/assets/upload_queue.js",
+      "existed_before": false,
+      "before_sha256": null,
+      "after_sha256": "b9e8bdab5dbb58f4bf2abc3cf2a69feb6edb77181fc1f2910a4ae552ee7f347d"
+    },
+    {
+      "path": "requirements.txt",
+      "existed_before": true,
+      "before_sha256": "0f3cfda0dc309b8b61dbedeb7529bf58467566fbd7d3d944d66e453d731a689b",
+      "after_sha256": "e1227bcd3911b5544cfd15e705717eb9d2f1038e3ae82861912d62707f06aecd"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "created_at": "2026-09-24T13:10:41.855326+00:00",
+  "purpose": "Preserve original source offsets for learned sensitive Unicode matches.",
+  "backup": "/media/aipc/4D72-8BF5/masking/.update_backups/before-learned-unicode-20260924T131041Z-0d2862fb.zip",
+  "validation": {
+    "local_full_suite_passed": 915,
+    "local_final_focused_suite_passed": 50,
+    "flash_source_unicode_tests_passed": 29
+  },
+  "files": [
+    {
+      "path": "app/services/unicode_spans.py",
+      "existed_before": false,
+      "before_sha256": null,
+      "after_sha256": "f8cf7761c782b8cc1473fdc3cd1332661635bb38fa6b1b795edfb5651be575fb"
+    },
+    {
+      "path": "app/services/learned_decisions.py",
+      "existed_before": true,
+      "before_sha256": "6ea0fde8e8b315b856be7f409739b9e15c9736e9a657c365634ce15b68113375",
+      "after_sha256": "af459b81286d948736cc61c140f6a08d9022f6f6c07915d377c136fb3acf4eff"
+    }
+  ],
+  "copied_hashes_verified": true
+}

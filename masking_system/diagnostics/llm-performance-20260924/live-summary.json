@@ -1,0 +1,16 @@
+{
+  "file_chars": 21046,
+  "detection_chunks": 4,
+  "audit_chunks": 4,
+  "total_requests": 8,
+  "max_request_seconds": 61.928,
+  "total_prompt_tokens": 15895,
+  "total_completion_tokens": 184,
+  "all_requests_stop": true,
+  "all_requests_ok": true,
+  "limitations": [
+    "Synthetic LLM-only test, not end-to-end masking quality benchmark.",
+    "Existing server and other clients were not restarted or isolated.",
+    "No before/after speedup ratio or intra Qwen measurements claimed."
+  ]
+}

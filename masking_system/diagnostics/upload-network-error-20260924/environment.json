@@ -1,0 +1,15 @@
+{
+  "date": "2026-09-24",
+  "streamlit_transport_test": "1.63.0",
+  "streamlit_widget_test": "1.58.0",
+  "chromium": "149.0.7827.55",
+  "os": "Linux",
+  "python": "3.13",
+  "wheel": "streamlit-1.63.0-py3-none-any.whl",
+  "wheel_sha256": "c24fd38170543ffb749321c801627aaa09068219539d7b81ef77633ea2408b36",
+  "transport": "localhost HTTP, no proxy",
+  "llm": "not started or called",
+  "application_backend": "not started or called",
+  "synthetic_file_bytes": 464,
+  "notes": "The archived experiment retains the absolute paths used on this diagnostic machine. Test Streamlit was loaded from an extracted wheel via PYTHONPATH; project installation was not modified."
+}

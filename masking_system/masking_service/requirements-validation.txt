@@ -1,0 +1,7 @@
+# Tested parser set. No Node.js/compiler process or runtime downloads required.
+tree-sitter==0.26.0
+tree-sitter-typescript==0.23.2
+tree-sitter-javascript==0.25.0
+sqlglot==30.18.0
+defusedxml==0.7.1
+PyYAML==6.0.3

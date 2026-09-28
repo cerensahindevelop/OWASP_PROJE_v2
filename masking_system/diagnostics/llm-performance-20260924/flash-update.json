@@ -1,0 +1,73 @@
+{
+  "created_at": "2026-09-25T06:35:58.669650+00:00",
+  "purpose": "LLM chunking, shared request admission and conservative common application profile 1/200/6000/500/512",
+  "backup": "/media/aipc/4D72-8BF5/masking/.update_backups/before-llm-common-profile-20260925T063557Z-0196e93d.zip",
+  "files": [
+    {
+      "path": ".env.example",
+      "existed_before": true,
+      "before_sha256": "0ef94b7da316c281b73dac3fe81855265c9f2a4ea415b4efe755db14c3d3f32c",
+      "after_sha256": "f6bed2f69d86a4dffb6f4abc4f25598e794b75dff046494d22c9974ae3845828"
+    },
+    {
+      "path": "masking_service/app/core/config.py",
+      "existed_before": true,
+      "before_sha256": "024734476daad332a8ace7cf8ff65620806071c5ca38a3cb141a22f45b82141a",
+      "after_sha256": "047f274519b63efcf703fce3944a536d3939419a04a1b0d68fd8077d8d30ae6b"
+    },
+    {
+      "path": "masking_service/app/services/audit_reviewer.py",
+      "existed_before": true,
+      "before_sha256": "f62e517e473ccc0e8d911417a8833cbda95323dd640de7e34ed43f373fb12b88",
+      "after_sha256": "fadec27cc32f05fb190447fb05dc51a6839c307873dddc22014e31bb09379a91"
+    },
+    {
+      "path": "masking_service/app/services/audit_warning_service.py",
+      "existed_before": true,
+      "before_sha256": "6b9fbbf2babdebf77642333f7a5c6ab3c90ee5958db3e11237c37d0c446642c7",
+      "after_sha256": "c72efb5fc400a09d3cd3efe77bc7a0d146177425060fc08a764f9a0d06d4f512"
+    },
+    {
+      "path": "masking_service/app/services/exporter.py",
+      "existed_before": true,
+      "before_sha256": "10357b95e4f8da754f01e17cbd9cd1cb7f54072e10c728f80e56803c6a86095b",
+      "after_sha256": "4047b1a05712e5743b9612cd33d3dd87c0d2868dd802a7b5a44afbd58bd0c5fd"
+    },
+    {
+      "path": "masking_service/app/services/llm_detector.py",
+      "existed_before": true,
+      "before_sha256": "d845aef10d4e15a4ddd973e212b657d881c8dfc91cc38c08fb7e743c0d8d3bdd",
+      "after_sha256": "cecffde31ea8b13d1143d10c34aaac934b3e57cfe237b332d9a8dc98fcf8c301"
+    },
+    {
+      "path": "masking_service/app/services/llm_recognizer.py",
+      "existed_before": true,
+      "before_sha256": "492fd7b751ae1589e27cf5292b8f2a7d373579a22ac9835585c7640a4177623b",
+      "after_sha256": "4c452fb0ebed32aeacf1e911f8b8c382059e9051317da5ba100b30a8f13f4661"
+    },
+    {
+      "path": "masking_service/app/services/llm_runtime.py",
+      "existed_before": false,
+      "before_sha256": null,
+      "after_sha256": "08b9a146787c54fa71f1247e53c23bef426f8c11e7dc6a56ee4a268e08922057"
+    },
+    {
+      "path": "masking_service/scripts/benchmark_llm.py",
+      "existed_before": false,
+      "before_sha256": null,
+      "after_sha256": "962615de7e98f0933f814801de70d59a9a4befa39341e59db76bf950494625bf"
+    },
+    {
+      "path": "diagnostics/llm-performance-20260924/common-profile-summary.md",
+      "existed_before": false,
+      "before_sha256": null,
+      "after_sha256": "a18b01a4473507f265146652b5c0b8af1cc1f08e6a75ae01f2ff13010cfdaa92"
+    }
+  ],
+  "copied_hashes_verified": true,
+  "full_application_matching_files": 97,
+  "python_311_syntax": "passed",
+  "local_focused_tests_passed": 75,
+  "flash_source_tests": "75 passed; temporary copy of flash application; isolated temporary database",
+  "local_env_database_and_inference_server_settings_copied": false
+}

@@ -1,0 +1,8 @@
+# Intra/offline kurulum icin:
+# 1. Gerekli wheel dosyalarini kurum artifact repository'sinden veya onceden
+#    hazirlanmis wheelhouse klasorunden saglayin.
+# 2. Kurulum ornegi:
+#      pip install --no-index --find-links ../deployment/wheels -r requirements-intranet.txt
+
+-r requirements.txt
+en-core-web-lg==3.8.0

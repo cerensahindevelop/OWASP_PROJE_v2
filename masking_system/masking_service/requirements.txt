@@ -1,0 +1,49 @@
+# --- Veritabani / ORM ---
+# SQLite icin ayri bir DB-API surucusu gerekmez - sqlite3 Python stdlib'inde gelir.
+sqlalchemy>=2.0
+alembic>=1.13
+
+# --- Konfigurasyon (.env okuma) ---
+pydantic>=2.7
+pydantic-settings>=2.3
+python-dotenv>=1.0
+
+# --- Guvenlik ---
+cryptography>=42.0
+
+# --- Dosya tipi tespiti (icerik-bazli text/binary siniflandirma) ---
+charset-normalizer>=3.3
+aiofiles>=24.1
+
+# --- CLI (yonetim komutlari: export, unmask, kural-ekle, rapor-*) ---
+typer>=0.12
+
+# --- HTTP istemcisi (yerel vLLM entegrasyonu icin) ---
+httpx>=0.27
+
+# --- Katman 2 PII tespiti (Presidio + spaCy) ---
+presidio-analyzer>=2.2.355
+presidio-anonymizer>=2.2.355
+spacy>=3.7
+
+# --- Web arayuzu (teknik olmayan kullanicilar icin Streamlit paneli) ---
+# Same-document upload queue uses st.html(unsafe_allow_javascript=True).
+streamlit>=1.58
+# Europe/Istanbul saat dilimi verisi (Windows cevrimdisi paketinde de bulunur).
+tzdata==2026.3
+
+# --- Web API (Streamlit'ten ayri FastAPI backend sureci) ---
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+
+# --- Test (regresyon testleri: overlap resolution, token boundary, ast.parse dogrulamasi) ---
+pytest>=8.0
+
+# --- Export-sonrasi sozdizimi dogrulamasi (.yaml/.yml icin) ---
+-r requirements-validation.txt
+
+# --- Kurumsal terim sozlugu toplu yukleme (.xlsx bellek-ici ayristirma +
+# XML entity-expansion/"billion laughs" sertlestirmesi) ---
+openpyxl>=3.1
+defusedxml>=0.7

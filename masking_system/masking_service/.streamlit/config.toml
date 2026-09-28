@@ -1,0 +1,21 @@
+# Bu proje butun bir proje klasorunu (node_modules, build ciktilari, log/
+# veri dosyalari dahil - kolayca birkac GB'a ulasan tekil dosyalar
+# icerebilir) "Dosya Yukle" modundan yuklemeyi destekler. Kullanicilar
+# birbirinden FARKLI bilgisayarlarda calistigindan (bkz. proje notlari)
+# "Klasor Yolu" (sunucu-tarafi dosya yolu) modu bu kurulumda KULLANILAMAZ -
+# backend surecinin bir calisanin kendi C:\ suruculine erisimi yoktur,
+# tek secenek tarayici uzerinden yukleme. Streamlit'in server.maxUploadSize
+# VARSAYILANI (200 MB, DOSYA BASINA) bunun COK altinda kalir - bu sinirin
+# ustundeki her dosya, tarayicida ayirt edici olmayan bir "AxiosError:
+# Network Error" ile SESSIZCE reddedilir (Streamlit net bir "dosya cok
+# buyuk" mesaji GOSTERMEZ - bkz. streamlit/streamlit GitHub issue'lari).
+# Deger MB cinsindendir. ONEMLI: Streamlit yuklenen HER dosyayi TAMAMEN
+# RAM'e okur (diske stream etmez) - bu degeri cok yukseltmek, sunucunun
+# o dosyayi bellekte tutabilecek RAM'e sahip olmasini GEREKTIRIR, aksi
+# halde OOM (bellek tasmasi) ile surec cokebilir. Sunucu RAM'ine gore
+# ayarlayin; gercekten cok buyuk (onlarca GB) tekil dosyalar varsa bu
+# deger yeterli olmayabilir - o durumda dosyayi projeden haric tutup
+# ayrica elden tasimayi degerlendirin.
+[server]
+maxUploadSize = 10240
+maxMessageSize = 10240
