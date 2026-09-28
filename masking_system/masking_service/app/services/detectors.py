@@ -208,6 +208,47 @@ _ENTITY_TYPE_TR_ALIASES = {
 }
 
 
+# LLM'in serbest yazdigi "tip" degeri placeholder adina girer (mask_<tip>_N).
+# Serbest metin olarak birakilirsa model tipi "POSEIDON_SERVISI" gibi
+# hassas bir adla yazdiginda terim placeholder'in ICINDE sizar ve ayni tur
+# icin dosyadan dosyaya farkli adlar uretilir. Bu yuzden tip sabit bir
+# kumeye eslenir; bilinmeyen her deger genel KURUMSAL_TANIMLAYICI olur.
+LLM_ENTITY_TYPES = frozenset({
+    "PASSWORD", "API_KEY", "TOKEN", "SECRET", "PRIVATE_KEY", "CONNECTION_STRING",
+    "IP", "EMAIL", "PHONE", "URL", "HOSTNAME", "PERSON", "ADDRESS", "ORGANIZATION",
+    "KIMLIK_NO", "IBAN", "KURUM_JARGONU", "IC_SERVIS_ADI", "URUN_KOD_ADI",
+    "PROJE_KOD_ADI", "ENVANTER_KODU", "KURUMSAL_TANIMLAYICI",
+})
+LLM_FALLBACK_ENTITY_TYPE = "KURUMSAL_TANIMLAYICI"
+_LLM_ENTITY_ALIASES = {
+    "PERSON_NAME": "PERSON", "NAME": "PERSON", "KISI": "PERSON", "KISI_ADI": "PERSON", "PERSONEL": "PERSON",
+    "IP_ADDRESS": "IP", "IPV4": "IP", "IPV6": "IP", "IP_ADRESI": "IP",
+    "E_MAIL": "EMAIL", "EMAIL_ADDRESS": "EMAIL", "E_POSTA": "EMAIL", "EPOSTA": "EMAIL",
+    "PHONE_NUMBER": "PHONE", "TELEFON": "PHONE",
+    "DOMAIN": "HOSTNAME", "SERVER": "HOSTNAME", "HOST": "HOSTNAME", "SUNUCU": "HOSTNAME", "SUNUCU_ADI": "HOSTNAME",
+    "URI": "URL", "ENDPOINT": "URL",
+    "PASSWD": "PASSWORD", "SIFRE": "PASSWORD", "PAROLA": "PASSWORD",
+    "CREDENTIAL": "SECRET", "CREDENTIALS": "SECRET", "SECRET_KEY": "SECRET", "GIZLI_ANAHTAR": "SECRET",
+    "ACCESS_TOKEN": "TOKEN", "API_TOKEN": "TOKEN", "BEARER_TOKEN": "TOKEN", "JWT": "TOKEN",
+    "APIKEY": "API_KEY", "API_ANAHTARI": "API_KEY",
+    "DB_CONNECTION": "CONNECTION_STRING", "JDBC_URL": "CONNECTION_STRING",
+    "ORG": "ORGANIZATION", "COMPANY": "ORGANIZATION", "SIRKET": "ORGANIZATION", "KURUM": "ORGANIZATION",
+    "KURUM_ADI": "ORGANIZATION", "SIRKET_ADI": "ORGANIZATION",
+    "TC_KIMLIK_NO": "KIMLIK_NO", "TCKN": "KIMLIK_NO", "NATIONAL_ID": "KIMLIK_NO",
+    "SERVICE_NAME": "IC_SERVIS_ADI", "INTERNAL_SERVICE": "IC_SERVIS_ADI", "SERVIS_ADI": "IC_SERVIS_ADI",
+    "PRODUCT_CODE_NAME": "URUN_KOD_ADI", "CODENAME": "PROJE_KOD_ADI", "CODE_NAME": "PROJE_KOD_ADI",
+    "PROJECT_NAME": "PROJE_KOD_ADI", "PROJE_ADI": "PROJE_KOD_ADI", "JARGON": "KURUM_JARGONU",
+    "INVENTORY_CODE": "ENVANTER_KODU", "ADRES": "ADDRESS",
+}
+
+
+def normalize_llm_entity_type(entity_type: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", entity_type or "").strip("_").upper()
+    if normalized in LLM_ENTITY_TYPES:
+        return normalized
+    return _LLM_ENTITY_ALIASES.get(normalized, LLM_FALLBACK_ENTITY_TYPE)
+
+
 # LLM'in urettigi bir varlik tipini gecerli bir placeholder on-ekine cevirir.
 def placeholder_prefix_for_type(entity_type: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9]+", "_", entity_type.lower()).strip("_")

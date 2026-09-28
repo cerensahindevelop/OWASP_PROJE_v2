@@ -20,8 +20,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.models import AuditLog, AuditWarning, MaskingRun, ValueMapping
-from app.services.mapping_service import mapping_scope_for_run
+from app.core.crypto import decrypt_value
+from app.db.models import AuditLog, AuditWarning, FilterRule, MaskingContext, MaskingRun, ValueMapping
+from app.services.consistency_masking import SensitiveValueRegistry, find_consistency_occurrences
+from app.services.integrity_manifest import read_manifest, write_manifest, file_digest, source_tag
+from app.services.mapping_service import load_active_rules, mapping_scope_for_run, mask_relative_path
+from app.services.roundtrip_validator import text_digest
+from app.services.rule_engine import reverse_text
 from app.repository.audit_warning_repository import SqlAlchemyAuditWarningRepository
 from app.services.audit_reviewer import AuditVerdict, audit_masked_text
 from app.services.llm_runtime import llm_file_context
@@ -93,7 +98,9 @@ class AuditWarningService:
                     f"suppression_rule_ids={learned_ids or 'none'} revalidation=started"),
         ))
 
-        error = await self._final_pass(warning, run)
+        error = self._apply_run_consistency(warning, run)
+        if error is None:
+            error = await self._final_pass(warning, run)
         if error is not None:
             self.db.add(AuditLog(
                 run_id=run.id, file_path=warning.file_path, action="error",
@@ -138,7 +145,9 @@ class AuditWarningService:
                 self.db, run, warning.masked_content, warning.file_path, values,
             )
             self.db.flush()
-            error = await self._final_pass(warning, run)
+            error = self._apply_run_consistency(warning, run)
+            if error is None:
+                error = await self._final_pass(warning, run)
             if error is not None:
                 raise ValueError(f"Otomatik maskeleme sonrası dosya çıktıya eklenmedi: {error}")
             warning = self.audit_warnings.transition_pending(warning_id, status="dismissed")
@@ -155,11 +164,19 @@ class AuditWarningService:
         if not run.target_path:
             return "export hedef klasörü bulunamadı"
         target = Path(run.target_path).resolve()
-        destination = (target / warning.file_path).resolve()
+        try:
+            output_rel = self._output_relative_path(warning, run)
+        except ValueError as exc:
+            return str(exc)
+        destination = (target / output_rel).resolve()
         try:
             destination.relative_to(target)
         except ValueError:
             return "karantina dosya yolu hedef klasörün dışına çıkıyor"
+        if find_consistency_occurrences(
+            warning.masked_content, self._run_registry(run), file_path=warning.file_path
+        ):
+            return "tutarlılık kontrolünde bu işlemde maskelenen bir değer dosyada açık kaldı"
         if find_leaked_terms(self.db, warning.masked_content):
             return "kurumsal terim son kontrolünde açık değer kaldı"
         syntax_error = validate_masked_syntax(
@@ -212,7 +229,9 @@ class AuditWarningService:
                 [(review.found_value, review.entity_type) for review in approved],
             )
 
-        error = await self._final_pass(warning, run)
+        error = self._apply_run_consistency(warning, run)
+        if error is None:
+            error = await self._final_pass(warning, run)
         if error is not None:
             warning.audit_failed = True
             warning.reasoning = f"İnceleme kararları sonrası doğrulama başarısız: {error}"
@@ -228,7 +247,72 @@ class AuditWarningService:
             detail="review_decisions=complete revalidation=passed final_output=written",
         ))
 
-    # Karantinadaki maskelenmis icerigi run'in hedef klasorune yazar.
+    def _run_mapping_rows(self, run: MaskingRun) -> list[ValueMapping]:
+        return list(self.db.scalars(select(ValueMapping).where(
+            ValueMapping.context_id == run.context_id,
+            ValueMapping.run_id == mapping_scope_for_run(self.db, run.id),
+        )).all())
+
+    def _run_registry(self, run: MaskingRun) -> SensitiveValueRegistry:
+        """Export'un tutarlilik registry'sinin DB'deki eslemelerden kurulmus hali."""
+        rule_categories = dict(self.db.execute(select(FilterRule.id, FilterRule.category)).all())
+        registry = SensitiveValueRegistry()
+        registry.add_mapping_values([
+            (row.original_value_plain or decrypt_value(row.original_value_encrypted),
+             rule_categories.get(row.rule_id, "POST_MASK_AUDIT"))
+            for row in self._run_mapping_rows(run)
+        ])
+        return registry
+
+    def _apply_run_consistency(self, warning: AuditWarning, run: MaskingRun) -> str | None:
+        """Bu islemde baska dosyalarda maskelenmis ama bu dosyada acik kalmis
+        degerleri, export'taki tutarlilik gecisiyle ayni esleme sozlesmesiyle maskeler."""
+        occurrences = find_consistency_occurrences(
+            warning.masked_content, self._run_registry(run), file_path=warning.file_path
+        )
+        if not occurrences:
+            return None
+        from app.services.review_masking import mask_review_values
+        try:
+            warning.masked_content = mask_review_values(
+                self.db, run, warning.masked_content, warning.file_path,
+                [(item.original_value, item.entry.entity_type) for item in occurrences],
+            )
+        except ValueError as exc:
+            return f"tutarlılık maskelemesi uygulanamadı: {exc}"
+        self.db.add(AuditLog(
+            run_id=run.id, file_path=warning.file_path, action="replaced",
+            detail=f"source=consistency_on_release occurrences={len(occurrences)}",
+        ))
+        self.db.flush()
+        return None
+
+    def _output_relative_path(self, warning: AuditWarning, run: MaskingRun) -> Path:
+        """Serbest birakilan dosyanin ciktidaki MASKELI goreli yolu.
+
+        warning.file_path kaynak yoludur (proje/kurum adini acik icerebilir);
+        ciktiya asla bu yolla yazilmaz. Eski kayitlarda output_path yoksa yol,
+        export'taki ayni yol maskeleyicisi ve ayni islem eslemeleriyle yeniden
+        hesaplanir.
+        """
+        if warning.output_path:
+            return Path(warning.output_path)
+        context = self.db.get(MaskingContext, run.context_id)
+        if context is None:
+            raise ValueError("İşlem bağlamı bulunamadı; dosya çıktıya yazılamaz")
+        runtime_params = {
+            "project_name": context.project_name,
+            "sicil_no": context.sicil_no,
+            "branch_name": context.branch_name,
+        }
+        masked, _ = mask_relative_path(
+            self.db, context, Path(warning.file_path), runtime_params,
+            load_active_rules(self.db), run_id=run.id,
+        )
+        return masked
+
+    # Karantinadaki maskelenmis icerigi run'in hedef klasorune, MASKELI yola yazar
+    # ve imzali butunluk kaydina ekler.
     def _release_to_target(self, warning: AuditWarning) -> None:
         if warning.encoding == "java-class-v1":
             raise ValueError("Java class dosyası orijinal projeden yeniden taranmalıdır")
@@ -236,10 +320,42 @@ class AuditWarningService:
         if run is None or not run.target_path:
             raise ValueError("Export hedef klasörü bulunamadı; dosya çıktıya yazılamaz")
         target = Path(run.target_path).resolve()
-        dest_path = (target / warning.file_path).resolve()
+        output_rel = self._output_relative_path(warning, run)
+        dest_path = (target / output_rel).resolve()
         try:
             dest_path.relative_to(target)
         except ValueError as exc:
             raise ValueError("Karantina dosya yolu hedef klasörün dışına çıkıyor") from exc
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         write_text_preserving_encoding(dest_path, warning.masked_content, warning.encoding)
+        self._add_to_manifest(run, target, dest_path, warning)
+
+    def _add_to_manifest(self, run: MaskingRun, target: Path, dest_path: Path, warning: AuditWarning) -> None:
+        manifest = read_manifest(target, run.context_id)
+        if manifest is None:
+            return  # Eski/manifestsiz cikti: unmask zaten "kanit yok" yolunu kullanir.
+        reverse_map = {
+            row.placeholder_value: row.original_value_plain or decrypt_value(row.original_value_encrypted)
+            for row in self._run_mapping_rows(run)
+        }
+        original_text, _resolved, _unresolved = reverse_text(warning.masked_content, reverse_map)
+        mode = 0o644
+        if run.source_path:
+            source_file = Path(run.source_path) / warning.file_path
+            try:
+                mode = source_file.stat().st_mode & 0o777
+            except OSError:
+                pass  # Yukleme modunda gecici kaynak klasor silinmis olabilir.
+        try:
+            dest_path.chmod(mode)
+        except OSError:
+            pass
+        files = dict(manifest["files"])
+        files[dest_path.relative_to(target).as_posix()] = {
+            "encoding": warning.encoding or "utf-8",
+            "masked_sha256": file_digest(dest_path),
+            "source_tag": source_tag(run.context_id, text_digest(original_text)),
+            "mode": mode,
+        }
+        complete = run.files_scanned is not None and len(files) >= run.files_scanned
+        write_manifest(target, run.context_id, files, complete=complete, job_id=manifest.get("job_id"))

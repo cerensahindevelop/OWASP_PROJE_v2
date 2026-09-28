@@ -73,13 +73,16 @@ def test_review_required_file_is_withheld_then_revalidated_after_approval(db_ses
             value = "ApolloCandidate"
             start = text.index(value)
             return DetectorOutput(results=[DetectionResult(
-                value, "INTERNAL_NAME", "orta", "llm", "possible internal name",
+                value, "INTERNAL_NAME", "dusuk", "llm", "possible internal name",
                 start, start + len(value),
             )])
 
     async def clean_audit(*args, **kwargs):
         return AuditVerdict(risky=False)
 
+    # Dusuk guvenli bulgular varsayilan olarak onaya gonderilmez; bu test
+    # onay akisini (VLLM_LOW_CONFIDENCE_ACTION=review) dogrular.
+    monkeypatch.setattr(exporter.settings.vllm, "low_confidence_action", "review")
     monkeypatch.setattr(exporter, "build_orchestrator", lambda *args, **kwargs: UncertainAI())
     monkeypatch.setattr(exporter, "audit_masked_text", clean_audit)
     source = tmp_path / "hold-src"

@@ -64,11 +64,30 @@ def test_risky_verdict_is_parsed_with_findings(monkeypatch):
 
     monkeypatch.setattr("app.services.audit_reviewer.call_vllm", _fake_call)
 
-    verdict = asyncio.run(audit_masked_text("maskelenmis metin", _settings()))
+    verdict = asyncio.run(audit_masked_text("config\n# 10.0.0.5 sunucusu\n", _settings()))
 
     assert verdict.risky is True
     assert len(verdict.findings) == 1
     assert "IP" in verdict.reasoning_text()
+
+
+def test_risky_verdict_without_verifiable_quote_is_not_risky(monkeypatch):
+    """Model 'risk var' deyip metinde gecmeyen bir alinti verirse dosya karantinaya alinmaz."""
+    raw_response = _chat_response(
+        '{"risk_var": true, "bulgular": ['
+        '{"aciklama": "Yorum hala IP iceriyor", "ilgili_bolum": "# 10.0.0.5 sunucusu"}'
+        "]}"
+    )
+
+    async def _fake_call(*a, **k):
+        return raw_response
+
+    monkeypatch.setattr("app.services.audit_reviewer.call_vllm", _fake_call)
+
+    verdict = asyncio.run(audit_masked_text("maskelenmis metin", _settings()))
+
+    assert verdict.risky is False
+    assert verdict.findings == []
 
 
 def test_not_risky_verdict_has_no_findings(monkeypatch):

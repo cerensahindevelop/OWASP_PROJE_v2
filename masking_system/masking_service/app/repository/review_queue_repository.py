@@ -44,6 +44,10 @@ class SqlAlchemyReviewQueueRepository:
             .join(MaskingContext, MaskingRun.context_id == MaskingContext.id)
             .where(
                 ReviewQueue.status == "pending",
+                # Yarim kalan/basarisiz bir export'un kayitlari karar
+                # bekleyenler arasinda gosterilmez: hedef klasor o islem
+                # icin hic yayimlanmadi, serbest birakma yanlis yere yazardi.
+                MaskingRun.status.in_(("completed", "completed_with_warnings")),
                 MaskingContext.project_name == project_name,
                 MaskingContext.sicil_no == sicil_no,
                 MaskingContext.branch_name == branch_name,

@@ -294,6 +294,22 @@ class ExportResultOut(BaseModel):
     output_token: str | None = None
 
 
+class ExportJobStartOut(BaseModel):
+    job_id: str
+
+
+class ExportJobOut(BaseModel):
+    job_id: str
+    status: str
+    processed: int = 0
+    total: int = 0
+    current_file: str | None = None
+    result: ExportResultOut | None = None
+    error_message: str | None = None
+    error_detail: str | None = None
+    error_status: int | None = None
+
+
 # --------------------------------------------------------------------------
 # Unmask
 # --------------------------------------------------------------------------

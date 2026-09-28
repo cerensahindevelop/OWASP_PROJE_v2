@@ -176,6 +176,46 @@ def export_upload(
     return _post_json("/export/upload", data=data, files=files)
 
 
+def start_export_job_by_path(
+    *, source_path: str, target_path: str, project_name: str, sicil_no: str, branch_name: str, initiated_by: str
+) -> str:
+    return _post_json(
+        "/export/jobs",
+        json={
+            "source_path": source_path,
+            "target_path": target_path,
+            "project_name": project_name,
+            "sicil_no": sicil_no,
+            "branch_name": branch_name,
+            "initiated_by": initiated_by,
+        },
+    ).job_id
+
+
+def start_export_job_upload(
+    uploaded_files: list,
+    *,
+    is_directory_upload: bool,
+    project_name: str,
+    sicil_no: str,
+    branch_name: str,
+    initiated_by: str,
+) -> str:
+    files = [("files", (uf.name, uf.getvalue(), "application/octet-stream")) for uf in uploaded_files]
+    data = {
+        "project_name": project_name,
+        "sicil_no": sicil_no,
+        "branch_name": branch_name,
+        "initiated_by": initiated_by,
+        "is_directory_upload": "true" if is_directory_upload else "false",
+    }
+    return _post_json("/export/upload/jobs", data=data, files=files).job_id
+
+
+def get_export_job(job_id: str):
+    return _get_json(f"/export/jobs/{job_id}")
+
+
 def download_export_output(output_token: str) -> bytes:
     """Yukleme-modu export ciktisini POST yanitindaki opak token ile indirir.
 

@@ -162,7 +162,7 @@ def test_audit_warning_api_exposes_summary_and_location_without_file_content(cli
     from app.db.models import AuditWarning
 
     context = _make_context(db_session, "audit-location")
-    run = _make_run(db_session, context)
+    run = _make_run(db_session, context, status="completed_with_warnings")
     item = AuditWarning(
         run_id=run.id, file_path="query.sql", masked_content="private file content",
         reasoning="Kurumsal terim kontrolü: 1 açık eşleşme kaldı.\nSatır 9, sütun 3: proje (kurumsal_terim_hash)",
@@ -483,3 +483,21 @@ def test_unmask_job_id_selects_only_its_mapping(client, db_session, tmp_path, mo
             assert base64.b64decode(result['download_base64']).decode() == original
         else:
             assert (target / 'sample.txt').read_text() == original
+
+
+def test_pending_lists_hide_unfinished_runs(client, db_session):
+    """Bitmemis/basarisiz bir export'un kayitlari onay ekraninda gorunmemeli:
+    hedef klasor o islem icin yayimlanmadi."""
+    from app.db.models import AuditWarning
+
+    context = _make_context(db_session, "audit-unfinished")
+    for status in ("in_progress", "failed"):
+        run = _make_run(db_session, context, status=status)
+        db_session.add(AuditWarning(
+            run_id=run.id, file_path="a.txt", masked_content="x", reasoning="r", audit_failed=False,
+        ))
+    db_session.flush()
+    params = {"project_name": context.project_name, "sicil_no": context.sicil_no,
+              "branch_name": context.branch_name}
+    assert client.get("/audit-warnings", params=params).json() == []
+    assert client.get("/reviews", params=params).json() == []

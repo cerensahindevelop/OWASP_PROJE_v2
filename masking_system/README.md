@@ -17,6 +17,25 @@ ve arşiv içerikleri LLM'e gönderilmez ve çıktıya alınmaz. Lock dosyaları
 bütün katmanlarla taranır; temizse aynen kopyalanır, hassas bulgu varsa
 karantinaya alınır. Sözdizimi, geri dönüş ve tutarlılık kontrolleri sürer.
 
+LLM bulgularının onay politikası: `VLLM_AUTO_MASK_MIN_CONFIDENCE` (varsayılan
+`orta`) ve üstündeki bulgular onay beklemeden maskelenir; altındakiler
+`VLLM_LOW_CONFIDENCE_ACTION=ignore` ile yalnızca işlem kaydına yazılır
+(`review` ile onay kuyruğuna gider). Maskeleme sonrası LLM denetimi bir dosyayı
+yalnızca maskelenmemiş somut bir değeri metinde birebir geçen bir alıntıyla
+gösterirse karantinaya alır; doğrulanamayan "risk var" yanıtları dosyayı
+bekletmez. LLM'in serbest yazdığı bulgu türü sabit bir listeye eşlenir, böylece
+yer tutucu adına hassas bir terim girmez.
+
+Onaydan sonra serbest bırakılan dosyalar çıktıdaki maskelenmiş yola yazılır,
+aynı işlemin diğer dosyalarında maskelenen değerlere karşı tutarlılık
+kontrolünden geçer ve imzalı bütünlük kaydına eklenir.
+
+Export web arayüzünde arka plan işi olarak çalışır; ekran işlenen/toplam dosya
+ilerlemesini gösterir. Export sırasında veritabanı yazma kilidi LLM
+çağrıları boyunca tutulmaz; aynı anda başka projelerin export'ları ve onay
+işlemleri beklemeden çalışabilir. Uygulama bir export sırasında kapanırsa
+işlem `recover-output` ile kapatılır (bkz. 4. bölüm).
+
 Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
 `VLLM_HOST` ve `VLLM_MODEL` değerlerini kendi sunucusunun sunduğu adla ayarlayın.
 

@@ -493,6 +493,10 @@ def test_later_llm_chunk_failure_is_quarantined_not_published(tmp_path, monkeypa
         target = tmp_path / 'target'
         s = exporter_module.settings.vllm
         monkeypatch.setattr(s, 'enabled', True)
+        # .env icerigine bagimli olmasin: gercek istek zaten sahte call_vllm'e gider.
+        monkeypatch.setattr(s, 'host', 'http://fake-llm')
+        monkeypatch.setattr(s, 'model', 'fake-model')
+        monkeypatch.setattr(s, 'transient_retries', 0)
         monkeypatch.setattr(s, 'max_file_chars', 6000)
         monkeypatch.setattr(s, 'max_concurrent_requests', 1)
 

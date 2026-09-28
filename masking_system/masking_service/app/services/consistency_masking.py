@@ -82,6 +82,25 @@ class SensitiveValueRegistry:
                 existing.source_detectors.add(source)
 
 
+    def add_mapping_values(self, values: list[tuple[str, str]]) -> None:
+        """Register (original_value, entity_type) pairs from stored mappings.
+
+        Karantinadan sonradan serbest birakilan bir dosya export'un bellek-ici
+        registry'sini artik goremez; ayni kontrolu yapabilmek icin registry,
+        o islemin DB'deki eslemelerinden yeniden kurulur.
+        """
+        for original_value, entity_type in values:
+            normalized = normalize_sensitive_value(original_value or "")
+            if not normalized or PLACEHOLDER_RE.fullmatch(original_value):
+                continue
+            self._entries.setdefault(normalized, SensitiveValueEntry(
+                normalized_value=normalized,
+                original_value=original_value,
+                entity_type=entity_type,
+                source_detectors={"stored_mapping"},
+            ))
+
+
 @dataclass(frozen=True)
 class ConsistencyOccurrence:
     entry: SensitiveValueEntry

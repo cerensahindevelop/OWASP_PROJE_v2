@@ -2,12 +2,13 @@
 hassas bilgileri gizler. İnce sunum katmanı - tüm iş mantığı ayrı süreçte
 çalışan FastAPI backend'inde (app/webapp/api_client.py üzerinden HTTP ile).
 
-Not: backend ayrı bir HTTP süreci olduğu için tarama artık TEK bir blocking
-istek olarak çalışır - dosya-dosya canlı ilerleme çubuğu yerine genel bir
-spinner gösterilir (bkz. proje kök dizinindeki plan dosyası)."""
+Tarama backend'de arka plan işi olarak çalışır; bu ekran işin durumunu
+sorgulayıp "işlenen/toplam dosya" ilerleme çubuğu gösterir. Böylece uzun
+(LLM açık, yüzlerce dosyalık) taramalar arayüz zaman aşımına takılmaz."""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 # streamlit: form/spinner/sonuc gosterimi gibi tum ekran bilesenleri icin.
@@ -51,22 +52,50 @@ def _validation_failure_reason(outcome) -> str:
 # "Klasor Yolu" moduyla (sunucudaki bir yolu dogrudan girerek) baslatilan
 # export akisi: backend'e HTTP istegi atar, sonucu session_state'e yazar
 # (render() bunu okuyup gosterir).
+_JOB_POLL_SECONDS = 1.0
+
+
+def _wait_for_export_job(job_id: str):
+    """Arka plan export isini ilerleme cubuguyla bekler; sonuc nesnesini dondurur."""
+    bar = st.progress(0.0, text="Tarama başlatılıyor...")
+    try:
+        while True:
+            job = api_client.get_export_job(job_id)
+            if job.status == "completed":
+                return job.result
+            if job.status == "failed":
+                raise ApiError(job.error_message or "Tarama tamamlanamadı.", job.error_detail,
+                               job.error_status or 500)
+            if job.total:
+                fraction = min(job.processed / job.total, 1.0)
+                if job.processed >= job.total:
+                    text = f"{job.total} dosya işlendi — son tutarlılık ve bütünlük kontrolleri yapılıyor..."
+                else:
+                    text = f"{job.processed} / {job.total} dosya işlendi"
+                bar.progress(fraction, text=text)
+            else:
+                bar.progress(0.0, text="Dosyalar listeleniyor ve hazırlanıyor...")
+            time.sleep(_JOB_POLL_SECONDS)
+    finally:
+        bar.empty()
+
+
 def _run_export(source_path: str, target_path: str) -> None:
     identity = get_identity()
-    with st.spinner("Taranıyor... Bu işlem dosya sayısına göre biraz sürebilir."):
-        try:
-            result = api_client.export_by_path(
-                source_path=source_path,
-                target_path=target_path,
-                project_name=identity["project_name"],
-                sicil_no=identity["sicil_no"],
-                branch_name=identity["branch_name"],
-                initiated_by=identity["sicil_no"],
-            )
-        except ApiError as exc:
-            st.session_state["export_last_result"] = None
-            show_error(exc)
-            return
+    try:
+        job_id = api_client.start_export_job_by_path(
+            source_path=source_path,
+            target_path=target_path,
+            project_name=identity["project_name"],
+            sicil_no=identity["sicil_no"],
+            branch_name=identity["branch_name"],
+            initiated_by=identity["sicil_no"],
+        )
+        result = _wait_for_export_job(job_id)
+    except ApiError as exc:
+        st.session_state["export_last_result"] = None
+        show_error(exc)
+        return
 
     st.session_state["export_last_result"] = {
         "report": result.report,
@@ -81,9 +110,9 @@ def _run_export(source_path: str, target_path: str) -> None:
 # session_state'e yazar.
 def _run_export_upload(uploaded_files: list, *, is_directory_upload: bool = False) -> None:
     identity = get_identity()
-    with st.spinner("Yükleniyor ve taranıyor... Bu işlem dosya sayısına göre biraz sürebilir."):
-        try:
-            result = api_client.export_upload(
+    try:
+        with st.spinner("Dosyalar yükleniyor..."):
+            job_id = api_client.start_export_job_upload(
                 uploaded_files,
                 is_directory_upload=is_directory_upload,
                 project_name=identity["project_name"],
@@ -91,22 +120,22 @@ def _run_export_upload(uploaded_files: list, *, is_directory_upload: bool = Fals
                 branch_name=identity["branch_name"],
                 initiated_by=identity["sicil_no"],
             )
-        except ApiError as exc:
-            st.session_state["export_last_result"] = None
-            show_error(exc)
-            return
+        result = _wait_for_export_job(job_id)
+    except ApiError as exc:
+        st.session_state["export_last_result"] = None
+        show_error(exc)
+        return
 
-        download_bytes: bytes | None = None
-        download_name: str | None = None
-        if result.output_token:
-            try:
-                # Run kaydini hemen ikinci istekte okumak transaction commit'i
-                # ile yarisa girebilir. Upload API'sinin bu is icin dondurdugu
-                # opak cikti token'i dogrudan dosya paketini adresler.
-                download_bytes = api_client.download_export_output(result.output_token)
-                download_name = "maskelenmis_cikti.zip"
-            except ApiError as exc:
-                show_error(exc)
+    download_bytes: bytes | None = None
+    download_name: str | None = None
+    if result.output_token:
+        try:
+            # Upload API'sinin bu is icin dondurdugu opak cikti token'i
+            # dogrudan dosya paketini adresler.
+            download_bytes = api_client.download_export_output(result.output_token)
+            download_name = "maskelenmis_cikti.zip"
+        except ApiError as exc:
+            show_error(exc)
 
     st.session_state["export_last_result"] = {
         "report": result.report,

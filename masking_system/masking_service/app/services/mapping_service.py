@@ -493,6 +493,28 @@ class DetectionOutcome:
     suppressed_results: list[tuple[DetectionResult, int]] = field(default_factory=list)
     # bkz. detectors.DetectorOutput.crashes dokstringi.
     detector_crashes: list[str] = field(default_factory=list)
+    # auto_mask_min_confidence altinda kalan ve low_confidence_action=ignore
+    # ile onaya GONDERILMEYEN LLM adaylari - sadece denetim kaydina yazilir.
+    ignored_llm_results: list[DetectionResult] = field(default_factory=list)
+
+
+_CONFIDENCE_RANK = {"dusuk": 0, "orta": 1, "yuksek": 2}
+
+
+def _llm_confidence_route(confidence: str) -> str:
+    """Return 'mask', 'review' or 'ignore' for an LLM finding.
+
+    Maskeleme geri donusumlu ve round-trip ile dogrulandigi icin fazladan
+    maskelemenin maliyeti dusuktur; her belirsiz bulguyu insan onayina
+    gondermek ise dosyalarin buyuk kismini bekletir. Esik ve dusuk-guven
+    davranisi VLLM_AUTO_MASK_MIN_CONFIDENCE / VLLM_LOW_CONFIDENCE_ACTION
+    ile ayarlanir. Post-mask LLM denetimi her dosyada yine calisir.
+    """
+    vllm = settings.vllm
+    threshold = _CONFIDENCE_RANK.get(getattr(vllm, "auto_mask_min_confidence", "orta"), 1)
+    if _CONFIDENCE_RANK.get(confidence, 0) >= threshold:
+        return "mask"
+    return "review" if getattr(vllm, "low_confidence_action", "ignore") == "review" else "ignore"
 
 
 # Bir metni tum katmanlara (Rule/Presidio/LLM) karsi tarar, cakismalari cozer,
@@ -525,6 +547,7 @@ async def detect_matches(
 
     matches: list[Match] = []
     review_results: list[DetectionResult] = []
+    ignored_llm_results: list[DetectionResult] = []
     suppressed_results: list[tuple[DetectionResult, int]] = []
     policy = getattr(orchestrator, "decision_policy", None)
     for result in final_results:
@@ -535,8 +558,12 @@ async def detect_matches(
             suppressed_results.append((result, suppression.id))
             continue
         if result.kaynak_motor == "llm":
-            if result.guven_seviyesi != "yuksek":
+            route = _llm_confidence_route(result.guven_seviyesi)
+            if route == "review":
                 review_results.append(result)
+                continue
+            if route == "ignore":
+                ignored_llm_results.append(result)
                 continue
             result = DetectionResult(
                 deger=result.deger,
@@ -560,6 +587,7 @@ async def detect_matches(
         boundary_rejections=boundary_rejections,
         suppressed_results=suppressed_results,
         detector_crashes=list(detector_output.crashes),
+        ignored_llm_results=ignored_llm_results,
     )
 
 
@@ -600,6 +628,13 @@ def apply_detections(
         _enqueue_review(db, run_id=run_id, file_path=file_path, result=result, text=text)
 
     if run_id is not None:
+        for result in outcome.ignored_llm_results:
+            # Acik deger yazilmaz; sadece tur/guven/konum.
+            db.add(AuditLog(
+                run_id=run_id, file_path=file_path or "", action="skipped",
+                detail=(f"finding={result.tip} ai_confidence={result.guven_seviyesi} "
+                        f"line={_line_number(text, result.start)} final=below_auto_mask_threshold"),
+            ))
         for result, decision_id in outcome.suppressed_results:
             db.add(AuditLog(
                 run_id=run_id, file_path=file_path or "", action="skipped",

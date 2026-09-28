@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 # pydantic-settings: her ayar grubunu ortam degiskenlerinden (.env) okuyup
 # dogrulayan (Field(...) zorunlu alanlar, model_validator capraz kontroller) taban sinif.
@@ -136,6 +137,30 @@ class VLLMSettings(BaseSettings):
         description="Ayni event loop ve LLM endpoint'i icin ortak HTTP istek siniri. "
         "Ollama Parallel:1 icin 1; vLLM icin benchmark ile belirlenir. "
         "Ayri process/worker/CLI sinirlari toplanir; dagitik kota degildir.",
+    )
+    auto_mask_min_confidence: Literal["yuksek", "orta"] = Field(
+        "orta",
+        description="Bu guven seviyesinde ve ustundeki LLM tespitleri insan onayi beklemeden "
+        "maskelenir (maskeleme geri donusumlu ve round-trip ile dogrulanir). 'yuksek' eski "
+        "davranistir: orta bulgular da onay kuyruguna duser.",
+    )
+    low_confidence_action: Literal["ignore", "review"] = Field(
+        "ignore",
+        description="auto_mask_min_confidence altindaki LLM tespitleri icin davranis. 'ignore': "
+        "denetim kaydina yazilir, dosyayi bekletmez (post-mask denetim yine calisir). "
+        "'review': onay kuyruguna gonderilir ve dosya karar verilene kadar bekletilir.",
+    )
+    transient_retries: int = Field(
+        1, ge=0, le=3,
+        description="Zaman asimi/baglanti/5xx gibi gecici hatalarda YALNIZCA basarisiz chunk icin "
+        "yeniden deneme sayisi. Basarili chunk'lar tekrar gonderilmez; tum denemeler basarisizsa "
+        "dosya yine karantinaya alinir.",
+    )
+    file_batch_size: int = Field(
+        8, gt=0,
+        description="Export sirasinda ayni anda hazirlanan dosya sayisi. LLM istek siniri "
+        "max_concurrent_requests ile ayrica korunur; bu deger yalnizca LLM beklerken diger "
+        "dosyalarin kural/Presidio taramasinin ilerlemesini saglar.",
     )
 
     # LLM acikken (enabled=true) host/model bos ya da .env.example'daki

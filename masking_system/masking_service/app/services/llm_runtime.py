@@ -1,13 +1,17 @@
 """Shared detection/audit admission and content-free timing records.
 
 The gate is shared by jobs on one event loop, not by independent workers.
-The HTTP timeout starts AFTER admission. No automatic retries: incomplete
-scans must reach the existing quarantine path without resubmitting good chunks.
+The HTTP timeout starts AFTER admission. Only the failed request itself is
+retried, and only for transient transport failures (timeout, connection,
+HTTP 429/5xx) - never for parse/schema/truncation errors. Completed chunks are
+never resubmitted; when retries are exhausted the error still reaches the
+existing quarantine path.
 """
 from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+import httpx
 from contextvars import ContextVar
 import logging
 from time import monotonic
@@ -42,6 +46,20 @@ def _gate(settings):
         # Runtime configuration is immutable: changing it requires a restart.
         raise ValueError("Ayni endpoint icin eszamanlilik ayarlari tutarsiz; servisi yeniden baslatin")
     return semaphore
+
+
+_RETRY_BASE_DELAY_SECONDS = 1.0
+
+
+def is_transient_llm_error(exc: BaseException) -> bool:
+    """Timeout/baglanti kopmasi/429/5xx: ayni istegi tekrar gondermek anlamli."""
+    cause = exc.__cause__ or exc
+    if isinstance(cause, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException, httpx.TransportError)):
+        return True
+    if isinstance(cause, httpx.HTTPStatusError):
+        code = cause.response.status_code
+        return code == 429 or 500 <= code < 600
+    return False
 
 
 class LLMScanMetrics:
@@ -85,8 +103,24 @@ class LLMScanMetrics:
             finish = None
             stage = "http"
             try:
-                raw = await caller(settings.host, settings.timeout_seconds, payload,
-                                   getattr(settings, "api_key", None))
+                retries = max(0, int(getattr(settings, "transient_retries", 0) or 0))
+                attempt = 0
+                while True:
+                    try:
+                        raw = await caller(settings.host, settings.timeout_seconds, payload,
+                                           getattr(settings, "api_key", None))
+                        break
+                    except Exception as exc:
+                        if attempt >= retries or not is_transient_llm_error(exc):
+                            raise
+                        attempt += 1
+                        self.requests += 1
+                        logger.info(
+                            "llm_retry scan_id=%s file=%r phase=%s chunk=%d attempt=%d error_type=%s",
+                            self.scan_id, self.file_path, self.phase, chunk_index, attempt,
+                            type(exc.__cause__ or exc).__name__,
+                        )
+                        await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * attempt)
                 if isinstance(raw, dict):
                     usage = raw.get("usage") or {}
                     if not isinstance(usage, dict):

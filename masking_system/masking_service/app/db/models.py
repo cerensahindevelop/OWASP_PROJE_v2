@@ -538,6 +538,11 @@ class AuditWarning(Base):
         comment="True ise bu kayit bir RISK TESPITI degil, denetim LLM cagrisinin basarisiz/zaman "
         "asimina ugramis olmasidir - dogrulama yapilamadigi icin guvenlik geregi yine de karantinaya alinmistir.",
     )
+    output_path: Mapped[str | None] = mapped_column(
+        "cikti_yolu", Text, nullable=True,
+        comment="Dosyanin export ciktisindaki MASKELENMIS goreli yolu. Serbest birakma bu yola "
+        "yazar; file_path kaynak yoludur ve proje/kurum adini acik icerebilir. Eski kayitlarda NULL.",
+    )
     status: Mapped[str] = mapped_column(
         "durum", String(20), nullable=False, default="pending",
         comment="'pending', 'confirmed' (risk gercek, dosya karantinada kalir) ya da "

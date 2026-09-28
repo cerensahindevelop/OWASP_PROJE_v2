@@ -38,7 +38,7 @@ from time import monotonic
 import httpx
 
 from app.core.http_diagnostics import http_error_detail
-from app.services.detectors import DetectionResult
+from app.services.detectors import DetectionResult, normalize_llm_entity_type
 from app.services.rule_engine import _overlaps
 from app.services.text_chunking import chunk_text as _overlap_chunks
 from app.services.llm_runtime import LLMScanMetrics
@@ -203,7 +203,7 @@ def parse_and_verify_detections(
                     f"metin olmali (alinan_tip={type(item.get(field)).__name__})"
                 )
         value = item.get("bulunan_deger")
-        entity_type = item.get("tip")
+        entity_type = normalize_llm_entity_type(item.get("tip"))
         confidence = item.get("guven_seviyesi")
         reason = item.get("gerekce")
         for field in ("bulunan_deger", "tip"):

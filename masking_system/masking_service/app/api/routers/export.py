@@ -26,12 +26,16 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from app.api import export_jobs
 from app.api.deps import get_request_db
-from app.api.schemas import ExportPathRequest, ExportReportOut, ExportResultOut
+from app.api.errors import _status_for
+from app.api.schemas import ExportJobOut, ExportJobStartOut, ExportPathRequest, ExportReportOut, ExportResultOut
+from app.core.error_translation import friendly_error
+from app.db.session import SessionLocal
 from app.services.audit_warning_service import AuditWarningService
 from app.services.exporter import export_project
 from app.services.review_service import ReviewService
@@ -166,3 +170,84 @@ async def export_upload(
         validation_failed_count=validation_failed_count,
         output_token=target_dir.name,
     )
+
+
+# --------------------------------------------------------------------------
+# Arka plan isleri: export ayri thread'de calisir, arayuz ilerlemeyi sorgular.
+# Mevcut bloklayan uclar (POST /export, /export/upload) geriye donuk uyumluluk
+# icin korunur.
+# --------------------------------------------------------------------------
+
+
+def _job_error(exc: Exception) -> tuple[str, str | None, int]:
+    message, detail = friendly_error(exc)
+    return message, detail, _status_for(exc)
+
+
+def _export_job_work(kwargs: dict, output_token: str | None):
+    def work(progress) -> dict:
+        with SessionLocal() as db:
+            report = asyncio.run(export_project(db, progress_callback=progress, **kwargs))
+            pending_count, quarantined_count, validation_failed_count = _pending_and_quarantined_counts(
+                db, project_name=kwargs["project_name"], sicil_no=kwargs["sicil_no"],
+                branch_name=kwargs["branch_name"], run_id=report.run_id,
+            )
+            db.commit()
+            return ExportResultOut(
+                report=ExportReportOut.model_validate(report),
+                pending_count=pending_count,
+                quarantined_count=quarantined_count,
+                validation_failed_count=validation_failed_count,
+                output_token=output_token,
+            ).model_dump(mode="json")
+    return work
+
+
+# Sunucu uzerindeki bir klasor icin arka planda export baslatir.
+@router.post("/jobs", response_model=ExportJobStartOut, status_code=202)
+def start_export_job_by_path(payload: ExportPathRequest) -> ExportJobStartOut:
+    ensure_path_allowed(payload.source_path, label="Kaynak Klasör")
+    ensure_path_allowed(payload.target_path, label="Hedef Klasör")
+    kwargs = dict(
+        source_path=payload.source_path, project_name=payload.project_name, sicil_no=payload.sicil_no,
+        branch_name=payload.branch_name, target_path=payload.target_path, initiated_by=payload.initiated_by,
+    )
+    job = export_jobs.start_job(_export_job_work(kwargs, None), _job_error)
+    return ExportJobStartOut(job_id=job.job_id)
+
+
+# Yuklenen dosya/klasor icin arka planda export baslatir.
+@router.post("/upload/jobs", response_model=ExportJobStartOut, status_code=202)
+async def start_export_job_upload(
+    project_name: str = Form(...),
+    sicil_no: str = Form(...),
+    branch_name: str = Form(...),
+    initiated_by: str = Form(...),
+    is_directory_upload: bool = Form(False),
+    files: list[UploadFile] = File(...),
+) -> ExportJobStartOut:
+    adapted = [_UploadedFileAdapter(f.filename or "", await f.read()) for f in files]
+    source_dir = save_uploaded_files_to_temp_dir(adapted, is_directory_upload=is_directory_upload)
+    try:
+        target_dir = uploaded_output_dir(uuid.uuid4().hex)
+    except BaseException:
+        cleanup_temp_dir(source_dir)
+        raise
+    kwargs = dict(
+        source_path=str(source_dir), project_name=project_name, sicil_no=sicil_no,
+        branch_name=branch_name, target_path=str(target_dir), initiated_by=initiated_by,
+    )
+    job = export_jobs.start_job(
+        _export_job_work(kwargs, target_dir.name), _job_error,
+        cleanup=lambda: cleanup_temp_dir(source_dir),
+    )
+    return ExportJobStartOut(job_id=job.job_id)
+
+
+# Arka plan export isinin durumunu ve ilerlemesini dondurur.
+@router.get("/jobs/{job_id}", response_model=ExportJobOut)
+def get_export_job(job_id: str) -> ExportJobOut:
+    job = export_jobs.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="İşlem bulunamadı (servis yeniden başlatılmış olabilir).")
+    return ExportJobOut.model_validate(job.snapshot())

@@ -19,11 +19,30 @@ isaretleyip dosyayi yine de karantinaya almalidir (fail-safe).
 from __future__ import annotations
 
 import json
+import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.services.llm_recognizer import LLMRecognitionError, call_vllm, chunk_text, require_complete_response
 from app.services.llm_runtime import LLMScanMetrics
+from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE
+
+logger = logging.getLogger("uvicorn.error.llm")
+
+# Bir denetim bulgusunun gercek bir sizinti sayilabilmesi icin, yer
+# tutucular cikarildiktan sonra en az bu kadar harf/rakam icermesi gerekir.
+_CONTENT_RE = re.compile(r"[^\W_]{2,}")
+_SEGMENT_STRIP = " \t\r\n:,;=\"'`()[]{}<>/\\#*-"
+# Modelin sik sik "risk" diye isaretledigi ama tek basina hicbir kurumu/kisiyi
+# tanimlamayan dil anahtar kelimeleri ve teknik sabitler. Bir bulgunun TUM
+# kelimeleri bu kumedeyse bulgu yok sayilir.
+_GENERIC_TOKENS = frozenset("""
+public private protected static final class interface enum extends implements import package return
+void int long string boolean true false null none self this new def function const let var async await
+if else for while try catch except finally raise throw throws select from where insert update delete
+localhost example com org net http https www api v1 v2 id ids name names value values key keys todo fixme
+""".split())
 
 _AUDIT_PROMPT_PATH = Path(__file__).with_name("audit_prompt.txt")
 
@@ -124,6 +143,48 @@ def parse_audit_response(raw_response: dict) -> AuditVerdict:
     return AuditVerdict(risky=risky, findings=findings)
 
 
+def _placeholder_free_segments(quote: str) -> list[str]:
+    parts = PLACEHOLDER_RE.split(quote)
+    segments: list[str] = []
+    for part in parts:
+        for piece in JSON_NUMERIC_PLACEHOLDER_RE.split(part):
+            piece = piece.strip(_SEGMENT_STRIP)
+            if piece:
+                segments.append(piece)
+    return segments
+
+
+def _is_substantive(segment: str) -> bool:
+    words = _CONTENT_RE.findall(segment)
+    if not words:
+        return False
+    return any(word.casefold() not in _GENERIC_TOKENS for word in words)
+
+
+def verify_audit_findings(text: str, findings: list[AuditFinding]) -> tuple[list[AuditFinding], int]:
+    """Keep only findings whose cited clear-text value really exists in `text`.
+
+    Tespit katmanindaki ilkenin aynisi: modelin soyledigine degil, metinde
+    birebir dogrulanabilen alintiya guvenilir. Yer tutucular alintidan
+    cikarilir (onlar zaten guvenli); geriye anlamli, metinde gecen bir parca
+    kalmazsa bulgu "somut sizinti" sayilmaz. Donus: (dogrulanan, atilan_sayisi).
+    """
+    verified: list[AuditFinding] = []
+    dropped = 0
+    for finding in findings:
+        quote = finding.ilgili_bolum or ""
+        kept = [
+            segment for segment in _placeholder_free_segments(quote)
+            if segment in text and _is_substantive(segment)
+        ]
+        if not kept:
+            dropped += 1
+            continue
+        for segment in kept:
+            verified.append(AuditFinding(aciklama=finding.aciklama, ilgili_bolum=segment))
+    return verified, dropped
+
+
 # Maskelenmis metni LLM ile denetler ("hala bir ipucu kalmis mi?"). LLM kapaliysa risksiz sayar.
 async def audit_masked_text(masked_text: str, vllm_settings) -> AuditVerdict:
     if not vllm_settings.enabled:
@@ -142,8 +203,18 @@ async def audit_masked_text(masked_text: str, vllm_settings) -> AuditVerdict:
                 disable_thinking=getattr(vllm_settings, "disable_thinking", False),
             )
             verdict = await metrics.request(vllm_settings, payload, call_vllm, parse_audit_response, index)
-            risky = risky or verdict.risky
-            for finding in verdict.findings:
+            verified, dropped = verify_audit_findings(chunk, verdict.findings)
+            if dropped or (verdict.risky and not verified):
+                # Icerik degil, sadece sayilar loglanir.
+                logger.info(
+                    "llm_audit_unverified file=%r chunk=%d model_risky=%s dropped_findings=%d kept_findings=%d",
+                    metrics.file_path, index, verdict.risky, dropped, len(verified),
+                )
+            # Risk yalnizca metinde dogrulanan somut bir alintiya dayanir;
+            # modelin "risk var" deyip dogrulanabilir alinti vermemesi
+            # dosyayi karantinaya almaz.
+            risky = risky or bool(verified)
+            for finding in verified:
                 # Same cited section across overlapping chunks is one audit finding.
                 findings.setdefault(finding.ilgili_bolum or finding.aciklama, finding)
     return AuditVerdict(risky=risky, findings=list(findings.values()))
