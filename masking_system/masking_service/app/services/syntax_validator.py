@@ -7,8 +7,10 @@ as a successful parser check. No adapter executes the submitted source.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import logging
 from pathlib import Path
+import re
 
 # Re-export legacy helpers for callers such as StringLiteralIndex.
 from app.services.syntax_brackets import (
@@ -38,6 +40,41 @@ def validation_mode(relative_path: str) -> str:
     if suffix in _BRACKET_QUOTE_LANGUAGE_SUFFIXES:
         return "bracket/quote-based"
     return "structural-only"
+
+
+# Hata mesajlarindaki sutun numarasi ("sutun 12", "byte sutunu 12").
+_COLUMN_NUMBER_RE = re.compile(r"(sutunu?) \d+")
+
+
+# Iki hata mesajinin AYNI hatayi (tur + satir) gosterip gostermedigini soyler.
+# Sutun, ayni satirda hatadan once maskelenen bir degerin uzunlugu kadar
+# kayar; bu yuzden karsilastirmadan cikarilir. Satir KORUNUR: placeholder'lar
+# tek satirdir, maskeleme satir kaydirmaz - kaynak zaten bozukken maskelemenin
+# BASKA bir satirda yarattigi yeni hata boylece hala yakalanir.
+def _same_error(a: str | None, b: str | None) -> bool:
+    if a is None or b is None:
+        return False
+    return _COLUMN_NUMBER_RE.sub(r"\1 #", a) == _COLUMN_NUMBER_RE.sub(r"\1 #", b)
+
+
+# Parantez/tirnak denetleyicisinin karar verirken baktigi TEK seyler: tirnak,
+# parantez, ters bolu, satir sonu ve dilin yorum ayraclari. En uzun ayrac
+# once denenir ("--[[" once "--"), boylece "//" tek bir ayrac sayilir.
+@lru_cache(maxsize=None)
+def _skeleton_pattern(suffix: str) -> re.Pattern[str]:
+    delimiters = set(_LINE_COMMENT_PREFIXES.get(suffix, ()))
+    for opener, closer in _BLOCK_COMMENT_PAIRS.get(suffix, ()):
+        delimiters.update((opener, closer))
+    parts = [re.escape(delimiter) for delimiter in sorted(delimiters, key=len, reverse=True)]
+    parts.append(r"[\"'`(){}\[\]\\\n]")
+    return re.compile("|".join(parts))
+
+
+# Metnin yapisal iskeleti: denetleyicinin gordugu ayraclarin sirali dizisi.
+# Iki metnin iskeleti ayniysa denetleyici ikisinde de AYNI yoldan gecer;
+# aralarindaki fark yalnizca ayrac-disi metindir (maskelenen deger).
+def _structural_skeleton(suffix: str, text: str) -> tuple[str, ...]:
+    return tuple(_skeleton_pattern(suffix).findall(text))
 
 
 def _bracket_error(suffix: str, text: str) -> str | None:
@@ -82,12 +119,15 @@ def inspect_masked_syntax(
                 notices.append(unavailable)
             else:
                 if original is not None and original.error:
-                    if masked.error and masked.error != original.error:
+                    if masked.error and not (
+                        _same_error(masked.error, original.error) and masked.kind == original.kind
+                    ):
                         # A pre-existing parse error does not excuse a
                         # DIFFERENT one: the source being broken never proves
                         # masking introduced no new breakage (see module
-                        # docstring policy) - only an identical error message
-                        # is evidence of the SAME pre-existing problem.
+                        # docstring policy) - only the same error (parser error
+                        # kind + line; column may shift, bkz. _same_error) is
+                        # evidence of the SAME pre-existing problem.
                         return SyntaxResult(masked.error, mode)
                     notices.append("Kaynak dosya zaten parser hatasi iceriyor; yeni bozulma olmadigi garanti edilemez.")
                     return SyntaxResult(None, mode, tuple(notices))
@@ -101,10 +141,16 @@ def inspect_masked_syntax(
                 return SyntaxResult(None, mode, tuple(notices))
         mode = "bracket/quote-based" if suffix in _BRACKET_QUOTE_LANGUAGE_SUFFIXES else "structural-only"
     error = _bracket_error(suffix, masked_text)
-    if error and original_text is not None and _bracket_error(suffix, original_text) == error:
-        # Same rule as the parser-based route above: only an IDENTICAL
+    if error and original_text is not None and (
+        _structural_skeleton(suffix, original_text) == _structural_skeleton(suffix, masked_text)
+        or _same_error(_bracket_error(suffix, original_text), error)
+    ):
+        # Same rule as the parser-based route above: only the SAME
         # pre-existing error is suppressed. A different bracket/quote error
         # (or a new one where the source had none) still blocks export.
+        # Kesin kisayol: yapisal iskelet ayniysa denetleyici iki metinde de
+        # ayni yoldan gecer; maskeleme yeni bir parantez/tirnak hatasi
+        # uretemez, hata kaynaktan gelir.
         notices.append("Kaynak dosya zaten ayni bracket/quote hatasini iceriyor; mevcut kaynak hatasi politikasi uygulandi.")
         error = None
     return SyntaxResult(error, mode, tuple(notices))
