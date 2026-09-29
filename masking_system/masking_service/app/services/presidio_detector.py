@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,6 +140,11 @@ class PresidioDetector:
         self.chunk_overlap_chars = chunk_overlap_chars
         self._allow_list_rules = [rule for rule in rules if rule.is_allow_list]
         self._custom_rules = [rule for rule in rules if not rule.is_allow_list]
+        # Ayni detector ornegi bir calismadaki TUM dosyalar arasinda paylasilir
+        # ve analiz ayri thread'lerde yurur (bkz. detect). spaCy Language
+        # nesnesi (vocab/StringStore) ve tldextract'in tembel onbellegi
+        # eszamanli cagri icin guvenli degil; analyzer'a erisim tek tek yapilir.
+        self._analyze_lock = threading.Lock()
         self._analyzer = self._build_analyzer()
 
     # True ise bu detector, kurulumu basarisiz oldugu icin bu calisma
@@ -177,7 +184,10 @@ class PresidioDetector:
         entities = self._entities_for_file(metadata)
         results: list[DetectionResult] = []
 
-        for item in self._analyze(content, entities=entities):
+        # spaCy/Presidio CPU-bound: olay dongusunde calisirsa eszamanli LLM
+        # isteklerinin zamanlayicilari ilerlemez ve sahte zaman asimi olusur.
+        analyzed = await asyncio.to_thread(self._analyze_serialized, content, entities)
+        for item in analyzed:
             span = (item.start, item.end)
             if _overlaps(span, protected_spans) or _overlaps(span, allow_spans):
                 continue
@@ -319,6 +329,11 @@ class PresidioDetector:
             language=self.language,
             scores=None,
         )
+
+    # _analyze'i detector-genelindeki kilit altinda calistirir (bkz. __init__).
+    def _analyze_serialized(self, content: str, entities: list[str] | None) -> list[_AnalyzerResult]:
+        with self._analyze_lock:
+            return self._analyze(content, entities=entities)
 
     # Analyzer varsa metni parcalayip her parcayi Presidio ile tarar
     # (ortusen parcalardaki tekrar bulgulari `seen` ile eler); analyzer

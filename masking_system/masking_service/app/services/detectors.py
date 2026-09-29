@@ -62,9 +62,10 @@ class DetectorOutput:
 # orchestrator, hangi katmanla konustugunu bilmeden bu arayuz uzerinden calisir.
 #
 # async: uc katman da (RuleBasedDetector/PresidioDetector/LLMDetector) ayni
-# imzayi paylasir ama SADECE LLMDetector gercekten `await` eder (agdan
-# vLLM'e gider) - Rule/Presidio CPU-bound oldugu icin `await`siz,
-# aninda doner. Tekdüze (uniform) async arayuz sayesinde DetectionOrchestrator.scan()
+# imzayi paylasir. LLMDetector agdan vLLM'e gider; PresidioDetector agir
+# spaCy/Presidio isini asyncio.to_thread ile ayri thread'de calistirir (olay
+# dongusu bloke olursa eszamanli LLM istekleri sahte zaman asimina duser);
+# Rule katmani hizli ve `await`siz, aninda doner. Tekdüze (uniform) async arayuz sayesinde DetectionOrchestrator.scan()
 # hangi katmanin gercekten I/O yaptigini bilmeden hepsini `await`leyebilir;
 # cagiran taraf (exporter.py) birden fazla DOSYANIN scan() cagrisini
 # `asyncio.gather` ile es zamanli tetikleyerek gercek concurrency kazanir.
