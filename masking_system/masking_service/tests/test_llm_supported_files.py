@@ -30,7 +30,7 @@ def _orchestrator(monkeypatch, local_calls, llm_calls, *, fail_llm=False):
                 rule=synthetic_llm_rule("kurum"),
             )])
 
-    async def fake_find(text, consumed, settings, metadata, extra):
+    async def fake_find(text, consumed, settings, metadata, extra, **kwargs):
         llm_calls.append(metadata["file_path"])
         if fail_llm:
             from app.services.llm_recognizer import LLMRecognitionError

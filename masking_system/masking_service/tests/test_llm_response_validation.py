@@ -1,4 +1,5 @@
-"""Malformed model output must fail closed with useful, content-free diagnostics."""
+"""Malformed model output: broken response structure fails closed; a single broken
+finding is repaired or dropped and counted (Asama 8). Diagnostics stay content-free."""
 import asyncio
 import json
 import logging
@@ -33,19 +34,39 @@ def orchestrator():
     return DetectionOrchestrator(registry)
 
 
+def broken_structure():
+    return {"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"bulgular": "PRIVATE_VALUE"})}}]}
+
+
 @pytest.mark.parametrize("bad", [[], ["PRIVATE_CONFIDENCE"], {"PRIVATE_KEY": "PRIVATE_VALUE"},
                                  None, True, 42, "PRIVATE_ENUM"])
-def test_invalid_confidence_is_explicit_failure_not_crash_or_success(monkeypatch, caplog, bad):
+def test_invalid_confidence_is_repaired_not_crash_and_not_logged(monkeypatch, caplog, bad):
+    # Asama 8: degeri metinde dogrulanan bulgu tum parcayi dusurmez;
+    # orta/KURUMSAL_TANIMLAYICI ile kabul edilir, deger loga dusmez.
     async def fake(*args):
         return response([finding(), finding(guven_seviyesi=bad)])
 
     monkeypatch.setattr(llm_recognizer, "call_vllm", fake)
     with caplog.at_level(logging.INFO, logger="uvicorn.error.llm"):
         output = asyncio.run(orchestrator().scan("PRIVATE_VALUE", {"file_path": "test.txt"}))
-    assert output.results == []  # Valid earlier finding must not escape a failed scan.
-    assert output.crashes == []
+    assert output.errors == [] and output.crashes == []
+    # Ayni span/tip icin yuksek guvenli gecerli bulgu kazanir (chunk birlestirme).
+    assert [(r.tip, r.guven_seviyesi) for r in output.results] == [("KURUMSAL_TANIMLAYICI", "yuksek")]
+    assert output.notices == ["llm_bulgu_semasi_bozuk onarilan=1 atilan=0"]
+    assert "PRIVATE" not in "".join(output.notices) + caplog.text
+    assert "completed=1" in caplog.text
+
+
+def test_broken_structure_is_explicit_failure_not_crash_or_success(monkeypatch, caplog):
+    async def fake(*args):
+        return broken_structure()
+
+    monkeypatch.setattr(llm_recognizer, "call_vllm", fake)
+    with caplog.at_level(logging.INFO, logger="uvicorn.error.llm"):
+        output = asyncio.run(orchestrator().scan("PRIVATE_VALUE", {"file_path": "test.txt"}))
+    assert output.results == [] and output.crashes == []
     assert len(output.errors) == 1
-    assert "bulgular[1].guven_seviyesi" in output.errors[0]
     assert "VALIDATION_FAILED" in output.errors[0]
     assert "PRIVATE" not in output.errors[0] + caplog.text
     assert "error_stage=parse" in caplog.text
@@ -60,14 +81,25 @@ def test_required_finding_fields_are_checked(field, mode):
         del item[field]
     else:
         item[field] = {"PRIVATE_KEY": "PRIVATE_VALUE"}
-    with pytest.raises(llm_recognizer.LLMRecognitionError, match=rf"bulgular\[0\].{field}"):
-        llm_recognizer.parse_and_verify_detections(response([item]), "PRIVATE_VALUE", [])
+    stats = llm_recognizer.FindingRepairStats()
+    detections = llm_recognizer.parse_and_verify_detections(
+        response([item]), "PRIVATE_VALUE", [], repair_stats=stats)
+    if field == "bulunan_deger":
+        # Dogrulanacak deger yok: yalnizca bu bulgu atilir ve sayilir.
+        assert detections == [] and (stats.repaired, stats.dropped) == (0, 1)
+    else:
+        assert [(d.deger, d.tip, d.guven_seviyesi) for d in detections] == [
+            ("PRIVATE_VALUE", "KURUMSAL_TANIMLAYICI", "orta")]
+        assert (stats.repaired, stats.dropped) == (1, 0)
 
 
 @pytest.mark.parametrize("item", [None, 1, "PRIVATE_VALUE", []])
-def test_invalid_finding_is_not_silently_dropped(item):
-    with pytest.raises(llm_recognizer.LLMRecognitionError, match=r"bulgular\[0\]"):
-        llm_recognizer.parse_and_verify_detections(response([item]), "PRIVATE_VALUE", [])
+def test_invalid_finding_is_counted_not_silently_dropped(item):
+    stats = llm_recognizer.FindingRepairStats()
+    detections = llm_recognizer.parse_and_verify_detections(
+        response([item, finding()]), "PRIVATE_VALUE", [], repair_stats=stats)
+    assert [d.deger for d in detections] == ["PRIVATE_VALUE"]
+    assert (stats.repaired, stats.dropped) == (0, 1)
 
 
 def test_bad_later_chunk_discards_previous_results_and_does_not_retry(monkeypatch):
@@ -75,21 +107,20 @@ def test_bad_later_chunk_discards_previous_results_and_does_not_retry(monkeypatc
 
     async def fake(*args):
         calls.append(1)
-        return response([finding()] if len(calls) == 1 else [finding(guven_seviyesi=[])])
+        return response([finding()]) if len(calls) == 1 else broken_structure()
 
     monkeypatch.setattr(llm_recognizer, "call_vllm", fake)
     output = asyncio.run(orchestrator().scan("PRIVATE_VALUE" + "x" * 14000))
     assert len(calls) == 2
     assert output.results == [] and not output.crashes
-    assert len(output.errors) == 1 and "guven_seviyesi" in output.errors[0]
+    assert len(output.errors) == 1 and "bulgular" in output.errors[0]
 
 
 def test_252_file_batch_isolates_128_invalid_responses(monkeypatch):
     async def fake(host, timeout, payload, api_key):
         await asyncio.sleep(0)
         text = payload["messages"][1]["content"]
-        confidence = ["yuksek"] if text.startswith("invalid") else "yuksek"
-        return response([finding(guven_seviyesi=confidence)])
+        return broken_structure() if text.startswith("invalid") else response([finding()])
 
     monkeypatch.setattr(llm_recognizer, "call_vllm", fake)
 

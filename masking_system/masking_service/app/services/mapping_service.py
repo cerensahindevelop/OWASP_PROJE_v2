@@ -496,6 +496,8 @@ class DetectionOutcome:
     # auto_mask_min_confidence altinda kalan ve low_confidence_action=ignore
     # ile onaya GONDERILMEYEN LLM adaylari - sadece denetim kaydina yazilir.
     ignored_llm_results: list[DetectionResult] = field(default_factory=list)
+    # bkz. detectors.DetectorOutput.notices dokstringi.
+    detector_notices: list[str] = field(default_factory=list)
 
 
 _CONFIDENCE_RANK = {"dusuk": 0, "orta": 1, "yuksek": 2}
@@ -599,6 +601,7 @@ async def detect_matches(
         suppressed_results=suppressed_results,
         detector_crashes=list(detector_output.crashes),
         ignored_llm_results=ignored_llm_results,
+        detector_notices=list(detector_output.notices),
     )
 
 
@@ -639,6 +642,8 @@ def apply_detections(
         _enqueue_review(db, run_id=run_id, file_path=file_path, result=result, text=text)
 
     if run_id is not None:
+        for notice in outcome.detector_notices:
+            db.add(AuditLog(run_id=run_id, file_path=file_path or "", action="skipped", detail=notice))
         for result in outcome.ignored_llm_results:
             # Acik deger yazilmaz; sadece tur/guven/konum.
             db.add(AuditLog(

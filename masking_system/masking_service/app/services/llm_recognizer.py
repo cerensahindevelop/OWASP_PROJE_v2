@@ -15,6 +15,10 @@ Guvenlik/guvenilirlik ilkeleri (asla degistirilmemeli):
      atlama yapmaz; metni parcalara boler.
   4. Tamamlanamayan herhangi bir chunk LLMRecognitionError uretir;
      kismi sonuc basarili sayilmaz ve caller dosyayi karantinaya alir.
+     Yanit yapisi saglam ama TEK bir bulgunun semasi bozuksa parca
+     dusurulmez: degeri metinde birebir geciyorsa bulgu `orta` guven ve
+     KURUMSAL_TANIMLAYICI tipiyle kabul edilir, gecmiyorsa yalnizca o bulgu
+     atilir. Ikisi de FindingRepairStats ile sayilir ve AuditLog'a yazilir.
 
 Bir dosyanin chunk'lari (ve farkli dosyalarin cagrilari) eszamanli taranir;
 toplam eszamanlilik llm_runtime._gate ile sinirlidir (tespit ve audit ayni
@@ -29,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 
@@ -38,7 +43,7 @@ from time import monotonic
 import httpx
 
 from app.core.http_diagnostics import http_error_detail
-from app.services.detectors import DetectionResult, normalize_llm_entity_type
+from app.services.detectors import LLM_FALLBACK_ENTITY_TYPE, DetectionResult, normalize_llm_entity_type
 from app.services.rule_engine import _overlaps
 from app.services.text_chunking import chunk_text as _overlap_chunks
 from app.services.llm_runtime import LLMScanMetrics
@@ -50,6 +55,20 @@ class LLMRecognitionError(RuntimeError):
 
 class LLMTruncatedError(LLMRecognitionError):
     """Response cut at max_tokens (finish_reason=length); chunk may be split and rescanned."""
+
+
+# Semasi bozuk LLM bulgularinin sayaci: `repaired` degeri metinde dogrulanip
+# orta/KURUMSAL_TANIMLAYICI ile kabul edilen, `dropped` dogrulanamayip atilan.
+# Yalnizca sayi tutar; deger/gerekce asla saklanmaz.
+@dataclass
+class FindingRepairStats:
+    repaired: int = 0
+    dropped: int = 0
+
+
+_CONFIDENCE_LEVELS = ("yuksek", "orta", "dusuk")
+_REPAIRED_CONFIDENCE = "orta"
+_REPAIRED_REASON = "LLM bulgu semasi bozuktu; deger metinde birebir dogrulandi"
 
 
 # Kesilen chunk'i bolme sinirlari: en fazla 3 kez bolunur, parca en az 800 karakter.
@@ -207,6 +226,7 @@ def parse_and_verify_detections(
     *,
     base_offset: int = 0,
     source: str = "llm",
+    repair_stats: FindingRepairStats | None = None,
 ) -> list[DetectionResult]:
     require_complete_response(raw_response)
     try:
@@ -225,34 +245,40 @@ def parse_and_verify_detections(
     protected_spans = list(consumed)
     detections: list[DetectionResult] = []
     seen: set[tuple[int, int, str, str]] = set()
-    for index, item in enumerate(findings):
-        if not isinstance(item, dict):
-            raise LLMRecognitionError(
-                f"vLLM yanit semasi gecersiz: bulgular[{index}] nesne olmali"
-            )
-        # Validate model output before using it. A requested JSON schema is
-        # not a substitute for local checks: list/dict confidence values
-        # raise TypeError in set membership. Never silently drop bad findings.
-        for field in ("bulunan_deger", "tip", "guven_seviyesi", "gerekce"):
-            if not isinstance(item.get(field), str):
-                raise LLMRecognitionError(
-                    f"vLLM yanit semasi gecersiz: bulgular[{index}].{field} "
-                    f"metin olmali (alinan_tip={type(item.get(field)).__name__})"
-                )
-        value = item.get("bulunan_deger")
-        entity_type = normalize_llm_entity_type(item.get("tip"))
+    for item in findings:
+        # Model ciktisi yerel olarak dogrulanir: istenen JSON semasi yerel
+        # kontrolun yerini tutmaz (liste/dict guven degeri set uyeliginde
+        # TypeError verir). Bozuk bulgu sessizce atilmaz - repair_stats'ta
+        # sayilir. Hata/sayac metnine deger ya da indeks yazilmaz.
+        value = item.get("bulunan_deger") if isinstance(item, dict) else None
+        if not isinstance(value, str) or not value:
+            if repair_stats is not None:
+                repair_stats.dropped += 1
+            continue
+        raw_type = item.get("tip")
         confidence = item.get("guven_seviyesi")
         reason = item.get("gerekce")
-        for field in ("bulunan_deger", "tip"):
-            if not item[field]:
-                raise LLMRecognitionError(
-                    f"vLLM yanit semasi gecersiz: bulgular[{index}].{field} bos olamaz"
-                )
-        if confidence not in {"yuksek", "orta", "dusuk"}:
-            raise LLMRecognitionError(
-                f"vLLM yanit semasi gecersiz: bulgular[{index}].guven_seviyesi "
-                "yuksek, orta veya dusuk olmali"
-            )
+        broken = (
+            not isinstance(raw_type, str) or not raw_type
+            or not isinstance(confidence, str) or confidence not in _CONFIDENCE_LEVELS
+            or not isinstance(reason, str)
+        )
+        if broken:
+            if value not in text:
+                if repair_stats is not None:
+                    repair_stats.dropped += 1
+                continue
+            entity_type = LLM_FALLBACK_ENTITY_TYPE
+            confidence = _REPAIRED_CONFIDENCE
+            reason = _REPAIRED_REASON
+            # Bozuk alanlar (liste/dict olabilir) raw_result'a tasinmaz.
+            raw_item = {"bulunan_deger": value, "tip": entity_type, "guven_seviyesi": confidence,
+                        "gerekce": reason, "sema_onarildi": True}
+            if repair_stats is not None:
+                repair_stats.repaired += 1
+        else:
+            entity_type = normalize_llm_entity_type(raw_type)
+            raw_item = dict(item)
 
         for m in re.finditer(re.escape(value), text):
             span = (base_offset + m.start(), base_offset + m.end())
@@ -270,7 +296,7 @@ def parse_and_verify_detections(
                     gerekce=reason,
                     start=span[0],
                     end=span[1],
-                    raw_result=dict(item),
+                    raw_result=dict(raw_item),
                 )
             )
             seen.add(dedup_key)
@@ -331,6 +357,7 @@ async def find_llm_detections(
     vllm_settings,
     metadata: dict | None = None,
     extra_instructions: list[str] | None = None,
+    repair_stats: FindingRepairStats | None = None,
 ) -> list[DetectionResult]:
     if not vllm_settings.enabled:
         return []
@@ -356,7 +383,9 @@ async def find_llm_detections(
                 )
                 return await metrics.request(
                     vllm_settings, payload, call_vllm,
-                    lambda raw: parse_and_verify_detections(raw, part, consumed, base_offset=part_offset),
+                    lambda raw: parse_and_verify_detections(
+                        raw, part, consumed, base_offset=part_offset, repair_stats=repair_stats,
+                    ),
                     index,
                 )
 

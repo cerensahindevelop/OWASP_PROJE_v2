@@ -56,6 +56,9 @@ class DetectorOutput:
     # durumundan BAGIMSIZ olarak tetikler - bir Katman 1/2 cokmesi LLM'in
     # acik/kapali olmasiyla ilgisizdir.
     crashes: list[str] = field(default_factory=list)
+    # Dosyayi bloklamayan, denetim kaydina yazilacak bilgi notlari (orn.
+    # semasi bozuk LLM bulgusu onarildi/atildi sayilari). Acik deger icermez.
+    notices: list[str] = field(default_factory=list)
 
 
 # Her detection katmaninin (sozluk/Presidio/LLM) uymasi gereken ortak arayuz -
@@ -109,6 +112,7 @@ class DetectionOrchestrator:
         already_masked: list[tuple[int, int]] = []
         errors: list[str] = []
         crashes: list[str] = []
+        notices: list[str] = []
 
         for detector in self.registry.enabled_detectors():
             metadata["consumed_spans"] = list(base_consumed) + list(already_masked)
@@ -143,9 +147,12 @@ class DetectionOrchestrator:
             already_masked.extend(output.already_masked_spans)
             errors.extend(output.errors)
             crashes.extend(output.crashes)
+            notices.extend(output.notices)
 
         results.sort(key=lambda r: (r.start is None, r.start or 0, r.end or 0))
-        return DetectorOutput(results=results, already_masked_spans=already_masked, errors=errors, crashes=crashes)
+        return DetectorOutput(
+            results=results, already_masked_spans=already_masked, errors=errors, crashes=crashes, notices=notices,
+        )
 
 
 class RuleBasedDetector:
