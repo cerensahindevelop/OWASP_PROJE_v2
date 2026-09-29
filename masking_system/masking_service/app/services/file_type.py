@@ -52,6 +52,19 @@ DEFAULT_LEGACY_TEXT_ENCODINGS: tuple[str, ...] = ("cp1254", "iso-8859-9")
 _TURKISH_PREFERRED_ENCODING = "cp1254"
 _TURKISH_SPECIFIC_LETTERS = frozenset("şğıİŞĞ")
 
+# Latin DISI tahminler (big5, johab, cp1006, cp1251...) icin daha siki kosul.
+# Olcum: gercek Cince/Korece/Rusca metin cp1254 ile cozulunce 6-12 Turkce'ye
+# ozgu harf verebiliyor, ama ASCII-disi karakterlerin en fazla ~%30'u Turk
+# alfabesinden; gercek Turkce metinde bu oran %100. Bu yuzden hem sayi hem
+# oran sart: tek bir harfe bakarak karar verilmez.
+_TURKISH_ALPHABET_NON_ASCII = frozenset("şğıİŞĞçöüÇÖÜâîûÂÎÛ")
+_MIN_TURKISH_LETTERS_FOR_NON_LATIN = 3
+_MIN_TURKISH_ALPHABET_RATIO_FOR_NON_LATIN = 0.8
+
+# Asla cp1254'e cevrilmeyen, zaten Turkce olan DOS/Mac kodlamalari. utf-8
+# ailesi ve BOM'lu (-sig) codec'ler de hic cevrilmez (bkz. prefer_turkish_encoding).
+_NEVER_OVERRIDDEN_ENCODINGS = frozenset({"cp857", "mac-turkish"})
+
 # En uzun/en spesifik once: UTF-32 BOM'lari, UTF-16 BOM'larinin (\xff\xfe /
 # \xfe\xff) bir uzantisi oldugundan ONCE kontrol edilmeli, yoksa bir UTF-32
 # dosyasi yanlislikla UTF-16 sanilir. -sig codec'leri BOM'u decode'da
@@ -103,21 +116,53 @@ def _is_single_byte_latin(encoding: str) -> bool:
         return False
 
 
-# Tek baytlik bir Latin tahmini, cp1254'te Turkce harflere denk gelen baytlar
-# iceriyorsa cp1254'u tercih eder; aksi halde tahmini oldugu gibi dondurur.
+# cp1254 ile cozulmus metin, Latin DISI bir tahmini gecersiz kilacak kadar
+# acikca Turkce mi: yeterli sayida Turkce'ye ozgu harf VE ASCII-disi
+# karakterlerin buyuk cogunlugu Turk alfabesinden.
+def _is_clearly_turkish(decoded: str) -> bool:
+    non_ascii = [char for char in decoded if ord(char) > 127]
+    if not non_ascii:
+        return False
+    specific = sum(char in _TURKISH_SPECIFIC_LETTERS for char in non_ascii)
+    alphabet = sum(char in _TURKISH_ALPHABET_NON_ASCII for char in non_ascii)
+    return (specific >= _MIN_TURKISH_LETTERS_FOR_NON_LATIN
+            and alphabet / len(non_ascii) >= _MIN_TURKISH_ALPHABET_RATIO_FOR_NON_LATIN)
+
+
+# Tahmin edilen kodlama yerine cp1254'u tercih etmeli mi karar verir:
+# - tek baytlik Latin tahmin: cp1254'te Turkce harfe denk gelen bayt yeterli
+#   (bu kodlamalar yalnizca bu baytlarda ayrisir);
+# - Latin DISI tahmin (CJK, Kiril, Arap...): yalnizca metin acikca Turkceyse
+#   (bkz. _is_clearly_turkish). Turkce dosyayi Cince sanmak sizinti demektir;
+#   Cince dosyayi Turkce okumak ise baytlari bozmaz (bayt esitligi korunur);
+# - utf-8, BOM'lu codec'ler, NUL iceren UTF-16/32 ve zaten Turkce kodlamalar: asla.
 # Baytlar cp1254'te cozulemiyorsa (tanimsiz 0x81/0x8D/... baytlari) tahmin korunur.
 def prefer_turkish_encoding(data: bytes, encoding: str | None) -> str | None:
-    if not encoding or not _is_single_byte_latin(encoding):
+    if not encoding:
         return encoding
-    if codecs.lookup(encoding).name == _TURKISH_PREFERRED_ENCODING:
+    try:
+        # bom_codecs adlari alt cizgiyle kaydeder (utf_16_le_sig): normalize et.
+        name = codecs.lookup(encoding).name.replace("_", "-")
+    except LookupError:
+        return encoding
+    if (name == _TURKISH_PREFERRED_ENCODING or name in _NEVER_OVERRIDDEN_ENCODINGS
+            or name.startswith("utf-8") or name.endswith("-sig")):
+        return encoding
+    # BOM'suz UTF-16/32 kaynak kod ASCII karakterleri yuzunden HER ZAMAN NUL
+    # bayti icerir. NUL'suz bir ornekte bu tahmin guvenilmez (olculdu:
+    # charset_normalizer bazi cp1254 metinleri utf_16_le/be sanıyor); o zaman
+    # diger Latin-disi tahminler gibi siki kurala tabidir.
+    if name.startswith(("utf-16", "utf-32")) and b"\x00" in data:
         return encoding
     try:
         decoded = data.decode(_TURKISH_PREFERRED_ENCODING, errors="strict")
     except UnicodeDecodeError:
         return encoding
-    if _TURKISH_SPECIFIC_LETTERS.intersection(decoded):
-        return _TURKISH_PREFERRED_ENCODING
-    return encoding
+    if _is_single_byte_latin(encoding):
+        turkish = bool(_TURKISH_SPECIFIC_LETTERS.intersection(decoded))
+    else:
+        turkish = _is_clearly_turkish(decoded)
+    return _TURKISH_PREFERRED_ENCODING if turkish else encoding
 
 
 # Tum dosya baytlari uzerinden charset_normalizer tahmini (Turkce tercihiyle).

@@ -124,9 +124,20 @@ def test_single_byte_latin_guess_prefers_cp1254_for_turkish_letters(wrong):
     assert prefer_turkish_encoding(_TURKISH.encode("cp1254"), wrong) == "cp1254"
 
 
-@pytest.mark.parametrize("encoding", ["utf-8", "utf_16_le", "cp1251", "cp857", "mac_turkish", "big5"])
-def test_non_latin_or_multibyte_guess_is_left_alone(encoding):
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "utf-16-le-sig", "cp857", "mac_turkish"])
+def test_unicode_or_turkish_guess_is_left_alone(encoding):
     assert prefer_turkish_encoding(_TURKISH.encode("cp1254"), encoding) == encoding
+
+
+@pytest.mark.parametrize("encoding", ["utf_16_le", "utf_16_be", "utf_32_le"])
+def test_wide_guess_without_nul_prefers_cp1254_for_turkish_text(encoding):
+    # Olculdu: charset_normalizer bazi cp1254 metinleri BOM'suz utf_16 saniyor.
+    assert prefer_turkish_encoding(_TURKISH.encode("cp1254"), encoding) == "cp1254"
+
+
+@pytest.mark.parametrize("encoding", ["utf_16_le", "utf_16_be", "utf_32_le"])
+def test_real_wide_text_keeps_its_encoding(encoding):
+    assert prefer_turkish_encoding(_TURKISH.encode(encoding), encoding) == encoding
 
 
 def test_latin_guess_without_turkish_letters_is_left_alone():
@@ -200,3 +211,41 @@ def test_export_latin1_fallback_is_audited_with_encoding_name_only(db_session, m
         "metin kodlamasi tespit edilemedi, baytlar birebir korunarak okundu"
     ]
     assert _tree_bytes(restored) == _tree_bytes(source)
+
+
+# --- Latin disi tahminler (CJK, Urduca vb.) ---
+# Turkce bir dosyayi Cince sanmak Turkce terimlerin kacmasi (sizinti)
+# demektir; Cince bir dosyayi Turkce okumak ise baytlari bozmaz. Yine de
+# karar tek bir harfe dayanmaz: yeterli sayida Turkce'ye ozgu harf VE
+# ASCII-disi karakterlerin buyuk cogunlugunun Turk alfabesinden olmasi gerekir.
+
+@pytest.mark.parametrize("guess", ["big5", "big5hkscs", "johab", "cp1006", "gb2312", "cp1251"])
+def test_non_latin_guess_prefers_cp1254_for_clearly_turkish_text(guess):
+    assert prefer_turkish_encoding(_TURKISH.encode("cp1254"), guess) == "cp1254"
+
+
+@pytest.mark.parametrize("text", ["değer hesap", "GÜVENLİK sunucu", "için şube"])
+def test_non_latin_guess_is_kept_with_too_few_turkish_letters(text):
+    assert prefer_turkish_encoding(text.encode("cp1254"), "big5") == "big5"
+
+
+@pytest.mark.parametrize("encoding,text", [
+    ("big5", "這是一個測試檔案，包含客戶資料與伺服器設定。"),
+    ("johab", "이것은 고객 데이터와 서버 설정을 포함한 테스트 파일입니다."),
+    ("euc_kr", "이것은 고객 데이터와 서버 설정을 포함한 테스트 파일입니다."),
+    ("gb2312", "这是一个测试文件，包含客户数据和服务器配置。"),
+    ("cp1251", "Это тестовый файл с данными клиентов и настройками сервера."),
+    ("cp1256", "هذا ملف اختبار يحتوي على بيانات العملاء"),
+])
+def test_genuine_foreign_text_keeps_its_encoding(encoding, text):
+    raw = ("// " + text * 3 + "\nint x = 1;\n").encode(encoding)
+    assert prefer_turkish_encoding(raw, encoding) == encoding
+
+
+@pytest.mark.parametrize("text", [
+    "// İstanbul ŞİRKET\n",
+    "// hesap çıkış şifresi\n",
+])
+def test_classify_bytes_short_turkish_misread_as_cjk_is_fixed(text):
+    # Olculen gercek ornekler: charset_normalizer bunlari johab/big5hkscs sanıyordu.
+    assert classify_bytes(text.encode("cp1254")) == (True, "cp1254")
