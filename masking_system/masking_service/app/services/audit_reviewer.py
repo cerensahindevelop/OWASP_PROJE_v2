@@ -24,7 +24,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.services.llm_recognizer import LLMRecognitionError, call_vllm, chunk_text, require_complete_response
+from app.services.llm_recognizer import (
+    LLMRecognitionError, call_vllm, chunk_text, require_complete_response, scan_with_split,
+)
 from app.services.llm_runtime import LLMScanMetrics
 from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE
 
@@ -194,31 +196,37 @@ async def audit_masked_text(masked_text: str, vllm_settings) -> AuditVerdict:
         return AuditVerdict(risky=False)
     if not vllm_settings.host or not vllm_settings.model:
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
-    chunks = chunk_text(masked_text, vllm_settings.max_file_chars,
-                        getattr(vllm_settings, "chunk_overlap_chars", 500))
-    risky = False
+    overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
+    chunks = chunk_text(masked_text, vllm_settings.max_file_chars, overlap_chars)
     findings: dict[str, AuditFinding] = {}
     with LLMScanMetrics("audit", len(chunks)) as metrics:
-        for index, (_, chunk) in enumerate(chunks, 1):
-            payload = build_audit_request(
-                chunk, vllm_settings.model, getattr(vllm_settings, "seed", 42),
-                max_tokens=getattr(vllm_settings, "max_tokens", 512),
-                disable_thinking=getattr(vllm_settings, "disable_thinking", False),
-                presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
-            )
-            verdict = await metrics.request(vllm_settings, payload, call_vllm, parse_audit_response, index)
-            verified, dropped = verify_audit_findings(chunk, verdict.findings)
-            if dropped or (verdict.risky and not verified):
-                # Icerik degil, sadece sayilar loglanir.
-                logger.info(
-                    "llm_audit_unverified file=%r chunk=%d model_risky=%s dropped_findings=%d kept_findings=%d",
-                    metrics.file_path, index, verdict.risky, dropped, len(verified),
+        for index, (offset, chunk) in enumerate(chunks, 1):
+            # Tek parcayi denetler, yalnizca metinde dogrulanan bulgulari doner.
+            async def scan(_part_offset: int, part: str, index: int = index) -> list[AuditFinding]:
+                payload = build_audit_request(
+                    part, vllm_settings.model, getattr(vllm_settings, "seed", 42),
+                    max_tokens=getattr(vllm_settings, "max_tokens", 1024),
+                    disable_thinking=getattr(vllm_settings, "disable_thinking", False),
+                    presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
                 )
+                verdict = await metrics.request(vllm_settings, payload, call_vllm, parse_audit_response, index)
+                verified, dropped = verify_audit_findings(part, verdict.findings)
+                if dropped or (verdict.risky and not verified):
+                    # Icerik degil, sadece sayilar loglanir.
+                    logger.info(
+                        "llm_audit_unverified file=%r chunk=%d model_risky=%s dropped_findings=%d kept_findings=%d",
+                        metrics.file_path, index, verdict.risky, dropped, len(verified),
+                    )
+                return verified
+
+            # Yanit max_tokens'ta kesilirse parca bolunup yeniden denetlenir
+            # (tespit adimiyla ayni sinirlar); sinirda hala kesikse hata
+            # caller'a ulasir ve dosya karantinaya gider.
+            verified = await scan_with_split(scan, index, offset, chunk, overlap_chars)
             # Risk yalnizca metinde dogrulanan somut bir alintiya dayanir;
             # modelin "risk var" deyip dogrulanabilir alinti vermemesi
             # dosyayi karantinaya almaz.
-            risky = risky or bool(verified)
             for finding in verified:
                 # Same cited section across overlapping chunks is one audit finding.
                 findings.setdefault(finding.ilgili_bolum or finding.aciklama, finding)
-    return AuditVerdict(risky=risky, findings=list(findings.values()))
+    return AuditVerdict(risky=bool(findings), findings=list(findings.values()))

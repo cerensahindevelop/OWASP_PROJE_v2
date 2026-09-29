@@ -124,10 +124,10 @@ def test_still_truncated_at_depth_limit_raises(monkeypatch):
         return response(finish='length')
 
     monkeypatch.setattr(llm_recognizer, 'call_vllm', fake)
-    with pytest.raises(llm_recognizer.LLMTruncatedError, match='bolme_derinligi=2'):
-        asyncio.run(llm_recognizer.find_llm_detections(lines(100), [], settings()))
-    # 6000 -> sol parca (derinlik 1) -> onun sol parcasi (derinlik 2) hala kesik -> hata.
-    assert [len(s) for s in sent] == [6000, 3000, 1500]
+    with pytest.raises(llm_recognizer.LLMTruncatedError, match='bolme_derinligi=3'):
+        asyncio.run(llm_recognizer.find_llm_detections(lines(200), [], settings(max_file_chars=12000)))
+    # 12000 -> 6000 (derinlik 1) -> 3000 (derinlik 2) -> 1500 (derinlik 3) hala kesik -> hata.
+    assert [len(s) for s in sent] == [12000, 6000, 3000, 1500]
     assert isinstance(llm_recognizer.LLMTruncatedError('x'), llm_recognizer.LLMRecognitionError)
 
 
@@ -139,7 +139,8 @@ def test_small_truncated_chunk_is_not_split(monkeypatch):
         return response(finish='length')
 
     monkeypatch.setattr(llm_recognizer, 'call_vllm', fake)
-    out = asyncio.run(LLMDetector(settings()).detect('ATLAS ' * 300, {'file_path': 'a.txt'}))
+    # 1500 karakter < 2 * _MIN_SPLIT_CHARS (800): bolunemez.
+    out = asyncio.run(LLMDetector(settings()).detect('ATLAS ' * 250, {'file_path': 'a.txt'}))
     assert out.results == [] and 'VALIDATION_FAILED' in out.errors[0]
     assert len(calls) == 1
 

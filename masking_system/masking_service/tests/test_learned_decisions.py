@@ -132,3 +132,74 @@ def test_llm_failure_is_a_technical_audit_event_not_a_review_finding(db_session,
     db_session.flush()
     assert db_session.query(ReviewQueue).filter_by(run_id=run.id).count() == 0
     assert "VALIDATION_FAILED" in db_session.query(AuditLog).filter_by(run_id=run.id).one().detail
+
+
+def _export_with_risky_audit(db_session, tmp_path, monkeypatch, suffix, quotes):
+    from app.services import exporter
+    from app.services.audit_reviewer import AuditFinding, AuditVerdict
+
+    async def risky_audit(*args, **kwargs):
+        return AuditVerdict(risky=True, findings=[
+            AuditFinding(aciklama="olasi ic isim", ilgili_bolum=quote) for quote in quotes])
+
+    monkeypatch.setattr(exporter, "audit_masked_text", risky_audit)
+    source = tmp_path / f"{suffix}-src"
+    (source / "src").mkdir(parents=True)
+    (source / "src" / "a.py").write_text("note = 'HarmlessWord'\nother = 'OtherWord'\n", encoding="utf-8")
+    target = tmp_path / f"{suffix}-out"
+    report = asyncio.run(export_project(
+        db_session, source_path=str(source), target_path=str(target),
+        project_name=f"pytest-{suffix}", sicil_no="P-LEARN", branch_name="main", initiated_by="P-LEARN",
+    ))
+    return report, target / "src" / "a.py"
+
+
+def test_export_applies_learned_suppression_to_audit_findings(db_session, tmp_path, monkeypatch):
+    from app.db.models import AuditWarning
+
+    context, _run = _context_run(db_session, tmp_path, "sup-export")
+    remember_decision(
+        db_session, context_id=context.id, decision_type="suppression", value="HarmlessWord",
+        entity_type="INTERNAL_NAME", file_path="src/other.py", source_review_id=None,
+    )
+    db_session.flush()
+    report, output = _export_with_risky_audit(db_session, tmp_path, monkeypatch, "sup-export", ["HarmlessWord"])
+
+    # Kullanicinin "hassas degil" dedigi deger ayni kapsamda tekrar onaya dusmez.
+    assert output.exists()
+    outcome = next(o for o in report.outcomes if o.relative_path == "src/a.py")
+    assert outcome.final_state == "READY"
+    assert db_session.query(AuditWarning).filter_by(run_id=report.run_id).count() == 0
+    trail = [row.detail for row in db_session.query(AuditLog).filter_by(run_id=report.run_id).all()]
+    assert any("suppressed_findings=1" in detail for detail in trail)
+    # Bastirilan degerin kendisi loglanmaz.
+    assert not any("HarmlessWord" in (detail or "") for detail in trail)
+
+
+def test_export_keeps_unsuppressed_audit_findings_quarantined(db_session, tmp_path, monkeypatch):
+    from app.db.models import AuditWarning
+
+    context, _run = _context_run(db_session, tmp_path, "sup-partial")
+    remember_decision(
+        db_session, context_id=context.id, decision_type="suppression", value="HarmlessWord",
+        entity_type="INTERNAL_NAME", file_path="src/other.py", source_review_id=None,
+    )
+    db_session.flush()
+    report, output = _export_with_risky_audit(
+        db_session, tmp_path, monkeypatch, "sup-partial", ["HarmlessWord", "OtherWord"])
+
+    assert not output.exists()
+    warning = db_session.query(AuditWarning).filter_by(run_id=report.run_id).one()
+    # Kalan bulgu gerekcede gorunur, bastirilan bulgu gorunmez.
+    assert "OtherWord" in warning.reasoning and "HarmlessWord" not in warning.reasoning
+
+
+def test_export_suppression_does_not_cross_file_scope(db_session, tmp_path, monkeypatch):
+    context, _run = _context_run(db_session, tmp_path, "sup-scope")
+    remember_decision(
+        db_session, context_id=context.id, decision_type="suppression", value="HarmlessWord",
+        entity_type="INTERNAL_NAME", file_path="tests/other.py", source_review_id=None,
+    )
+    db_session.flush()
+    _report, output = _export_with_risky_audit(db_session, tmp_path, monkeypatch, "sup-scope", ["HarmlessWord"])
+    assert not output.exists()

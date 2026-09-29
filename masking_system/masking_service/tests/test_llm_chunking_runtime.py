@@ -219,7 +219,7 @@ def test_common_application_defaults_without_environment(monkeypatch):
     configured = VLLMSettings(_env_file=None)
     assert (configured.max_concurrent_requests, configured.timeout_seconds,
             configured.max_file_chars, configured.chunk_overlap_chars,
-            configured.max_tokens) == (1, 200, 6000, 500, 512)
+            configured.max_tokens) == (1, 200, 6000, 500, 1024)
 
 
 def _clean_vllm_env(monkeypatch):
