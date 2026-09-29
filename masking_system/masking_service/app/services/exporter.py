@@ -73,7 +73,7 @@ from app.services.mapping_service import (
     mapping_scope_for_run,
     mask_relative_path,
 )
-from app.services.review_masking import mask_known_values
+from app.services.review_masking import NarrowedValueError, mask_known_values
 from app.services.scanner import iter_project_files
 from app.services.syntax_validator import validate_masked_syntax
 
@@ -1669,6 +1669,7 @@ _MAX_REMEDIATION_ROUNDS = 2
 _REMEDIATION_CHECK_LABELS = {
     "kural": "sözlük kuralı bulunamadı",
     "maskeleme": "değerlerin güvenli sınırla maskelenmesi",
+    "daraltma": "alıntının bir kısmı açık kalacaktı",
     "geri_donus": "geri dönüş doğrulaması",
     "sozdizimi": "sözdizimi doğrulaması",
     "acik_terim": "açık terim kontrolü",
@@ -1724,7 +1725,13 @@ def _try_remediation(
     try:
         failure = None
         try:
-            text, matches, mappings = mask_known_values(db, run_ctx, masked_file.masked_text, prep.rel, values)
+            text, matches, mappings = mask_known_values(
+                db, run_ctx, masked_file.masked_text, prep.rel, values, reject_narrowed_content=True,
+            )
+        except NarrowedValueError:
+            # Daraltilan alintinin acik kalacak kismini yakalayacak tek sey
+            # ikinci LLM denetimi olurdu; bu belirsiz kontrole birakilmaz.
+            failure = "daraltma"
         except ValueError:
             failure = "maskeleme"
         if failure is None:

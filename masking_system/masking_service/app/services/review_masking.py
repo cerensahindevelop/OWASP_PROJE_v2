@@ -25,6 +25,10 @@ def _reverse_map(db, run):
             )).all()}
 
 
+class NarrowedValueError(ValueError):
+    """Sinir dogrulamasi degeri daraltti ve atilan kisimda harf/rakam kaldi."""
+
+
 def mask_review_values(db, run, content: str, file_path: str, values: list[tuple[str, str]]) -> str:
     """Mask exact occurrences once, protect existing tokens, verify exact restoration."""
     original = reverse_text(content, _reverse_map(db, run))[0]
@@ -41,6 +45,8 @@ def mask_review_values(db, run, content: str, file_path: str, values: list[tuple
 def mask_known_values(
     db, run_ctx: MaskingRunContext, content: str, file_path: str,
     values: list[tuple[str, RuleSpec, str]],
+    *,
+    reject_narrowed_content: bool = False,
 ) -> tuple[str, list[Match], list[ValueMapping]]:
     """Degeri kesin bilinen ifadeleri (value, kural, kaynak) maskeler.
 
@@ -49,6 +55,11 @@ def mask_known_values(
     degistirilmez (ValueError). Donus: (maskeli metin, eslesmeler, eslemeler);
     eslesmeler ve eslemeler ayni sirada, tutarlilik registry'sine verilebilir.
     Geri donus dogrulamasi cagiranin sorumlulugundadir.
+
+    reject_narrowed_content=True: dogrulayici bir gecisi daraltirken
+    (orn. `sifre": "Abc123` -> `Abc123`) disarida kalan kisimda harf/rakam
+    varsa NarrowedValueError - o kisim acik kalirdi. Yalnizca tirnak/iki
+    nokta/bosluk gibi isaretler atiliyorsa daraltma kabul edilir.
     """
     protected = [m.span() for pattern in (PLACEHOLDER_RE, JSON_NUMERIC_PLACEHOLDER_RE)
                  for m in pattern.finditer(content)]
@@ -74,6 +85,13 @@ def mask_known_values(
     ], file_path=file_path)
     if rejections:
         raise ValueError("Riskli ifade güvenli maskeleme sınırlarına ayrıştırılamadı; dosya değiştirilmedi.")
+    if reject_narrowed_content:
+        for candidate in candidates:
+            covered = [(max(r.start, candidate.start), min(r.end, candidate.end))
+                       for r in validated if r.start < candidate.end and candidate.start < r.end]
+            if any(content[pos].isalnum() for pos in range(candidate.start, candidate.end)
+                   if not any(a <= pos < b for a, b in covered)):
+                raise NarrowedValueError("Riskli ifadenin bir kısmı maskelenemiyor; dosya değiştirilmedi.")
     candidates = []
     for result in validated:
         if any(result.start < b and a < result.end for a, b in protected):

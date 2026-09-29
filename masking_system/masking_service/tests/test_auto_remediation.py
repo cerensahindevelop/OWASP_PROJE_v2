@@ -194,3 +194,39 @@ def test_leak_with_failed_audit_is_not_auto_released(db_session, tmp_path, monke
 
     assert not (target / "src" / "a.py").exists()
     assert db_session.query(AuditWarning).filter_by(run_id=report.run_id).count() == 1
+
+
+def _single_quote_audit(quote: str, marker: str):
+    async def audit(masked_text, *args, **kwargs):
+        if marker in masked_text:
+            return AuditVerdict(risky=True, findings=[AuditFinding(aciklama="sifre", ilgili_bolum=quote)])
+        return AuditVerdict(risky=False)
+    return audit
+
+
+def test_narrowed_quote_dropping_letters_is_not_auto_remediated(db_session, tmp_path, monkeypatch):
+    # Alinti string sinirini asiyor; dogrulayici onu yalnizca "Abc123"e
+    # daraltir ve `sifre` acik kalir. Tek guvence ikinci LLM denetimi
+    # olurdu - bu yuzden otomatik duzeltme yapilmaz, dosya onaya duser.
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", _single_quote_audit('sifre": "Abc123', "Abc123"))
+
+    source_text = 'cfg = {"sifre": "Abc123"}\n'
+    report, target = _export(db_session, tmp_path, {"src/d.py": source_text}, "auto-narrow")
+
+    assert not (target / "src" / "d.py").exists()
+    warning = db_session.query(AuditWarning).filter_by(run_id=report.run_id).one()
+    assert warning.masked_content == source_text
+    assert "otomatik düzeltme denendi" in warning.reasoning
+    assert any("check=daraltma" in detail for detail in _trail(db_session, report))
+
+
+def test_narrowed_quote_dropping_only_punctuation_is_auto_remediated(db_session, tmp_path, monkeypatch):
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", _single_quote_audit('"Abc123"', "Abc123"))
+
+    report, target = _export(db_session, tmp_path, {"src/d.py": 'cfg = {"sifre": "Abc123"}\n'}, "auto-punct")
+
+    output = (target / "src" / "d.py").read_text(encoding="utf-8")
+    assert "Abc123" not in output and '"sifre"' in output
+    assert _outcome(report, "src/d.py").final_state == "READY"
