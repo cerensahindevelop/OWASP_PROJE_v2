@@ -4,7 +4,7 @@ from typing import Literal
 
 # pydantic-settings: her ayar grubunu ortam degiskenlerinden (.env) okuyup
 # dogrulayan (Field(...) zorunlu alanlar, model_validator capraz kontroller) taban sinif.
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/core/config.py -> masking_system/.env (repo kok dizinindeki TEK .env
@@ -281,6 +281,14 @@ class ValidationSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VALIDATION_", env_file=_ENV_FILE, extra="ignore")
     sql_dialect: str = Field(
         "", description="SQLGlot lehcesi: postgres, tsql, oracle, mysql vb.; bos ise ortak SQLGlot grameri."
+    )
+    # block: maskelemenin sozdizimini bozdugu dosya ciktiya alinmaz (varsayilan).
+    # warn: tum gizlilik kontrollerinden gecmis dosya uyariyla ciktiya alinir.
+    # Otomatik duzeltme (exporter._try_remediation) ve Java .class her modda bloklar.
+    syntax_failure_action: Literal["warn", "block"] = Field(
+        "block",
+        validation_alias=AliasChoices("SYNTAX_FAILURE_ACTION", "VALIDATION_SYNTAX_FAILURE_ACTION"),
+        description="Maskeleme sonrasi sozdizimi hatasi: block (ciktiya alma) ya da warn (uyariyla yaz).",
     )
 
 

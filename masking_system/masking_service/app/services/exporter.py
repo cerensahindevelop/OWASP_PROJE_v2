@@ -591,6 +591,21 @@ def _validate_and_log_syntax(
     return error
 
 
+# SYNTAX_FAILURE_ACTION=warn: sozdizimi hatasi dosyayi bloklamaz, rapora ve
+# AuditLog'a uyari olarak duser. Hata metni yalnizca tur + satir/sutun icerir.
+def _record_syntax_warning(
+    db: Session, run_id: int, relative_path: str, syntax_error: str, validation_warnings: list[str] | None,
+) -> None:
+    db.add(AuditLog(
+        run_id=run_id, file_path=relative_path, action="skipped",
+        detail=f"validation_warning; syntax_failure_action=warn; {syntax_error}",
+    ))
+    if validation_warnings is not None:
+        entry = f"{relative_path}: sozdizimi hatasi uyariyla ciktiya alindi: {syntax_error}"
+        if entry not in validation_warnings:
+            validation_warnings.append(entry)
+
+
 def _register_passthrough_placeholders(reverse_map: dict[str, str], text: str) -> None:
     """Any placeholder-SHAPED token already in `text` that has no real DB
     mapping must round-trip as itself, not as "unresolved". It is either a
@@ -744,6 +759,13 @@ def _run_consistency_pass(
                     db, run_ctx.run_id, output_file.outcome.relative_path,
                     masked_text, text, report.validation_warnings,
                 )
+                if (syntax_error is not None and settings.validation.syntax_failure_action == "warn"
+                        and output_file.original_binary_digest is None):
+                    _record_syntax_warning(
+                        db, run_ctx.run_id, output_file.outcome.relative_path, syntax_error,
+                        report.validation_warnings,
+                    )
+                    syntax_error = None
                 if syntax_error is not None:
                     _mark_consistency_failure(
                         db,
@@ -1393,6 +1415,7 @@ def _finalize_file(
     decision_policy: LearnedDecisionPolicy | None = None,
     allow_remediation: bool = False,
     remediation_note: str | None = None,
+    syntax_failure_action: str | None = None,
 ) -> "FileOutcome | _RemediationRequest":
     prep = masked_file.prep
 
@@ -1592,6 +1615,13 @@ def _finalize_file(
     syntax_error = _validate_and_log_syntax(
         db, run_id, prep.rel, masked_file.masked_text, prep.text, validation_warnings,
     )
+    # warn modu: bu noktaya gelen dosya tum gizlilik kontrollerinden (acik terim,
+    # LLM denetimi) gecti; sozdizimi hatasi uyariyla kaydedilip dosya yazilir.
+    # Java .class her modda bloklar (bozuk sabit havuzu yeniden kurulamaz).
+    if (syntax_error is not None and prep.class_document is None
+            and (syntax_failure_action or settings.validation.syntax_failure_action) == "warn"):
+        _record_syntax_warning(db, run_id, prep.rel, syntax_error, validation_warnings)
+        syntax_error = None
     if syntax_error is not None:
         _write_to_failed_files_dir(failed_dir, _failed_rel(prep), masked_file.masked_text, prep.encoding)
         db.add(
@@ -1855,6 +1885,9 @@ def _continue_remediation(
         outcome = _finalize_file(
             db, run_ctx.run_id, item.current, audit_result, failed_dir, validation_warnings,
             decision_policy=decision_policy, allow_remediation=item.rounds < _MAX_REMEDIATION_ROUNDS,
+            # Otomatik duzeltmeden sonra cikan sozdizimi hatasi yanlis bir seyin
+            # maskelendigine isaret edebilir: warn modunda da onaya duser.
+            syntax_failure_action="block",
         )
         if isinstance(outcome, _RemediationRequest):
             result = _try_remediation(db, run_ctx, item.current, outcome, rules_by_name, rule_names_by_id)
