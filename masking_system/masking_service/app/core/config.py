@@ -121,7 +121,11 @@ class VLLMSettings(BaseSettings):
         "atlanmaz; bu sinira gore parcalara bolunur.",
     )
     chunk_overlap_chars: int = Field(500, ge=0, description="LLM overlap; en fazla chunk boyunun dortte biri.")
-    max_tokens: int = Field(512, gt=0, description="Tespit/audit token tavani; kesilen yanit basarisizdir.")
+    max_tokens: int = Field(
+        1024, gt=0,
+        description="Tespit/audit token tavani; kesilen parca bolunup yeniden taranir, sinirda hala "
+        "kesikse basarisizdir.",
+    )
     disable_thinking: bool = Field(
         False,
         description="Qwen3 gibi thinking modlu modellerde istege chat_template_kwargs="

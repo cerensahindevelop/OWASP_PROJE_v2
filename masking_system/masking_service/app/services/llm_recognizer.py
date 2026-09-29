@@ -52,9 +52,9 @@ class LLMTruncatedError(LLMRecognitionError):
     """Response cut at max_tokens (finish_reason=length); chunk may be split and rescanned."""
 
 
-# Kesilen chunk'i bolme sinirlari: en fazla 2 kez bolunur, parca en az 1500 karakter.
-_MAX_SPLIT_DEPTH = 2
-_MIN_SPLIT_CHARS = 1500
+# Kesilen chunk'i bolme sinirlari: en fazla 3 kez bolunur, parca en az 800 karakter.
+_MAX_SPLIT_DEPTH = 3
+_MIN_SPLIT_CHARS = 800
 
 
 _PROMPT_PATH = Path(__file__).with_name("llm_prompt.txt")
@@ -303,6 +303,27 @@ def _split_chunk(chunk: str, overlap_chars: int) -> list[tuple[int, str]] | None
     return [(0, chunk[:cut]), (right_start, chunk[right_start:])]
 
 
+# Tek chunk'i `scan(offset, chunk)` ile tarar; yanit max_tokens'ta kesilirse
+# (LLMTruncatedError) yalnizca bu chunk'i bolup parcalari yeniden tarar ve
+# sonuclari birlestirir. Tespit ve denetim adimlari ortak kullanir. Sinira
+# ragmen hala kesikse hata caller'a ulasir (karantina, fail-safe).
+async def scan_with_split(scan, index: int, offset: int, chunk: str, overlap_chars: int,
+                          depth: int = 0) -> list:
+    try:
+        return await scan(offset, chunk)
+    except LLMTruncatedError as exc:
+        parts = _split_chunk(chunk, overlap_chars) if depth < _MAX_SPLIT_DEPTH else None
+        if parts is None:
+            raise LLMTruncatedError(
+                f"{exc} (chunk={index} offset={offset} uzunluk={len(chunk)} "
+                f"bolme_derinligi={depth}; daha fazla bolunemiyor)"
+            ) from exc
+    results: list = []
+    for rel, part in parts:
+        results.extend(await scan_with_split(scan, index, offset + rel, part, overlap_chars, depth + 1))
+    return results
+
+
 # Metni parcalara bolup her parcayi LLM ile tarar, sonuclari birlestirir. LLM kapaliysa bos liste doner.
 async def find_llm_detections(
     text: str,
@@ -323,32 +344,23 @@ async def find_llm_detections(
     confidence_rank = {"dusuk": 0, "orta": 1, "yuksek": 2}
 
     with LLMScanMetrics("detection", len(chunks), (metadata or {}).get("file_path")) as metrics:
-        # Tek chunk'i tarar; max_tokens'ta kesilirse yalnizca bu chunk'i bolup
-        # parcalari yeniden tarar (basarili chunk'lar tekrar gonderilmez).
-        async def scan_chunk(index: int, offset: int, chunk: str, depth: int = 0) -> list[DetectionResult]:
-            payload = build_detection_request(
-                chunk, vllm_settings.model, seed, extra_instructions,
-                max_tokens=getattr(vllm_settings, "max_tokens", 512),
-                disable_thinking=getattr(vllm_settings, "disable_thinking", False),
-                presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
-            )
-            try:
+        # Tek chunk'i tarar; kesilirse scan_with_split yalnizca bu chunk'i
+        # bolup yeniden tarar (basarili chunk'lar tekrar gonderilmez).
+        async def scan_chunk(index: int, offset: int, chunk: str) -> list[DetectionResult]:
+            async def scan(part_offset: int, part: str) -> list[DetectionResult]:
+                payload = build_detection_request(
+                    part, vllm_settings.model, seed, extra_instructions,
+                    max_tokens=getattr(vllm_settings, "max_tokens", 1024),
+                    disable_thinking=getattr(vllm_settings, "disable_thinking", False),
+                    presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
+                )
                 return await metrics.request(
                     vllm_settings, payload, call_vllm,
-                    lambda raw: parse_and_verify_detections(raw, chunk, consumed, base_offset=offset),
+                    lambda raw: parse_and_verify_detections(raw, part, consumed, base_offset=part_offset),
                     index,
                 )
-            except LLMTruncatedError as exc:
-                parts = _split_chunk(chunk, overlap_chars) if depth < _MAX_SPLIT_DEPTH else None
-                if parts is None:
-                    raise LLMTruncatedError(
-                        f"{exc} (chunk={index} offset={offset} uzunluk={len(chunk)} "
-                        f"bolme_derinligi={depth}; daha fazla bolunemiyor)"
-                    ) from exc
-                results: list[DetectionResult] = []
-                for rel, part in parts:
-                    results.extend(await scan_chunk(index, offset + rel, part, depth + 1))
-                return results
+
+            return await scan_with_split(scan, index, offset, chunk, overlap_chars)
 
         # Hata veren chunk kardeslerini HEMEN iptal eder: gather'in sonradan
         # iptali, bosalan _gate slotunu kuyruktaki chunk'in almasina yetismez.

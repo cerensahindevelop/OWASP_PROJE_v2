@@ -176,3 +176,63 @@ def test_disable_thinking_controls_chat_template_kwargs(monkeypatch, disable_thi
             assert payload["chat_template_kwargs"] == {"enable_thinking": False}
         else:
             assert "chat_template_kwargs" not in payload
+
+
+def _lines(n, width=60):
+    return "".join("x" * (width - 1) + "\n" for _ in range(n))
+
+
+def test_truncated_audit_chunk_is_split_and_rescanned(monkeypatch):
+    # Denetim yaniti max_tokens'ta kesilirse (finish_reason=length) parca
+    # bolunup yeniden denetlenir; dogrudan karantina hatasi olmaz.
+    content = _lines(50) + "# 10.0.0.5 sunucusu\n"
+    sent = []
+
+    async def fake(host, timeout, payload, api_key=None):
+        chunk = payload["messages"][1]["content"]
+        sent.append(chunk)
+        if chunk == content:
+            return {"choices": [{"finish_reason": "length", "message": {"content": '{"risk_var": tr'}}]}
+        if "10.0.0.5" in chunk:
+            return _chat_response('{"risk_var": true, "bulgular": ['
+                                  '{"aciklama": "IP", "ilgili_bolum": "# 10.0.0.5 sunucusu"}]}')
+        return _chat_response('{"risk_var": false, "bulgular": []}')
+
+    monkeypatch.setattr("app.services.audit_reviewer.call_vllm", fake)
+    verdict = asyncio.run(audit_masked_text(content, _settings(chunk_overlap_chars=500)))
+
+    assert len(sent) == 3
+    assert sent[1] != content and sent[2] != content
+    assert verdict.risky is True
+    assert [f.ilgili_bolum for f in verdict.findings] == ["10.0.0.5 sunucusu"]
+
+
+def test_truncated_audit_split_parts_clean_gives_clean_verdict(monkeypatch):
+    content = _lines(50)
+
+    async def fake(host, timeout, payload, api_key=None):
+        if payload["messages"][1]["content"] == content:
+            return {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+        return {"choices": [{"finish_reason": "stop",
+                             "message": {"content": '{"risk_var": false, "bulgular": []}'}}]}
+
+    monkeypatch.setattr("app.services.audit_reviewer.call_vllm", fake)
+    verdict = asyncio.run(audit_masked_text(content, _settings()))
+
+    assert verdict.risky is False and verdict.findings == []
+
+
+def test_audit_still_truncated_at_depth_limit_raises(monkeypatch):
+    from app.services.llm_recognizer import LLMTruncatedError
+
+    sent = []
+
+    async def fake(host, timeout, payload, api_key=None):
+        sent.append(payload["messages"][1]["content"])
+        return {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+
+    monkeypatch.setattr("app.services.audit_reviewer.call_vllm", fake)
+    with pytest.raises(LLMTruncatedError, match="bolme_derinligi=3"):
+        asyncio.run(audit_masked_text(_lines(200), _settings(max_file_chars=12_000)))
+    # 12000 -> 6000 -> 3000 -> 1500 (derinlik 3) hala kesik -> hata; fail-safe korunur.
+    assert [len(s) for s in sent] == [12_000, 6_000, 3_000, 1_500]
