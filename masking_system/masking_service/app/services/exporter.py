@@ -36,7 +36,7 @@ from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.core.exceptions import ExportInProgressError
 from app.db.models import AuditLog, AuditWarning, MaskingContext, MaskingRun, ValueMapping
-from app.services.audit_reviewer import audit_masked_text
+from app.services.audit_reviewer import AuditVerdict, audit_masked_text
 from app.services.consistency_masking import (
     SensitiveValueRegistry,
     apply_consistency_replacements,
@@ -1362,6 +1362,7 @@ def _finalize_file(
     audit_result: "AuditVerdict | LLMRecognitionError | None",
     failed_dir: Path,
     validation_warnings: list[str] | None = None,
+    decision_policy: LearnedDecisionPolicy | None = None,
 ) -> FileOutcome:
     prep = masked_file.prep
 
@@ -1494,7 +1495,26 @@ def _finalize_file(
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
         )
 
-    if audit_result is not None and audit_result.risky:
+    # Kullanicinin ayni kapsamda "hassas degil" dedigi degerler (ogrenilmis
+    # suppression) denetim bulgularindan dusulur - serbest birakma adimindaki
+    # kuralin aynisi (audit_warning_service._final_pass). Alintisiz "risk var"
+    # karari bastirilamaz; bulgu kalirsa dosya yine onaya duser.
+    if audit_result.risky and audit_result.findings and decision_policy is not None:
+        remaining = [
+            finding for finding in audit_result.findings
+            if decision_policy.suppression_for_value(finding.ilgili_bolum, prep.rel) is None
+        ]
+        suppressed = len(audit_result.findings) - len(remaining)
+        if suppressed:
+            # Degerin kendisi degil, yalnizca sayilar loglanir.
+            db.add(AuditLog(
+                run_id=run_id, file_path=prep.rel, action="skipped",
+                detail=f"ai_result=risky learned_suppression suppressed_findings={suppressed} "
+                f"remaining_findings={len(remaining)}",
+            ))
+            audit_result = AuditVerdict(risky=bool(remaining), findings=remaining)
+
+    if audit_result.risky:
         # Ikincil risk bulundu: mapping'ler DB'de kalir ama dosya hedefe yazilmaz - insan onayi bekler.
         reason = audit_result.reasoning_text()
         _create_audit_warning(
@@ -2057,7 +2077,8 @@ async def export_project(
                     try:
                         with db.begin_nested():
                             outcome = _finalize_file(
-                                db, run.id, result, audit_by_index[i], failed_dir, report.validation_warnings
+                                db, run.id, result, audit_by_index[i], failed_dir, report.validation_warnings,
+                                decision_policy=decision_policy,
                             )
                     except Exception as exc:
                         outcome = _quarantine_after_finalize_crash(db, run.id, prep, exc)
