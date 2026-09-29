@@ -48,12 +48,12 @@ from app.services.file_classifier import ignored_directory_reason, is_opaque_bin
 from app.services.file_pipeline import ReadStatus, describe_file_error, read_scanned_file
 from app.services.file_type import peek_classify, write_text_preserving_encoding
 from app.services.java_classfile import JAVA_CLASS_ENCODING, CLASS_COVERAGE, ClassFormatError, parse_class
-from app.services.detectors import DetectionOrchestrator
+from app.services.detectors import DetectionOrchestrator, synthetic_llm_rule
 from app.services.llm_recognizer import LLMRecognitionError
 from app.services.llm_runtime import llm_file_context
 from app.services.learned_decisions import LearnedDecisionPolicy
 from app.services.roundtrip_validator import text_digest, verify_round_trip, verify_round_trip_digest
-from app.services.rule_engine import PLACEHOLDER_RE, reverse_text
+from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE, reverse_text
 from app.services.output_publication import OutputPublication, publish_run
 from app.services.integrity_manifest import MANIFEST_NAME, write_manifest, file_digest, source_tag
 from app.services.path_placeholders import PathPlaceholderResolver, UnsafeUnmaskPathError
@@ -70,8 +70,10 @@ from app.services.mapping_service import (
     load_active_presidio_rules,
     load_active_rules,
     load_file_category_restrictions,
+    mapping_scope_for_run,
     mask_relative_path,
 )
+from app.services.review_masking import NarrowedValueError, mask_known_values
 from app.services.scanner import iter_project_files
 from app.services.syntax_validator import validate_masked_syntax
 
@@ -126,6 +128,9 @@ class FileOutcome:
     rule_breakdown: dict[str, int] = field(default_factory=dict)
     error: str | None = None
     final_state: str | None = None
+    # Dosyayi bloklayan son kontrolun kisa kodu (orn. "acik_terim",
+    # "sozdizimi"); otomatik duzeltme basarisizliginin gerekcesi icin.
+    failed_check: str | None = None
 
     def __post_init__(self) -> None:
         if self.final_state is not None:
@@ -884,6 +889,29 @@ class _MaskedFile:
     detector_crashes: list[str] = field(default_factory=list)
 
 
+# Degeri kesin bilinen sizintilar (acik kalan sozluk terimi, metinde birebir
+# dogrulanmis denetim alintisi) icin _finalize_file'in insan onayi yerine
+# dondurdugu otomatik duzeltme talebi.
+@dataclass
+class _RemediationRequest:
+    leaked_terms: list = field(default_factory=list)
+    findings: list = field(default_factory=list)
+
+
+# Otomatik duzeltilmis, LLM denetiminin tekrar calismasini bekleyen dosya.
+# `original`/`original_audit`: duzeltme basarisiz olursa insan onayina
+# dusecek duzeltme-oncesi hal. matches/mappings yalnizca dosya READY
+# olursa tutarlilik registry'sine eklenir.
+@dataclass
+class _PendingRemediation:
+    original: _MaskedFile
+    original_audit: object
+    current: _MaskedFile
+    rounds: int
+    matches: list = field(default_factory=list)
+    mappings: list = field(default_factory=list)
+
+
 @dataclass
 class _OutputFile:
     """A file currently present in the exported project copy."""
@@ -1363,8 +1391,17 @@ def _finalize_file(
     failed_dir: Path,
     validation_warnings: list[str] | None = None,
     decision_policy: LearnedDecisionPolicy | None = None,
-) -> FileOutcome:
+    allow_remediation: bool = False,
+    remediation_note: str | None = None,
+) -> "FileOutcome | _RemediationRequest":
     prep = masked_file.prep
+
+    # Otomatik duzeltme denenip basarisiz olduysa (bkz. _fallback_after_remediation)
+    # insan onayina dusen her uyarinin gerekcesine hangi kontrolde kaldigi eklenir.
+    def _warn(**kwargs) -> None:
+        if remediation_note:
+            kwargs["reasoning"] = f"{kwargs['reasoning']}\n({remediation_note})"
+        _create_audit_warning(db, **kwargs)
 
     # Herhangi bir detector katmani (Katman 1/2/3, hangisi olursa olsun) bu
     # dosya icin BEKLENMEYEN bir hatayla coktu mu? (bkz. detectors.py
@@ -1380,8 +1417,8 @@ def _finalize_file(
             "tam oldugu garanti edilemez, guvenlik geregi karantinaya alindi: "
             + "; ".join(masked_file.detector_crashes)
         )
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
         )
         db.add(
@@ -1393,6 +1430,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
+            failed_check="tespit_katmani",
         )
 
     # Katman 3 (LLM) tespiti bu dosya icin basarisiz oldu mu? (bkz.
@@ -1410,8 +1448,8 @@ def _finalize_file(
             "tam kapsamli tarandigi garanti edilemez, guvenlik geregi karantinaya alindi: "
             + "; ".join(masked_file.llm_errors)
         )
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
         )
         db.add(
@@ -1423,6 +1461,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
+            failed_check="llm_tespit",
         )
 
     if masked_file.review_results:
@@ -1430,8 +1469,8 @@ def _finalize_file(
             f"INCELEME_GEREKLI: Bu dosyada {len(masked_file.review_results)} düşük/orta güvenli AI "
             "bulgusu kullanıcı kararı bekliyor. Kararlar tamamlanınca dosya otomatik yeniden doğrulanacaktır."
         )
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
         )
         db.add(AuditLog(
@@ -1441,65 +1480,18 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="REVIEW_REQUIRED",
-        )
-
-    # Terim sozlugu son kontrolu: ana tespitten bagimsiz ikinci bir tarama - burada
-    # hala eslesme varsa kesin sinyaldir, LLM denetimi beklenmeden dosya reddedilir.
-    leaked_terms = find_leaked_terms(db, masked_file.masked_text)
-    if leaked_terms:
-        leaked_summary = "\n".join(
-            f"Satır {t.line_number}, sütun {t.column_number}: {t.category} ({t.rule_name}); "
-            f"açık değer={t.matched_value!r}"
-            for t in leaked_terms[:20]
-        )
-        reason = (
-            f"Kurumsal terim kontrolü: {len(leaked_terms)} açık eşleşme kaldı. "
-            f"Dosya çıktı klasörüne alınmadı.\n{leaked_summary}"
-        )
-        if len(leaked_terms) > 20:
-            reason += f"\nİlk 20 eşleşme gösteriliyor; toplam {len(leaked_terms)}."
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
-        )
-        db.add(
-            AuditLog(
-                run_id=run_id, file_path=prep.rel, action="skipped",
-                detail="final_state=SECURITY_QUARANTINE final_output=blocked; terim sozlugu son kontrolunde acik eslesme kaldi",
-            )
-        )
-        return FileOutcome(
-            prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
-            rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="SECURITY_QUARANTINE",
+            failed_check="inceleme",
         )
 
     if audit_result is None:
         audit_result = LLMRecognitionError("Gerekli LLM denetim sonucu eksik")
-    if isinstance(audit_result, LLMRecognitionError):
-        reason = (
-            "Ikincil denetim (LLM) cagrisi basarisiz oldu ya da zaman asimina ugradi, otomatik "
-            f"dogrulama yapilamadi - guvenlik geregi dosya karantinaya alindi: {audit_result}"
-        )
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
-        )
-        db.add(
-            AuditLog(
-                run_id=run_id, file_path=prep.rel, action="error",
-                detail="ai_result=error final_state=VALIDATION_FAILED final_output=blocked; ikincil denetim tamamlanamadi",
-            )
-        )
-        return FileOutcome(
-            prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
-            rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
-        )
 
     # Kullanicinin ayni kapsamda "hassas degil" dedigi degerler (ogrenilmis
     # suppression) denetim bulgularindan dusulur - serbest birakma adimindaki
     # kuralin aynisi (audit_warning_service._final_pass). Alintisiz "risk var"
     # karari bastirilamaz; bulgu kalirsa dosya yine onaya duser.
-    if audit_result.risky and audit_result.findings and decision_policy is not None:
+    if (isinstance(audit_result, AuditVerdict) and audit_result.risky and audit_result.findings
+            and decision_policy is not None):
         remaining = [
             finding for finding in audit_result.findings
             if decision_policy.suppression_for_value(finding.ilgili_bolum, prep.rel) is None
@@ -1514,11 +1506,74 @@ def _finalize_file(
             ))
             audit_result = AuditVerdict(risky=bool(remaining), findings=remaining)
 
+    # Terim sozlugu son kontrolu: ana tespitten bagimsiz ikinci bir tarama - burada
+    # hala eslesme varsa kesin sinyaldir, LLM denetimi beklenmeden dosya reddedilir.
+    leaked_terms = find_leaked_terms(db, masked_file.masked_text)
+
+    # Sizan deger kesin biliniyorsa (acik terim ya da metinde birebir
+    # dogrulanmis denetim alintisi) once otomatik duzeltme denenir; caller
+    # duzeltilen metni bu fonksiyondan (tum son kontrollerle) tekrar gecirir.
+    # Denetim tamamlanamadiysa ya da alintisiz "risk var" dediyse duzeltme
+    # denenmez - bu dosyalar her zaman insan onayina gider.
+    if allow_remediation and isinstance(audit_result, AuditVerdict) and prep.class_document is None:
+        findings = list(audit_result.findings) if audit_result.risky else []
+        if (leaked_terms or findings) and not (audit_result.risky and not findings):
+            return _RemediationRequest(leaked_terms=leaked_terms, findings=findings)
+
+    if leaked_terms:
+        leaked_summary = "\n".join(
+            f"Satır {t.line_number}, sütun {t.column_number}: {t.category} ({t.rule_name}); "
+            f"açık değer={t.matched_value!r}"
+            for t in leaked_terms[:20]
+        )
+        reason = (
+            f"Kurumsal terim kontrolü: {len(leaked_terms)} açık eşleşme kaldı. "
+            f"Dosya çıktı klasörüne alınmadı.\n{leaked_summary}"
+        )
+        if len(leaked_terms) > 20:
+            reason += f"\nİlk 20 eşleşme gösteriliyor; toplam {len(leaked_terms)}."
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+        )
+        db.add(
+            AuditLog(
+                run_id=run_id, file_path=prep.rel, action="skipped",
+                detail="final_state=SECURITY_QUARANTINE final_output=blocked; terim sozlugu son kontrolunde acik eslesme kaldi",
+            )
+        )
+        return FileOutcome(
+            prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
+            rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="SECURITY_QUARANTINE",
+            failed_check="acik_terim",
+        )
+
+    if isinstance(audit_result, LLMRecognitionError):
+        reason = (
+            "Ikincil denetim (LLM) cagrisi basarisiz oldu ya da zaman asimina ugradi, otomatik "
+            f"dogrulama yapilamadi - guvenlik geregi dosya karantinaya alindi: {audit_result}"
+        )
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+        )
+        db.add(
+            AuditLog(
+                run_id=run_id, file_path=prep.rel, action="error",
+                detail="ai_result=error final_state=VALIDATION_FAILED final_output=blocked; ikincil denetim tamamlanamadi",
+            )
+        )
+        return FileOutcome(
+            prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
+            rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
+            failed_check="llm_denetimi_tamamlanamadi",
+        )
+
     if audit_result.risky:
         # Ikincil risk bulundu: mapping'ler DB'de kalir ama dosya hedefe yazilmaz - insan onayi bekler.
         reason = audit_result.reasoning_text()
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
         )
         db.add(
@@ -1530,6 +1585,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="SECURITY_QUARANTINE",
+            failed_check="llm_denetimi",
         )
 
     # Son guvenlik agi: maskeleme sozdizimini BOZDU mu? (kaynak zaten bozuksa buradan gecer)
@@ -1544,14 +1600,15 @@ def _finalize_file(
                 detail=f"final_state=VALIDATION_FAILED final_output=blocked; Maskeleme sozdizimini bozdu, disa aktarilmadi: {syntax_error}",
             )
         )
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=f"Sözdizimi doğrulaması başarısız: {syntax_error}",
             audit_failed=True,
         )
         return FileOutcome(
             prep.rel, status="failed_syntax_validation", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=syntax_error,
+            failed_check="sozdizimi",
         )
 
     if prep.class_document is not None:
@@ -1561,12 +1618,12 @@ def _finalize_file(
             reason = str(exc)
             _write_to_failed_files_dir(failed_dir, _failed_rel(prep),
                                       masked_file.masked_text, prep.encoding)
-            _create_audit_warning(db, run_id=run_id, file_path=prep.rel,
-                                 masked_content=masked_file.masked_text, encoding=prep.encoding,
-                                 reasoning=reason, audit_failed=True)
+            _warn(run_id=run_id, file_path=prep.rel,
+                  masked_content=masked_file.masked_text, encoding=prep.encoding,
+                  reasoning=reason, audit_failed=True)
             db.add(AuditLog(run_id=run_id, file_path=prep.rel, action="error",
                             detail=f"final_state=VALIDATION_FAILED final_output=blocked; {reason}"))
-            return FileOutcome(prep.rel, status="failed_syntax_validation",
+            return FileOutcome(prep.rel, failed_check="sozdizimi", status="failed_syntax_validation",
                                match_count=masked_file.match_count,
                                rule_breakdown=masked_file.rule_breakdown, error=reason)
         notice = f"{prep.rel}: {CLASS_COVERAGE}"
@@ -1584,11 +1641,11 @@ def _finalize_file(
     except OSError as exc:
         detail = describe_file_error("yazma", prep.dest_path, exc)
         db.add(AuditLog(run_id=run_id, file_path=prep.rel, action="error", detail=detail))
-        _create_audit_warning(
-            db, run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=f"Doğrulanmış çıktı yazılamadı: {detail}", audit_failed=True,
         )
-        return FileOutcome(prep.rel, status="error", error=detail)
+        return FileOutcome(prep.rel, failed_check="yazma", status="error", error=detail)
 
     # match_count==0 (hicbir sey maskelenmedi) burada tamamen gecerli bir
     # sonuctur - dosya secilen katmanlardan ve gerekli dogrulamalardan TEMIZ
@@ -1601,6 +1658,241 @@ def _finalize_file(
     ))
     return FileOutcome(
         prep.rel, status=status, match_count=masked_file.match_count, rule_breakdown=masked_file.rule_breakdown
+    )
+
+
+# Otomatik duzeltme sinirlari: denetim alintisi bu tiple maskelenir; en fazla
+# 2 duzeltme turu (her tur bir LLM denetimi daha) - sonsuz dongu olmaz.
+_AUDIT_REMEDIATION_TYPE = "DENETIM_BULGUSU"
+_MAX_REMEDIATION_ROUNDS = 2
+# Bundan uzun ya da alt satira gecen denetim alintisi otomatik maskelenmez,
+# insan onayina gider (buyuk bir parcayi tek yer tutucuyla ortmek riskli).
+_MAX_REMEDIATION_QUOTE_CHARS = 200
+# Otomatik duzeltme basarisizliginda insan onayi gerekcesine yazilan kontrol adlari.
+_REMEDIATION_CHECK_LABELS = {
+    "kural": "sözlük kuralı bulunamadı",
+    "maskeleme": "değerlerin güvenli sınırla maskelenmesi",
+    "daraltma": "alıntının bir kısmı açık kalacaktı",
+    "cok_satirli_alinti": "alıntı birden fazla satıra yayılıyor",
+    "uzun_alinti": f"alıntı {_MAX_REMEDIATION_QUOTE_CHARS} karakterden uzun",
+    "geri_donus": "geri dönüş doğrulaması",
+    "sozdizimi": "sözdizimi doğrulaması",
+    "acik_terim": "açık terim kontrolü",
+    "llm_denetimi": "LLM denetimi",
+    "llm_denetimi_tamamlanamadi": "LLM denetimi tamamlanamadı",
+    "yazma": "çıktı yazma",
+}
+
+
+def _placeholder_reverse_map(db: Session, run_ctx: MaskingRunContext, text: str) -> dict[str, str]:
+    """Reverse map for exactly the placeholders present in `text`."""
+    tokens = {m.group(0) for pattern in (PLACEHOLDER_RE, JSON_NUMERIC_PLACEHOLDER_RE) for m in pattern.finditer(text)}
+    reverse_map: dict[str, str] = {}
+    if tokens:
+        rows = db.execute(
+            select(ValueMapping.placeholder_value, ValueMapping.original_value_encrypted).where(
+                ValueMapping.context_id == run_ctx.context.id,
+                ValueMapping.run_id == mapping_scope_for_run(db, run_ctx.run_id),
+                ValueMapping.placeholder_value.in_(sorted(tokens)),
+            )
+        )
+        reverse_map = {placeholder: decrypt_value(encrypted) for placeholder, encrypted in rows}
+    _register_passthrough_placeholders(reverse_map, text)
+    return reverse_map
+
+
+# Talepteki degerleri maskeler ve senkron son kontrolleri (geri donus + acik
+# terim + sozdizimi) calistirir. Kendi SAVEPOINT'inde calisir: basarisizlikta
+# olusturulan eslemeler ve onbellek geri alinir, basarisiz kontrolun kodu
+# doner. LLM denetimi ve dosyanin tamami caller'da _finalize_file ile tekrar
+# denetlenir; buradaki kontroller yalnizca bosuna bir LLM cagrisini onler.
+def _try_remediation(
+    db: Session,
+    run_ctx: MaskingRunContext,
+    masked_file: _MaskedFile,
+    request: _RemediationRequest,
+    rules_by_name: dict[str, object],
+    rule_names_by_id: dict[int, str],
+) -> "tuple[_MaskedFile, list, list] | str":
+    prep = masked_file.prep
+    values = []
+    for term in request.leaked_terms:
+        rule = rules_by_name.get(term.rule_name)
+        if rule is None:
+            return "kural"
+        values.append((term.matched_value, rule, "dictionary"))
+    for finding in request.findings:
+        if "\n" in finding.ilgili_bolum or "\r" in finding.ilgili_bolum:
+            return "cok_satirli_alinti"
+        if len(finding.ilgili_bolum) > _MAX_REMEDIATION_QUOTE_CHARS:
+            return "uzun_alinti"
+    audit_rule = synthetic_llm_rule(_AUDIT_REMEDIATION_TYPE)
+    values.extend((finding.ilgili_bolum, audit_rule, "llm") for finding in request.findings)
+
+    cache = run_ctx.mapping_cache.mappings if run_ctx.mapping_cache is not None else None
+    cache_snapshot = _snapshot_dict(cache) if cache is not None else None
+    savepoint = db.begin_nested()
+    try:
+        failure = None
+        try:
+            text, matches, mappings = mask_known_values(
+                db, run_ctx, masked_file.masked_text, prep.rel, values, reject_narrowed_content=True,
+            )
+        except NarrowedValueError:
+            # Daraltilan alintinin acik kalacak kismini yakalayacak tek sey
+            # ikinci LLM denetimi olurdu; bu belirsiz kontrole birakilmaz.
+            failure = "daraltma"
+        except ValueError:
+            failure = "maskeleme"
+        if failure is None:
+            reverse_map = _placeholder_reverse_map(db, run_ctx, text)
+            if not verify_round_trip(prep.text, text, reverse_map).ok:
+                failure = "geri_donus"
+        if failure is None and find_leaked_terms(db, text):
+            failure = "acik_terim"
+        if failure is None and validate_masked_syntax(
+            prep.rel, text, original_text=prep.text, sql_dialect=settings.validation.sql_dialect,
+        ):
+            failure = "sozdizimi"
+    except BaseException:
+        savepoint.rollback()
+        if cache is not None:
+            _restore_dict(cache, cache_snapshot)
+        raise
+    if failure is not None:
+        savepoint.rollback()
+        if cache is not None:
+            _restore_dict(cache, cache_snapshot)
+        return failure
+    savepoint.commit()
+
+    rule_breakdown = dict(masked_file.rule_breakdown)
+    for rule_name, count in _rule_breakdown(mappings, rule_names_by_id).items():
+        rule_breakdown[rule_name] = rule_breakdown.get(rule_name, 0) + count
+    remediated = _MaskedFile(
+        prep=prep, masked_text=text, rule_breakdown=rule_breakdown,
+        match_count=masked_file.match_count + len(mappings),
+    )
+    return remediated, matches, mappings
+
+
+# Otomatik duzeltme basarisiz: duzeltme-oncesi metin ve denetim sonucuyla
+# mevcut davranisa (insan onayi) donulur; gerekceye hangi kontrolde
+# kalindigi eklenir. Log'a yalnizca kontrol kodu yazilir.
+def _fallback_after_remediation(
+    db: Session,
+    run_id: int,
+    masked_file: _MaskedFile,
+    audit_result,
+    failed_dir: Path,
+    validation_warnings: list[str] | None,
+    decision_policy: LearnedDecisionPolicy | None,
+    check: str,
+) -> FileOutcome:
+    db.add(AuditLog(
+        run_id=run_id, file_path=masked_file.prep.rel, action="skipped",
+        detail=f"auto_remediation=failed check={check}",
+    ))
+    label = _REMEDIATION_CHECK_LABELS.get(check, check)
+    return _finalize_file(
+        db, run_id, masked_file, audit_result, failed_dir, validation_warnings,
+        decision_policy=decision_policy,
+        remediation_note=f"otomatik düzeltme denendi, şu kontrolde başarısız oldu: {label}",
+    )
+
+
+# Faz D'de _finalize_file duzeltme talebi dondurdu: ilk turu dener.
+# Basarida LLM denetimini bekleyen bir _PendingRemediation, aksi halde
+# insan onayina dusen FileOutcome doner.
+def _start_remediation(
+    db: Session,
+    run_ctx: MaskingRunContext,
+    masked_file: _MaskedFile,
+    audit_result,
+    request: _RemediationRequest,
+    failed_dir: Path,
+    validation_warnings: list[str] | None,
+    decision_policy: LearnedDecisionPolicy | None,
+    rules_by_name: dict[str, object],
+    rule_names_by_id: dict[int, str],
+) -> "FileOutcome | _PendingRemediation":
+    result = _try_remediation(db, run_ctx, masked_file, request, rules_by_name, rule_names_by_id)
+    if isinstance(result, str):
+        return _fallback_after_remediation(
+            db, run_ctx.run_id, masked_file, audit_result, failed_dir, validation_warnings, decision_policy, result,
+        )
+    remediated, matches, mappings = result
+    return _PendingRemediation(
+        original=masked_file, original_audit=audit_result, current=remediated, rounds=1,
+        matches=list(matches), mappings=list(mappings),
+    )
+
+
+# Faz E: duzeltilmis dosyanin yeni LLM denetimi geldi. Dosya _finalize_file'in
+# TUM son kontrollerinden (acik terim + denetim + sozdizimi + yazma) tekrar
+# gecer. Yeni dogrulanmis bulgu varsa ve tur siniri dolmadiysa bir tur daha
+# denenir; READY olursa degerler tutarlilik registry'sine eklenir. Aksi halde
+# bu denemenin DB yazmalari geri alinir ve insan onayina donulur.
+def _continue_remediation(
+    db: Session,
+    run_ctx: MaskingRunContext,
+    item: _PendingRemediation,
+    audit_result,
+    failed_dir: Path,
+    validation_warnings: list[str] | None,
+    decision_policy: LearnedDecisionPolicy | None,
+    rules_by_name: dict[str, object],
+    rule_names_by_id: dict[int, str],
+    consistency_registry: SensitiveValueRegistry,
+) -> "FileOutcome | _PendingRemediation":
+    prep = item.current.prep
+    cache = run_ctx.mapping_cache.mappings if run_ctx.mapping_cache is not None else None
+    cache_snapshot = _snapshot_dict(cache) if cache is not None else None
+    failed_path = failed_dir / _failed_rel(prep)
+    had_failed_file = failed_path.exists()
+    savepoint = db.begin_nested()
+    try:
+        outcome = _finalize_file(
+            db, run_ctx.run_id, item.current, audit_result, failed_dir, validation_warnings,
+            decision_policy=decision_policy, allow_remediation=item.rounds < _MAX_REMEDIATION_ROUNDS,
+        )
+        if isinstance(outcome, _RemediationRequest):
+            result = _try_remediation(db, run_ctx, item.current, outcome, rules_by_name, rule_names_by_id)
+            if not isinstance(result, str):
+                savepoint.commit()
+                remediated, matches, mappings = result
+                return _PendingRemediation(
+                    original=item.original, original_audit=item.original_audit, current=remediated,
+                    rounds=item.rounds + 1, matches=item.matches + list(matches),
+                    mappings=item.mappings + list(mappings),
+                )
+            check = result
+        elif outcome.final_state == "READY":
+            savepoint.commit()
+            consistency_registry.add_successful_matches(item.matches, item.mappings)
+            # Degerler degil, yalnizca sayilar loglanir.
+            db.add(AuditLog(
+                run_id=run_ctx.run_id, file_path=prep.rel, action="replaced",
+                detail=f"auto_remediated rounds={item.rounds} masked_values={len(item.mappings)}",
+            ))
+            return outcome
+        else:
+            check = outcome.failed_check or "beklenmeyen"
+    except BaseException:
+        savepoint.rollback()
+        if cache is not None:
+            _restore_dict(cache, cache_snapshot)
+        raise
+    savepoint.rollback()
+    if cache is not None:
+        _restore_dict(cache, cache_snapshot)
+    # Duzeltilmis metnin basarisiz_dosyalar/ kopyasi insan onayindaki
+    # (duzeltme-oncesi) hal ile karismasin.
+    if not had_failed_file and failed_path.is_file():
+        failed_path.unlink()
+    return _fallback_after_remediation(
+        db, run_ctx.run_id, item.original, item.original_audit, failed_dir, validation_warnings,
+        decision_policy, check,
     )
 
 
@@ -1753,6 +2045,7 @@ async def export_project(
     try:
         active_rules = load_active_rules(db)
         rule_names_by_id = {r.id: r.rule_name for r in active_rules}
+        rules_by_name = {r.rule_name: r for r in active_rules}
         exclude_specs = load_active_exclude_specs(db)
         runtime_params = {
             "project_name": project_name,
@@ -2059,8 +2352,12 @@ async def export_project(
             )
             audit_by_index = dict(zip(masked_indices, audit_results))
 
-            # Faz D (sirali, DB+dosya yazan): audit karari + sozdizimi + yazma + rapor.
+            # Faz D (sirali, DB+dosya yazan): audit karari + sozdizimi + yazma.
+            # Degeri kesin bilinen sizintisi olan dosyalar insan onayi yerine
+            # otomatik duzeltmeye (Faz E) ayrilir.
             _acquire_write_lock(db, run.id)
+            outcomes: dict[int, FileOutcome] = {}
+            pending: list[tuple[int, _PendingRemediation]] = []
             for i, scanned in enumerate(batch):
                 prep = preps[i]
                 result = batch_results[i]
@@ -2074,17 +2371,67 @@ async def export_project(
                     # islerini COKERTMEMELI. Normal donus (basarisiz
                     # FileOutcome DAHIL - bu bir istisna DEGIL) savepoint'i
                     # sessizce serbest birakir/ana transaction'a katar.
+                    # Otomatik duzeltme mapping yazdigi icin onbellek de korunur.
+                    cache_snapshot = (
+                        _snapshot_dict(run_ctx.mapping_cache.mappings) if run_ctx.mapping_cache is not None else None
+                    )
                     try:
                         with db.begin_nested():
                             outcome = _finalize_file(
                                 db, run.id, result, audit_by_index[i], failed_dir, report.validation_warnings,
-                                decision_policy=decision_policy,
+                                decision_policy=decision_policy, allow_remediation=True,
                             )
+                            if isinstance(outcome, _RemediationRequest):
+                                outcome = _start_remediation(
+                                    db, run_ctx, result, audit_by_index[i], outcome, failed_dir,
+                                    report.validation_warnings, decision_policy, rules_by_name, rule_names_by_id,
+                                )
                     except Exception as exc:
+                        if run_ctx.mapping_cache is not None:
+                            _restore_dict(run_ctx.mapping_cache.mappings, cache_snapshot)
                         outcome = _quarantine_after_finalize_crash(db, run.id, prep, exc)
+                    if isinstance(outcome, _PendingRemediation):
+                        pending.append((i, outcome))
+                        continue
                 else:
                     outcome = result
+                outcomes[i] = outcome
 
+            # Faz E (duzeltme turu): duzeltilen dosyalarin LLM denetimi yazma
+            # kilidi tutulmadan tekrar calisir, ardindan dosya sirali olarak
+            # _finalize_file'in tum son kontrollerinden gecer. En fazla
+            # _MAX_REMEDIATION_ROUNDS tur; kalan her dosya insan onayina doner.
+            while pending:
+                db.commit()
+                reaudits = await asyncio.gather(
+                    *(_bounded(_audit_one(item.current.masked_text, preps[i].rel), semaphore) for i, item in pending)
+                )
+                _acquire_write_lock(db, run.id)
+                next_pending: list[tuple[int, _PendingRemediation]] = []
+                for (i, item), reaudit in zip(pending, reaudits):
+                    cache_snapshot = (
+                        _snapshot_dict(run_ctx.mapping_cache.mappings) if run_ctx.mapping_cache is not None else None
+                    )
+                    try:
+                        with db.begin_nested():
+                            outcome = _continue_remediation(
+                                db, run_ctx, item, reaudit, failed_dir, report.validation_warnings,
+                                decision_policy, rules_by_name, rule_names_by_id, consistency_registry,
+                            )
+                    except Exception as exc:
+                        if run_ctx.mapping_cache is not None:
+                            _restore_dict(run_ctx.mapping_cache.mappings, cache_snapshot)
+                        outcome = _quarantine_after_finalize_crash(db, run.id, preps[i], exc)
+                    if isinstance(outcome, _PendingRemediation):
+                        next_pending.append((i, outcome))
+                    else:
+                        outcomes[i] = outcome
+                pending = next_pending
+
+            # Rapor/cikti kaydi dosya sirasiyla (duzeltme turundan bagimsiz, deterministik).
+            for i, scanned in enumerate(batch):
+                prep = preps[i]
+                outcome = outcomes[i]
                 path_mappings = batch_path_mappings[i]
                 if path_mappings:
                     if outcome.status == "copied_text_no_match":
