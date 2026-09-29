@@ -401,3 +401,66 @@ def test_consistency_pass_reads_output_with_written_encoding(db_session, monkeyp
     assert report.files_failed_consistency_validation == 0, report.summary_text()
     assert SENSITIVE.encode("cp1254") not in (target / "Other.java").read_bytes()
     assert _tree_bytes(restored) == _tree_bytes(source)
+
+
+def _first_occurrence_only(monkeypatch, target_file: str) -> dict[str, int]:
+    """Her cagrida hedef dosya icin yalnizca ILK acik gecisi dondur.
+
+    Bir degistirme turunun, sonraki bir gecisi ancak kendinden sonra
+    gorunur kildigi durumu (orn. degisen string/yorum baglami) taklit eder.
+    """
+    from app.services import consistency_masking as consistency_masking_module
+
+    real_find = consistency_masking_module.find_consistency_occurrences
+    calls = {"n": 0}
+
+    def _fake_find(text, registry, *, file_path=""):
+        found = real_find(text, registry, file_path=file_path)
+        if file_path != target_file:
+            return found
+        calls["n"] += 1
+        return found[:1]
+
+    monkeypatch.setattr(exporter_module, "find_consistency_occurrences", _fake_find)
+    return calls
+
+
+def test_consistency_pass_repeats_replacement_until_no_open_occurrence(db_session, monkeypatch, tmp_path):
+    files = [
+        ("Seed.java", f'final String project = "{SENSITIVE}";\n', "utf-8"),
+        ("notes.txt", "\n".join(f"{index}: {SENSITIVE}" for index in range(3)) + "\n", "utf-8"),
+    ]
+    calls = _first_occurrence_only(monkeypatch, "notes.txt")
+
+    source, target, restored, report, unmask_report = _run_export_and_restore(
+        db_session, monkeypatch, tmp_path, files
+    )
+
+    assert report.files_failed_consistency_validation == 0, report.summary_text()
+    masked = (target / "notes.txt").read_text(encoding="utf-8")
+    assert SENSITIVE not in masked
+    assert masked.count("mask_kurumsal_deger") == 3
+    # 3 degistirme turu + final guvenlik taramasi.
+    assert calls["n"] == 4
+    assert not unmask_report.has_unresolved_placeholders
+    assert _tree_bytes(restored) == _tree_bytes(source)
+
+
+def test_consistency_pass_gives_up_after_three_rounds_and_final_scan_blocks(db_session, monkeypatch, tmp_path):
+    files = [
+        ("Seed.java", f'final String project = "{SENSITIVE}";\n', "utf-8"),
+        ("notes.txt", "\n".join(f"{index}: {SENSITIVE}" for index in range(4)) + "\n", "utf-8"),
+    ]
+    calls = _first_occurrence_only(monkeypatch, "notes.txt")
+
+    _source, target, _restored, report, _unmask_report = _run_export_and_restore(
+        db_session, monkeypatch, tmp_path, files
+    )
+
+    assert report.files_failed_consistency_validation == 1, report.summary_text()
+    outcome = next(o for o in report.outcomes if o.status == "failed_consistency_validation")
+    assert outcome.relative_path == "notes.txt"
+    assert "final safety scan 1 acik canonical occurrence" in outcome.error
+    assert SENSITIVE not in outcome.error
+    assert not (target / "notes.txt").exists()
+    assert calls["n"] == 4

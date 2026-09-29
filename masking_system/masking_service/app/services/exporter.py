@@ -639,6 +639,61 @@ def _consistency_occurrence_locations(text: str, occurrences: list) -> str:
     return locations
 
 
+_CONSISTENCY_MAX_ROUNDS = 3
+
+
+# Bir tutarlilik turunun bulgularini esleme + AuditLog kayitlariyla
+# placeholder'a cevirir; `mappings`/`reverse_map` turlar boyunca birikir.
+def _replace_consistency_occurrences(
+    db: Session,
+    run_ctx: MaskingRunContext,
+    output_file: _OutputFile,
+    text: str,
+    occurrences: list,
+    reverse_map: dict[str, str],
+    mappings: list,
+) -> str:
+    replacements = []
+    for occurrence in occurrences:
+        rule = occurrence.entry.rule
+        if rule is None:  # Defensive; registry only accepts real successful Match objects.
+            raise ValueError("consistency registry entry has no source rule")
+        mapping, _created = get_or_create_mapping(
+            db,
+            run_ctx.context.id,
+            rule,
+            occurrence.original_value,
+            cache=run_ctx.mapping_cache.mappings if run_ctx.mapping_cache is not None else None,
+            numeric=occurrence.numeric,
+            run_id=run_ctx.run_id,
+        )
+        replacements.append((occurrence, mapping.placeholder_value))
+        mappings.append(mapping)
+        if mapping.placeholder_value not in reverse_map:
+            reverse_map[mapping.placeholder_value] = decrypt_value(mapping.original_value_encrypted)
+        db.add(
+            AuditLog(
+                run_id=run_ctx.run_id,
+                file_path=output_file.outcome.relative_path,
+                action="matched",
+                detail=(
+                    "source=consistency entity_type="
+                    f"{occurrence.entry.entity_type} detectors="
+                    f"{','.join(sorted(occurrence.entry.source_detectors))}"
+                ),
+            )
+        )
+        db.add(
+            AuditLog(
+                run_id=run_ctx.run_id,
+                file_path=output_file.outcome.relative_path,
+                action="replaced",
+                detail=f"source=consistency placeholder={mapping.placeholder_value}",
+            )
+        )
+    return apply_consistency_replacements(text, replacements)
+
+
 def _run_consistency_pass(
     db: Session,
     run_ctx: MaskingRunContext,
@@ -691,54 +746,25 @@ def _run_consistency_pass(
         )
         try:
             with db.begin_nested():
-                occurrences = find_consistency_occurrences(
-                    text, registry, file_path=output_file.outcome.relative_path
-                )
-                if not occurrences:
+                # Bir tur, sonraki bir gecisi ancak kendisinden sonra gorunur
+                # kilabilir (orn. degisen string/yorum baglami). Acik gecis
+                # kalmayana kadar en fazla _CONSISTENCY_MAX_ROUNDS tur
+                # degistirilir; hala kalan varsa asagidaki final safety scan
+                # dosyayi eskisi gibi dusurur.
+                masked_text = text
+                mappings = []
+                for _round in range(_CONSISTENCY_MAX_ROUNDS):
+                    occurrences = find_consistency_occurrences(
+                        masked_text, registry, file_path=output_file.outcome.relative_path
+                    )
+                    if not occurrences:
+                        break
+                    masked_text = _replace_consistency_occurrences(
+                        db, run_ctx, output_file, masked_text, occurrences, reverse_map, mappings,
+                    )
+                if not mappings:
                     scannable.append((output_file, text, encoding))
                     continue
-
-                replacements = []
-                mappings = []
-                for occurrence in occurrences:
-                    rule = occurrence.entry.rule
-                    if rule is None:  # Defensive; registry only accepts real successful Match objects.
-                        raise ValueError("consistency registry entry has no source rule")
-                    mapping, _created = get_or_create_mapping(
-                        db,
-                        run_ctx.context.id,
-                        rule,
-                        occurrence.original_value,
-                        cache=run_ctx.mapping_cache.mappings if run_ctx.mapping_cache is not None else None,
-                        numeric=occurrence.numeric,
-                        run_id=run_ctx.run_id,
-                    )
-                    replacements.append((occurrence, mapping.placeholder_value))
-                    mappings.append(mapping)
-                    if mapping.placeholder_value not in reverse_map:
-                        reverse_map[mapping.placeholder_value] = decrypt_value(mapping.original_value_encrypted)
-                    db.add(
-                        AuditLog(
-                            run_id=run_ctx.run_id,
-                            file_path=output_file.outcome.relative_path,
-                            action="matched",
-                            detail=(
-                                "source=consistency entity_type="
-                                f"{occurrence.entry.entity_type} detectors="
-                                f"{','.join(sorted(occurrence.entry.source_detectors))}"
-                            ),
-                        )
-                    )
-                    db.add(
-                        AuditLog(
-                            run_id=run_ctx.run_id,
-                            file_path=output_file.outcome.relative_path,
-                            action="replaced",
-                            detail=f"source=consistency placeholder={mapping.placeholder_value}",
-                        )
-                    )
-
-                masked_text = apply_consistency_replacements(text, replacements)
                 _register_passthrough_placeholders(reverse_map, masked_text)
                 round_trip = verify_round_trip_digest(
                     output_file.original_digest, output_file.original_length, masked_text, reverse_map,
