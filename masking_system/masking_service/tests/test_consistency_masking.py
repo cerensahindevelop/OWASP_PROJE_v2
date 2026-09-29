@@ -378,3 +378,26 @@ def test_unverifiable_text_file_is_not_reported_as_success(db_session, monkeypat
     assert report.status == "completed_with_warnings"
     assert report.files_skipped_too_large == 1
     assert not (target / "large.properties").exists()
+
+
+def test_consistency_pass_reads_output_with_written_encoding(db_session, monkeypatch, tmp_path):
+    # charset_normalizer'in tahmini maskelemeden sonra kayabiliyor (ornegin
+    # cp1250 -> cp1257; hangi yone kayacagi rastgele placeholder'a bagli).
+    # Kaymayi deterministik yapmak icin tutarlilik adiminin yeniden tahminini
+    # sabitliyoruz: dosya YAZILDIGI kodlamayla okunmazsa round-trip bozulur.
+    monkeypatch.setattr(exporter_module, "peek_classify", lambda path: (True, "cp1257"))
+    legacy = (
+        "// Müşteri kaydı işlemleri, ağ bağlantısı\n"
+        f'public class Other {{\n    String p = "{SENSITIVE}";\n}}\n'
+    )
+    files = [
+        ("Seed.java", f'final String project = "{SENSITIVE}";\n', "utf-8"),
+        ("Other.java", legacy, "cp1254"),
+    ]
+    source, target, restored, report, _unmask_report = _run_export_and_restore(
+        db_session, monkeypatch, tmp_path, files
+    )
+
+    assert report.files_failed_consistency_validation == 0, report.summary_text()
+    assert SENSITIVE.encode("cp1254") not in (target / "Other.java").read_bytes()
+    assert _tree_bytes(restored) == _tree_bytes(source)

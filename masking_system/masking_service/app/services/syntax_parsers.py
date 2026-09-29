@@ -5,7 +5,9 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from functools import lru_cache
+import hashlib
 import json
+import re
 from threading import local
 import tomllib
 from xml.parsers.expat import ExpatError
@@ -17,6 +19,18 @@ class ParseResult:
     error: str | None = None
     unavailable: str | None = None
     value: object = None
+    # Hata TURUNUN karsilastirma anahtari (bkz. _error_kind). Kullaniciya
+    # gosterilmez/loglanmaz; yalnizca "kaynakta ayni hata var mi?" icin.
+    kind: str | None = None
+
+
+# Parser'in hata turu metninden (exc.msg vb.) rakamlari atip ozetler. Bu
+# metinler bazen kaynak parcasi icerebildiginden ASLA saklanmaz; yalnizca
+# sabit uzunluklu ozeti tutulur. Rakamlar atilir: satir/sutun gibi konumlar
+# maskelemeyle kayabilir.
+def _error_kind(*parts: object) -> str:
+    normalized = "|".join(re.sub(r"\d+", "#", str(part)) for part in parts)
+    return hashlib.sha256(normalized.encode("utf-8", errors="surrogatepass")).hexdigest()[:16]
 
 
 class JSONObject(list):
@@ -65,7 +79,26 @@ def parse_script(suffix: str, text: str) -> ParseResult:
         if not cursor.node.has_error and not cursor.node.is_missing:
             break
     row, column = cursor.node.start_point
-    return ParseResult(error=f"{suffix.upper()} sozdizimi hatasi (satir {row + 1}, byte sutunu {column + 1})")
+    return ParseResult(error=f"{suffix.upper()} sozdizimi hatasi (satir {row + 1}, byte sutunu {column + 1})",
+                       kind=_error_kind(*_script_error_signature(root)))
+
+
+# Hata turu tree-sitter'da hep "ERROR"dur; turu ayirt eden, hata/eksik
+# dugumlerinin baglamidir (ebeveyn, satir, cocuk dugum TURLERI). Dugum
+# metni degil turu kullanilir: maskelenen deger imzayi degistirmez.
+_MAX_SIGNATURE_NODES = 64
+
+
+def _script_error_signature(root) -> list[tuple]:
+    signature: list[tuple] = []
+    stack = [root]
+    while stack and len(signature) < _MAX_SIGNATURE_NODES:
+        node = stack.pop()
+        if node.is_error or node.is_missing:
+            signature.append((node.is_missing, node.type, node.parent.type if node.parent else None,
+                              node.start_point[0], tuple(child.type for child in node.children)))
+        stack.extend(reversed([child for child in node.children if child.has_error or child.is_missing]))
+    return signature
 
 
 def parse_sql(text: str, dialect: str | None) -> ParseResult:
@@ -86,7 +119,8 @@ def parse_sql(text: str, dialect: str | None) -> ParseResult:
         first = errors[0] if errors else {}
         line, column = first.get("line"), first.get("col")
         position = f" (satir {line}, sutun {column})" if line and column else ""
-        return ParseResult(error=f"SQL sozdizimi hatasi{position}")
+        return ParseResult(error=f"SQL sozdizimi hatasi{position}",
+                           kind=_error_kind(type(exc).__name__, first.get("description", "")))
     except (UnsupportedError, ValueError):
         return ParseResult(unavailable="SQL lehcesi/ifadesi desteklenmiyor; bracket/quote kontrolu kullanildi.")
     return ParseResult()
@@ -130,7 +164,8 @@ def parse_document(suffix: str, text: str, *, sql_dialect: str | None = None) ->
                 else:
                     mark = problem_mark or context_mark
                     position = f" (satir {mark.line + 1}, sutun {mark.column + 1})" if mark is not None else ""
-                return ParseResult(error=f"YAML sozdizimi hatasi{position}")
+                return ParseResult(error=f"YAML sozdizimi hatasi{position}",
+                                   kind=_error_kind(type(exc).__name__, getattr(exc, "problem", "")))
         elif suffix == "xml":
             try:
                 from defusedxml.ElementTree import fromstring
@@ -145,14 +180,18 @@ def parse_document(suffix: str, text: str, *, sql_dialect: str | None = None) ->
                 return ParseResult(error="XML guvenli parser politikasi: entity/cozumleme desteklenmiyor")
     except (XMLParseError, ExpatError) as exc:
         row, column = getattr(exc, "position", (getattr(exc, "lineno", 0), getattr(exc, "offset", 0)))
-        return ParseResult(error=f"XML sozdizimi hatasi (satir {row}, sutun {column + 1})")
+        return ParseResult(error=f"XML sozdizimi hatasi (satir {row}, sutun {column + 1})",
+                           kind=_error_kind(type(exc).__name__, getattr(exc, "code", "")))
     except SyntaxError as exc:
-        return ParseResult(error=f"Python sozdizimi hatasi (satir {exc.lineno}, sutun {exc.offset})")
+        return ParseResult(error=f"Python sozdizimi hatasi (satir {exc.lineno}, sutun {exc.offset})",
+                           kind=_error_kind(type(exc).__name__, exc.msg))
     except json.JSONDecodeError as exc:
-        return ParseResult(error=f"JSON sozdizimi hatasi (satir {exc.lineno}, sutun {exc.colno})")
+        return ParseResult(error=f"JSON sozdizimi hatasi (satir {exc.lineno}, sutun {exc.colno})",
+                           kind=_error_kind(type(exc).__name__, exc.msg))
     except tomllib.TOMLDecodeError as exc:
         position = f" (satir {exc.lineno}, sutun {exc.colno})" if hasattr(exc, "lineno") else ""
-        return ParseResult(error=f"TOML sozdizimi hatasi{position}")
+        return ParseResult(error=f"TOML sozdizimi hatasi{position}",
+                           kind=_error_kind(type(exc).__name__, getattr(exc, "msg", None) or exc))
     except (ValueError, RecursionError, OverflowError):
         return ParseResult(error=f"{suffix.upper()} parser siniri veya gecersiz icerik")
     return ParseResult()

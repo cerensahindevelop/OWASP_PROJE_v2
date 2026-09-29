@@ -1,9 +1,10 @@
+import codecs
 from pathlib import Path
 from typing import Literal
 
 # pydantic-settings: her ayar grubunu ortam degiskenlerinden (.env) okuyup
 # dogrulayan (Field(...) zorunlu alanlar, model_validator capraz kontroller) taban sinif.
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/core/config.py -> masking_system/.env (repo kok dizinindeki TEK .env
@@ -279,6 +280,41 @@ class ValidationSettings(BaseSettings):
     )
 
 
+# Metin dosyasi kodlama tespitini yapilandiran ayarlar. On ek YOK: ortam
+# degiskeni dogrudan LEGACY_TEXT_ENCODINGS'tir.
+#
+# Tespit (charset_normalizer, ilk 8 KB) basarisiz oldugunda bu kodlamalar
+# sirayla denenir (bkz. app/services/file_pipeline.py read_scanned_file).
+# Varsayilan app/services/file_type.py DEFAULT_LEGACY_TEXT_ENCODINGS ile
+# ayni olmali. Bilinmeyen bir kodlama adi uygulama baslarken acikca hata verir.
+class EncodingSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="", env_file=_ENV_FILE, extra="ignore")
+
+    legacy_text_encodings: str = Field(
+        "cp1254,iso-8859-9",
+        description="Tespit basarisiz oldugunda sirayla denenecek eski metin kodlamalarinin "
+        "virgulle ayrilmis listesi. .env dosyasinda LEGACY_TEXT_ENCODINGS ile degistirilebilir.",
+    )
+
+    # Her kodlama adinin Python tarafindan taninmasini zorunlu kilar.
+    @field_validator("legacy_text_encodings")
+    @classmethod
+    def _known_encodings(cls, value: str) -> str:
+        for name in (part.strip() for part in value.split(",")):
+            if not name:
+                continue
+            try:
+                codecs.lookup(name)
+            except LookupError as exc:
+                raise ValueError(f"LEGACY_TEXT_ENCODINGS bilinmeyen kodlama iceriyor: {name}") from exc
+        return value
+
+    # Virgulle ayrilmis metni (bos parcalar atilarak) demete cevirir.
+    @property
+    def legacy_text_encoding_list(self) -> tuple[str, ...]:
+        return tuple(part.strip() for part in self.legacy_text_encodings.split(",") if part.strip())
+
+
 class Settings:
     # Her alt ayar grubunu kendi ortam degiskenlerinden okuyarak baslatir.
     def __init__(self) -> None:
@@ -288,6 +324,7 @@ class Settings:
         self.presidio = PresidioSettings()
         self.web = WebSettings()
         self.validation = ValidationSettings()
+        self.encoding = EncodingSettings()
 
     # Geriye donuk uyumluluk icin duz erisim: settings.database_url
     @property

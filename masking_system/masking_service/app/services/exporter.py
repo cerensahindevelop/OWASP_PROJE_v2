@@ -467,12 +467,21 @@ def _failed_rel(prep: "_FilePrep") -> Path:
     return Path(prep.masked_rel) if prep.masked_rel else prep.scanned.relative_path
 
 
-def _read_consistency_target(path: Path, max_inline_size: int) -> tuple[str | None, str | None, str | None]:
+def _read_consistency_target(
+    path: Path, max_inline_size: int, *, preferred_encoding: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
     """Read an exported text file for consistency scan.
 
     Returns ``(text, encoding, error)``. Binary files return all ``None``;
     text that cannot be safely scanned returns an error and must not remain
     in a supposedly safe export.
+
+    preferred_encoding: dosyanin YAZILDIGI kodlama (output_file.encoding).
+    Kodlama yeniden tahmin edilirse kayabilir (cp1254 bir dosya once cp1258,
+    maskelemeden sonra cp1250 tahmin edilebilir); farkli cozulen metin
+    round-trip dogrulamasini bozar ve dogru maskelenmis dosya duser. Bu
+    yuzden aday sirasi: preferred -> tespit edilen -> utf-8. Bilinen bir
+    metin kodlamasiyla yazilmis dosya, tahmin "binary" dese bile taranir.
     """
     try:
         size = path.stat().st_size
@@ -480,11 +489,12 @@ def _read_consistency_target(path: Path, max_inline_size: int) -> tuple[str | No
             if size > max_inline_size:
                 return None, JAVA_CLASS_ENCODING, "Java class dosyası tutarlılık boyut sınırını aşıyor"
             return parse_class(path.read_bytes()).text, JAVA_CLASS_ENCODING, None
-        is_text, encoding = peek_classify(path)
+        is_text, detected_encoding = peek_classify(path)
     except (OSError, ClassFormatError) as exc:
         return None, None, f"consistency taramasi: {describe_file_error('okuma', path, exc)}"
-    if not is_text:
+    if not is_text and not preferred_encoding:
         return None, None, None
+    encoding = preferred_encoding or detected_encoding
     if size > max_inline_size:
         return None, encoding, (
             f"consistency taramasi icin dosya boyutu {size} bayt, izin verilen "
@@ -496,7 +506,7 @@ def _read_consistency_target(path: Path, max_inline_size: int) -> tuple[str | No
         return None, encoding, f"consistency taramasi: {describe_file_error('okuma', path, exc)}"
 
     tried: set[str] = set()
-    for candidate in (encoding, "utf-8"):
+    for candidate in (preferred_encoding, detected_encoding, "utf-8"):
         if not candidate or candidate in tried:
             continue
         tried.add(candidate)
@@ -631,7 +641,9 @@ def _run_consistency_pass(
     reverse_map = {placeholder: decrypt_value(encrypted) for placeholder, encrypted in used_mappings}
     scannable: list[tuple[_OutputFile, str, str | None]] = []
     for output_file in output_files:
-        text, encoding, read_error = _read_consistency_target(output_file.path, max_inline_size)
+        text, encoding, read_error = _read_consistency_target(
+            output_file.path, max_inline_size, preferred_encoding=output_file.encoding,
+        )
         if read_error is not None:
             _mark_consistency_failure(
                 db,
@@ -901,7 +913,8 @@ def _prepare_file(
         return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(rel, status="excluded"))
 
     read_outcome = read_scanned_file(
-        scanned, dest_path, max_inline_size, copy_unscannable=False
+        scanned, dest_path, max_inline_size, copy_unscannable=False,
+        legacy_encodings=settings.encoding.legacy_text_encoding_list,
     )
 
     if read_outcome.status == ReadStatus.EXCLUDED:
@@ -1012,6 +1025,15 @@ def _prepare_file(
         )
 
     mode = "scan_only" if read_outcome.status == ReadStatus.SCAN_ONLY_TEXT_READY else "mask"
+    if read_outcome.encoding_fallback and run_id is not None:
+        # Yalnizca kodlama adi yazilir; icerik/bayt asla (bkz. modul ilkesi).
+        db.add(AuditLog(
+            run_id=run_id, file_path=rel, action="skipped",
+            detail=(
+                f"validation_warning; encoding_fallback encoding={read_outcome.encoding}; "
+                "metin kodlamasi tespit edilemedi, baytlar birebir korunarak okundu"
+            ),
+        ))
     if run_id is not None:
         db.add(AuditLog(
             run_id=run_id, file_path=rel, action="skipped",
@@ -1269,7 +1291,9 @@ def _run_scan_only_final_verification(
         rel = output_file.outcome.relative_path
         try:
             with db.begin_nested():
-                text, encoding, read_error = _read_consistency_target(output_file.path, max_inline_size)
+                text, encoding, read_error = _read_consistency_target(
+                    output_file.path, max_inline_size, preferred_encoding=output_file.encoding,
+                )
                 if read_error is not None:
                     reason = (
                         "Final SCAN_ONLY doğrulaması dosyayı yeniden okuyamadı - 'taranamadı' hiçbir "

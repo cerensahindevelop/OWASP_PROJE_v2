@@ -12,6 +12,7 @@ kucuk farklar hicbir davranis degisikligi olmadan korunur.
 
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from enum import Enum
@@ -19,7 +20,7 @@ from pathlib import Path
 
 # Bir dosyanin metin mi binary mi oldugunu (ve encoding'ini) ilk birkac
 # byte'ina bakarak tahmin eden yardimci - once bu kontrolden geciriliyor.
-from app.services.file_type import peek_classify
+from app.services.file_type import DEFAULT_LEGACY_TEXT_ENCODINGS, guess_full_text_encoding, peek_classify
 from app.services.file_classifier import is_archive_filename, is_lock_filename, is_opaque_binary_filename
 from app.services.java_classfile import JAVA_CLASS_ENCODING, JavaClass, ClassFormatError, parse_class
 
@@ -55,6 +56,22 @@ class ReadOutcome:
     size: int | None = None
     error: str | None = None
     class_document: JavaClass | None = None
+    # True: hicbir aday kodlama cozemedi, metin son care olarak latin-1 ile
+    # (her bayt birebir korunarak) okundu. Cagiran bunu AuditLog'a yazar.
+    encoding_fallback: bool = False
+
+
+# Gecerli bir cok-baytli UTF-8 dizisi (BOM dahil). Gercek cp1254 Turkce metin
+# pratikte bu dizileri icermez; iceren ama utf-8 cozulemeyen dosya bozuk/
+# karisik bir UTF-8 dosyasidir.
+_VALID_UTF8_MULTIBYTE = re.compile(
+    rb"[\xc2-\xdf][\x80-\xbf]|[\xe0-\xef][\x80-\xbf]{2}|[\xf0-\xf4][\x80-\xbf]{3}"
+)
+
+
+# Son care kodlama: her bayti birebir bir karaktere esler, asla
+# UnicodeDecodeError vermez ve encode(decode(raw)) == raw her zaman saglanir.
+LAST_RESORT_ENCODING = "latin-1"
 
 
 # Dosya islemi hatasini asama + gercekten basarisiz olan yol (+ uzunlugu:
@@ -71,6 +88,7 @@ def describe_file_error(stage: str, path: Path, exc: BaseException) -> str:
 def read_scanned_file(
     scanned, dest_path: Path, max_inline_size: int, *, copy_unscannable: bool = True,
     encoding_hint: str | None = None,
+    legacy_encodings: tuple[str, ...] = DEFAULT_LEGACY_TEXT_ENCODINGS,
 ) -> ReadOutcome:
     if scanned.excluded_by is not None:
         return ReadOutcome(status=ReadStatus.EXCLUDED)
@@ -147,20 +165,30 @@ def read_scanned_file(
     except OSError as exc:
         return ReadOutcome(status=ReadStatus.ERROR, error=describe_file_error("okuma", scanned.absolute_path, exc))
 
-    text = None
+    # Aday sirasi: tespit edilen (ilk PEEK_SIZE bayt) -> utf-8 -> Turkce eski
+    # kodlamalar -> TUM dosya baytlari uzerinden tahmin. Peek yalnizca dosya
+    # basina bakar: ilk 8 KB ASCII ise "utf-8" der, ilerideki cp1254 baytlari
+    # utf-8'i bozar. Tum-dosya tahmini pahali oldugundan tembel hesaplanir.
+    # Her adayda bayt esitligi (encode(decode(raw)) == raw) sart kosulur.
+    #
+    # Yedek adaylar (legacy/tum-dosya/latin-1) gecerli cok-baytli UTF-8
+    # iceren dosyada KULLANILMAZ: UTF-8 "Müşteri" cp1254 ile "MÃ¼ÅŸteri"
+    # okunur, terimler eslesmez ve deger sizar. Boyle bir dosya eskisi gibi
+    # COPIED_UNDECODABLE ile bloklanir.
     detected_encoding = encoding
-    for candidate_encoding in [encoding, "utf-8"]:
-        if not candidate_encoding:
-            continue
-        try:
-            text = raw.decode(candidate_encoding, errors="strict")
-            if text.encode(candidate_encoding, errors="strict") != raw:
-                text = None
-                continue
-            encoding = candidate_encoding
-            break
-        except (UnicodeError, LookupError):
-            continue
+    text, encoding = _decode_exactly(raw, [encoding, "utf-8"])
+    fallback_allowed = text is None and not _VALID_UTF8_MULTIBYTE.search(raw)
+    if fallback_allowed:
+        text, encoding = _decode_exactly(raw, list(legacy_encodings))
+    if text is None and fallback_allowed:
+        text, encoding = _decode_exactly(raw, [guess_full_text_encoding(raw)])
+    encoding_fallback = False
+    if text is None and fallback_allowed and encoding_hint is None:
+        # Son care yalnizca peek_classify "metin" dediyse (encoding_hint ile
+        # zorlanan okumada degil): latin-1 her bayti birebir korur, boylece
+        # dosya taranabilir ve geri donusum bayt-birebir kalir.
+        text, encoding = _decode_exactly(raw, [LAST_RESORT_ENCODING])
+        encoding_fallback = text is not None
 
     if text is None:
         if copy_unscannable:
@@ -171,4 +199,20 @@ def read_scanned_file(
         return ReadOutcome(status=ReadStatus.COPIED_UNDECODABLE, detected_encoding=detected_encoding)
 
     final_status = ReadStatus.SCAN_ONLY_TEXT_READY if is_lock_file else ReadStatus.TEXT_READY
-    return ReadOutcome(status=final_status, text=text, encoding=encoding)
+    return ReadOutcome(status=final_status, text=text, encoding=encoding, encoding_fallback=encoding_fallback)
+
+
+# Adaylari sirayla dener; bayt-birebir geri donusen ilk cozumu dondurur.
+def _decode_exactly(raw: bytes, candidates: list[str | None]) -> tuple[str | None, str | None]:
+    tried: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in tried:
+            continue
+        tried.add(candidate)
+        try:
+            text = raw.decode(candidate, errors="strict")
+            if text.encode(candidate, errors="strict") == raw:
+                return text, candidate
+        except (UnicodeError, LookupError):
+            continue
+    return None, None
