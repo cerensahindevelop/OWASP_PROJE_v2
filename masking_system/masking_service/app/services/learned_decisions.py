@@ -1,4 +1,4 @@
-"""Context-scoped learned sensitive values and narrow false-positive suppressions."""
+"""Learned sensitive values (project-wide) and narrow false-positive suppressions (author-scoped)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 import unicodedata
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.crypto import decrypt_value, encrypt_value, hash_value
-from app.db.models import LearnedDecision
+from app.db.models import LearnedDecision, MaskingContext
 from app.services.detectors import DetectionResult, DetectorOutput, placeholder_prefix_for_type
 from app.services.rule_engine import PLACEHOLDER_RE, RuleSpec
 from app.services.unicode_spans import normalized_view
@@ -69,14 +69,34 @@ class LearnedDecisionPolicy:
 
     @classmethod
     def load(cls, db: Session, context_id: int) -> "LearnedDecisionPolicy":
+        """Kapsam: "hassas" kararlari proje genelinde (ayni project_name, her
+        sicil/branch) uygulanir - yalnizca daha fazla maskeleme demektir.
+        "Hassas degil" (suppression) kararlari yalnizca karari verenin kendi
+        branch'lerine (ayni project_name + sicil_no) yayilir; kimse tek basina
+        tum proje icin "hassas degil" diyemez.
+        """
+        context = db.get(MaskingContext, context_id)
+        if context is None:
+            return cls([], [])
+        project_contexts = select(MaskingContext.id).where(MaskingContext.project_name == context.project_name)
+        author_contexts = project_contexts.where(MaskingContext.sicil_no == context.sicil_no)
         rows = db.scalars(select(LearnedDecision).where(
-            LearnedDecision.context_id == context_id, LearnedDecision.is_active.is_(True)
-        )).all()
-        entries = [DecisionEntry(r.id, decrypt_value(r.value_encrypted), r.entity_type, r.scope_key) for r in rows]
-        return cls(
-            [e for e, r in zip(entries, rows) if r.decision_type == "sensitive"],
-            [e for e, r in zip(entries, rows) if r.decision_type == "suppression"],
-        )
+            LearnedDecision.is_active.is_(True),
+            or_(
+                (LearnedDecision.decision_type == "sensitive") & LearnedDecision.context_id.in_(project_contexts),
+                (LearnedDecision.decision_type == "suppression") & LearnedDecision.context_id.in_(author_contexts),
+            ),
+        ).order_by(LearnedDecision.id)).all()
+        sensitive: dict[tuple[str, str], DecisionEntry] = {}
+        suppressions: dict[tuple[str, str, str], DecisionEntry] = {}
+        for row in rows:
+            entry = DecisionEntry(row.id, decrypt_value(row.value_encrypted), row.entity_type, row.scope_key)
+            # Ayni karar birden fazla baglamda verilmis olabilir: tek giris yeterli.
+            if row.decision_type == "sensitive":
+                sensitive.setdefault((normalize_value(entry.value), entry.entity_type), entry)
+            else:
+                suppressions.setdefault((normalize_value(entry.value), entry.entity_type, entry.scope_key), entry)
+        return cls(list(sensitive.values()), list(suppressions.values()))
 
     def is_suppressed(self, result: DetectionResult, file_path: str) -> DecisionEntry | None:
         value = normalize_value(result.deger)
