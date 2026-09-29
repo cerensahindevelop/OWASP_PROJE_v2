@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,8 +52,9 @@ from app.services.detectors import DetectionOrchestrator, synthetic_llm_rule
 from app.services.llm_recognizer import LLMRecognitionError
 from app.services.llm_runtime import llm_file_context
 from app.services.learned_decisions import LearnedDecisionPolicy
+from app.services.lockfile_policy import plan_lockfile, structured_format
 from app.services.roundtrip_validator import text_digest, verify_round_trip, verify_round_trip_digest
-from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE, reverse_text
+from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE, Match, reverse_text
 from app.services.output_publication import OutputPublication, publish_run
 from app.services.integrity_manifest import MANIFEST_NAME, write_manifest, file_digest, source_tag
 from app.services.path_placeholders import PathPlaceholderResolver, UnsafeUnmaskPathError
@@ -292,7 +293,7 @@ class ExportReport:
         muhasebe seklini kullanir (bkz. mark_consistency_failed/
         mark_finalization_failed) - SADECE hala scan_only_clean olan bir
         outcome'u degistirir (idempotent guvenlik agi)."""
-        if outcome.status != "scan_only_clean":
+        if outcome.status not in ("scan_only_clean", "masked"):
             return
         old_bucket = _REPORT_BUCKETS[outcome.status]
         setattr(self, old_bucket, getattr(self, old_bucket) - 1)
@@ -946,6 +947,9 @@ class _OutputFile:
     original_digest: str | None = None
     original_length: int | None = None
     original_binary_digest: str | None = None
+    # Lock dosyasi (SCAN_ONLY): tutarlilik adimi YENIDEN YAZMAZ, yalnizca
+    # salt-okunur final dogrulamadan gecer (host'u maskelenmis olsa bile).
+    scan_only: bool = False
 
 
 # Dosyayi okur, exclude/symlink/boyut/binary/encoding kontrollerinden gecirir ve siniflandirir.
@@ -1087,7 +1091,7 @@ def _prepare_file(
     if run_id is not None:
         db.add(AuditLog(
             run_id=run_id, file_path=rel, action="skipped",
-            detail=f"scan_policy mode={mode} presidio=True llm={settings.vllm.enabled}",
+            detail=f"scan_policy mode={mode} presidio=True llm={settings.vllm.enabled and mode != 'scan_only'}",
         ))
     return _FilePrep(
         scanned, dest_path, rel, text=read_outcome.text, encoding=read_outcome.encoding,
@@ -1099,7 +1103,9 @@ def _prepare_file(
 async def _detect_for_prep(orchestrator: DetectionOrchestrator, prep: _FilePrep) -> DetectionOutcome:
     metadata = {
         "enable_presidio": True,
-        "enable_llm": True,
+        # Lock dosyalarinda LLM calismaz: icerik paket adi/surum/ozetlerinden
+        # olusur, LLM bulgulari bu dosyalarda neredeyse hep yanlis-pozitifti.
+        "enable_llm": prep.mode != "scan_only",
         "file_path": str(Path(prep.rel).with_suffix(".json")) if prep.class_document else prep.rel,
     }
     try:
@@ -1226,8 +1232,9 @@ def _scan_only_finding_summary(text: str, outcome: DetectionOutcome) -> str:
 # bir sonuc uretemediyse dosya hic yazilmaz - "taranamadi != temiz" ilkesi
 # geregi ikisi de review/quarantine'e (AuditWarning) gonderilir.
 def _finalize_scan_only(
-    db: Session, run_id: int, prep: "_FilePrep", outcome: DetectionOutcome,
+    db: Session, run_ctx: MaskingRunContext, prep: "_FilePrep", outcome: DetectionOutcome,
 ) -> FileOutcome:
+    run_id = run_ctx.run_id
     if outcome.detector_crashes or (outcome.llm_errors and settings.vllm.enabled):
         reasons = list(outcome.detector_crashes) + list(outcome.llm_errors)
         reason = (
@@ -1247,11 +1254,38 @@ def _finalize_scan_only(
         )
         return FileOutcome(prep.rel, status="failed_detection", error=reason, final_state="VALIDATION_FAILED")
 
-    if outcome.matches or outcome.review_results:
+    # Paket ozetleri ve public registry URL'leri izin listesindedir; sozluk
+    # bulgulari haric (bkz. lockfile_policy). Kalan tum bulgular ic registry
+    # URL'lerindeyse bu URL'ler maskelenir, aksi halde dosya eskisi gibi onaya gider.
+    findings = [
+        (m.start, m.end, m.source_detector == "dictionary") for m in outcome.matches
+    ] + [
+        (r.start, r.end, r.kaynak_motor == "dictionary") for r in outcome.review_results
+        if r.start is not None and r.end is not None
+    ]
+    unlocated = len(outcome.review_results) - (len(findings) - len(outcome.matches))
+    plan = plan_lockfile(prep.text, prep.rel, findings, settings.lockfile.public_registry_host_list)
+    if plan.allowlisted:
+        db.add(AuditLog(
+            run_id=run_id, file_path=prep.rel, action="skipped",
+            detail=f"scan_only allowlisted_findings={plan.allowlisted} remaining_findings={len(plan.remaining)}",
+        ))
+    remediation_note = ""
+    if plan.url_spans and not unlocated:
+        result = _mask_lockfile_urls(db, run_ctx, prep, plan.url_spans)
+        if isinstance(result, FileOutcome):
+            return result
+        remediation_note = (
+            f" (iç registry URL maskelemesi denendi, şu kontrolde başarısız oldu: "
+            f"{_LOCKFILE_CHECK_LABELS.get(result, result)})"
+        )
+
+    if plan.remaining or unlocated:
         reason = (
             "Bağımlılık/lock dosyasında hassas olabilecek içerik bulundu; bütünlüğünü/imza "
             "geçerliliğini bozmamak için otomatik maskelenmedi, çıktıya alınmadı: "
             + _scan_only_finding_summary(prep.text, outcome)
+            + remediation_note
         )
         db.add(
             AuditLog(
@@ -1283,6 +1317,74 @@ def _finalize_scan_only(
         )
     )
     return FileOutcome(prep.rel, status="scan_only_clean", final_state="READY")
+
+
+_LOCKFILE_CHECK_LABELS = {
+    "geri_donus": "geri dönüş doğrulaması",
+    "acik_terim": "açık terim kontrolü",
+    "ayristirma": "dosya biçimi (parser) doğrulaması",
+}
+
+
+# Lock dosyasindaki ic registry URL'lerini maskeler, ardindan geri donus +
+# acik terim + parser (JSON/YAML/TOML) kontrollerini calistirir ve dosyayi
+# yazar. Kendi SAVEPOINT'inde calisir: bir kontrol basarisizsa eslemeler ve
+# onbellek geri alinir, basarisiz kontrolun kodu doner (caller onaya gonderir).
+def _mask_lockfile_urls(
+    db: Session, run_ctx: MaskingRunContext, prep: "_FilePrep", url_spans: list[tuple[int, int]],
+) -> "FileOutcome | str":
+    rule = replace(
+        synthetic_llm_rule("INTERNAL_REGISTRY_URL"),
+        rule_name="lockfile:internal_registry_url", description="Lock dosyasindaki ic registry URL'si.",
+    )
+    matches = [
+        Match(rule=rule, original_value=prep.text[start:end], start=start, end=end,
+              entity_type=rule.category, source_detector="lockfile")
+        for start, end in sorted(set(url_spans))
+    ]
+    detection = DetectionOutcome(matches=matches, review_results=[], llm_errors=[], already_masked_spans=[],
+                                 overlap_conflicts=[], boundary_rejections=[])
+    cache = run_ctx.mapping_cache.mappings if run_ctx.mapping_cache is not None else None
+    cache_snapshot = _snapshot_dict(cache) if cache is not None else None
+    savepoint = db.begin_nested()
+    try:
+        masked_text, mappings = apply_detections(db, run_ctx, prep.text, detection, file_path=prep.rel)
+        failure = None
+        placeholder_map = {m.placeholder_value: decrypt_value(m.original_value_encrypted) for m in mappings}
+        _register_passthrough_placeholders(placeholder_map, prep.text)
+        if not verify_round_trip(prep.text, masked_text, placeholder_map).ok:
+            failure = "geri_donus"
+        elif find_leaked_terms(db, masked_text):
+            failure = "acik_terim"
+        elif validate_masked_syntax(f"lockfile.{structured_format(prep.rel)}", masked_text, original_text=None):
+            failure = "ayristirma"
+        if failure is None:
+            write_text_preserving_encoding(prep.dest_path, masked_text, prep.encoding)
+    except BaseException:
+        savepoint.rollback()
+        if cache is not None:
+            _restore_dict(cache, cache_snapshot)
+        raise
+    if failure is not None:
+        savepoint.rollback()
+        if cache is not None:
+            _restore_dict(cache, cache_snapshot)
+        db.add(AuditLog(
+            run_id=run_ctx.run_id, file_path=prep.rel, action="skipped",
+            detail=f"lockfile_url_masking=failed check={failure}",
+        ))
+        return failure
+    savepoint.commit()
+    # Degerler degil, yalnizca sayilar loglanir.
+    db.add(AuditLog(
+        run_id=run_ctx.run_id, file_path=prep.rel, action="replaced",
+        detail=f"final_state=READY final_output=written; scan_only lockfile_internal_urls_masked="
+        f"{len(matches)}",
+    ))
+    return FileOutcome(
+        prep.rel, status="masked", match_count=len(mappings),
+        rule_breakdown={rule.rule_name: len(mappings)},
+    )
 
 
 # scan_only_clean bir outcome'u, FINAL SCAN_ONLY CONSISTENCY VERIFICATION'in
@@ -2299,10 +2401,15 @@ async def export_project(
                     # etkilemeli, diger dosyalarin zaten basarili islerini
                     # coktermemeli. "taranamadi != temiz": bir crash burada da
                     # otomatik-temiz sayilmaz, guvenlik geregi karantinaya alinir.
+                    cache_snapshot = (
+                        _snapshot_dict(run_ctx.mapping_cache.mappings) if run_ctx.mapping_cache is not None else None
+                    )
                     try:
                         with db.begin_nested():
-                            batch_results[i] = _finalize_scan_only(db, run.id, prep, outcome_by_index[i])
+                            batch_results[i] = _finalize_scan_only(db, run_ctx, prep, outcome_by_index[i])
                     except Exception as exc:
+                        if run_ctx.mapping_cache is not None:
+                            _restore_dict(run_ctx.mapping_cache.mappings, cache_snapshot)
                         reason = (
                             "Bağımlılık/lock dosyası taramasında beklenmeyen bir hata oluştu - "
                             f"güvenlik gereği karantinaya alındı ({type(exc).__name__})"
@@ -2494,6 +2601,7 @@ async def export_project(
                             original_length=len(prep.text) if prep.text is not None else None,
                             original_binary_digest=(hashlib.sha256(prep.class_document.raw).hexdigest()
                                                     if prep.class_document is not None else None),
+                            scan_only=prep.mode == "scan_only",
                         )
                     )
                 processed += 1
@@ -2511,7 +2619,7 @@ async def export_project(
         # SCAN_ONLY politikasinin yasakladigi sey ("Lock -> tara + degistirme
         # yok") - lock/integrity dosyalari byte-identical kalmayi GARANTI eder.
         _acquire_write_lock(db, run.id)
-        consistency_output_files = [f for f in output_files if f.outcome.status != "scan_only_clean"]
+        consistency_output_files = [f for f in output_files if not f.scan_only]
         _run_consistency_pass(
             db,
             run_ctx,
@@ -2529,7 +2637,7 @@ async def export_project(
         # BASKA dosyalarinda dogrulanmis degerlere karsi salt-okunur sekilde
         # tekrar dogrular (bkz. _run_scan_only_final_verification). MASK
         # dosyalarinin aksine bulgu varsa dosya MASKELENMEZ, sadece ciktidan cikarilir.
-        scan_only_output_files = [f for f in output_files if f.outcome.status == "scan_only_clean"]
+        scan_only_output_files = [f for f in output_files if f.scan_only]
         _run_scan_only_final_verification(
             db, run_ctx, consistency_registry, scan_only_output_files, report, max_inline_size,
         )

@@ -385,10 +385,10 @@ def _process_file_reverse(
         return FileUnmaskOutcome(rel, status="copied_binary")
 
     # read_outcome.status in (ReadStatus.TEXT_READY, ReadStatus.SCAN_ONLY_TEXT_READY):
-    # SCAN_ONLY (bagimlilik lock dosyalari) export'ta ASLA maskelenmedi, o
-    # yuzden burada da hicbir PLACEHOLDER_RE eslesmesi bulunmaz -
-    # reverse_text() dogal olarak kimlik (no-op) donusumu yapar, ayri bir
-    # dal gerekmez.
+    # SCAN_ONLY (bagimlilik lock dosyalari) cogunlukla byte-identical
+    # kopyalanir; yalnizca ic registry URL'leri maskelenmis olabilir (bkz.
+    # lockfile_policy). Her iki durumda da ayni reverse_text() yeterlidir -
+    # maskelenmemis dosyada kimlik (no-op) donusumu olur, ayri bir dal gerekmez.
     text = read_outcome.text
     encoding = read_outcome.encoding
 
