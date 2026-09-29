@@ -203,3 +203,74 @@ def test_export_suppression_does_not_cross_file_scope(db_session, tmp_path, monk
     db_session.flush()
     _report, output = _export_with_risky_audit(db_session, tmp_path, monkeypatch, "sup-scope", ["HarmlessWord"])
     assert not output.exists()
+
+
+def _context(db_session, project, sicil, branch):
+    context = MaskingContext(project_name=project, sicil_no=sicil, branch_name=branch)
+    db_session.add(context)
+    db_session.flush()
+    return context
+
+
+def _remember(db_session, context, decision_type, value="ApolloInternal"):
+    return remember_decision(
+        db_session, context_id=context.id, decision_type=decision_type, value=value,
+        entity_type="INTERNAL_NAME", file_path="src/a.py", source_review_id=None,
+    )
+
+
+def test_sensitive_decisions_apply_project_wide(db_session):
+    author = _context(db_session, "pytest-scope-p", "S-1", "main")
+    other_dev = _context(db_session, "pytest-scope-p", "S-2", "feature")
+    other_project = _context(db_session, "pytest-scope-q", "S-1", "main")
+    _remember(db_session, author, "sensitive")
+
+    assert [e.value for e in LearnedDecisionPolicy.load(db_session, other_dev.id).sensitive] == ["ApolloInternal"]
+    assert LearnedDecisionPolicy.load(db_session, other_project.id).sensitive == []
+
+
+def test_same_sensitive_value_from_two_contexts_is_one_entry(db_session):
+    first = _context(db_session, "pytest-scope-dup", "S-1", "main")
+    second = _context(db_session, "pytest-scope-dup", "S-2", "main")
+    _remember(db_session, first, "sensitive")
+    _remember(db_session, second, "sensitive")
+
+    assert len(LearnedDecisionPolicy.load(db_session, first.id).sensitive) == 1
+
+
+def test_not_sensitive_decisions_follow_only_the_author_across_branches(db_session):
+    author_main = _context(db_session, "pytest-scope-s", "S-1", "main")
+    author_feature = _context(db_session, "pytest-scope-s", "S-1", "feature")
+    other_dev = _context(db_session, "pytest-scope-s", "S-2", "main")
+    other_project = _context(db_session, "pytest-scope-t", "S-1", "main")
+    _remember(db_session, author_main, "suppression")
+
+    finding = DetectionResult("ApolloInternal", "INTERNAL_NAME", "orta", "llm")
+    assert LearnedDecisionPolicy.load(db_session, author_feature.id).is_suppressed(finding, "src/b.py")
+    # Baska bir gelistirici ya da baska proje bu karardan etkilenmez.
+    assert LearnedDecisionPolicy.load(db_session, other_dev.id).is_suppressed(finding, "src/b.py") is None
+    assert LearnedDecisionPolicy.load(db_session, other_project.id).is_suppressed(finding, "src/b.py") is None
+
+
+def test_inactive_decisions_are_not_shared(db_session):
+    author = _context(db_session, "pytest-scope-i", "S-1", "main")
+    other_dev = _context(db_session, "pytest-scope-i", "S-2", "main")
+    _remember(db_session, author, "sensitive").is_active = False
+    db_session.flush()
+
+    assert LearnedDecisionPolicy.load(db_session, other_dev.id).sensitive == []
+
+
+def test_other_developers_sensitive_decision_is_masked_in_export(db_session, tmp_path):
+    author = _context(db_session, "pytest-scope-export", "S-1", "main")
+    _remember(db_session, author, "sensitive", value="ApolloSecretName")
+
+    source = tmp_path / "scope-src"
+    source.mkdir()
+    (source / "a.py").write_text("name = 'ApolloSecretName'\n", encoding="utf-8")
+    target = tmp_path / "scope-out"
+    asyncio.run(export_project(
+        db_session, source_path=str(source), target_path=str(target),
+        project_name="pytest-scope-export", sicil_no="S-2", branch_name="dev", initiated_by="S-2",
+    ))
+    assert "ApolloSecretName" not in (target / "a.py").read_text(encoding="utf-8")
