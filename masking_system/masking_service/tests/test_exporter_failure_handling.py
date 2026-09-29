@@ -526,7 +526,10 @@ def test_later_llm_chunk_failure_is_quarantined_not_published(tmp_path, monkeypa
         _cleanup_identity(project)
 
 
-@pytest.mark.parametrize("confidence", [["yuksek"], {"level": "yuksek"}])
+# Asama 8: yapi saglam ama tek bulgu bozuksa (liste/dict guven) deger metinde
+# dogrulandigi icin orta/KURUMSAL_TANIMLAYICI ile maskelenir; yanit yapisi
+# bozuksa denetim temiz dese bile dosya eskisi gibi karantinaya alinir.
+@pytest.mark.parametrize("confidence", [["yuksek"], {"level": "yuksek"}, "broken_structure"])
 def test_malformed_llm_confidence_quarantines_even_when_audit_succeeds(tmp_path, monkeypatch, confidence):
     import json
     from app.services import llm_recognizer, audit_reviewer
@@ -553,6 +556,9 @@ def test_malformed_llm_confidence_quarantines_even_when_audit_succeeds(tmp_path,
                 audit_calls.append(1)
                 data["risk_var"] = False
             elif "SYNTHETIC_VALUE" in payload["messages"][1]["content"]:
+                if confidence == "broken_structure":
+                    data["bulgular"] = "SYNTHETIC_VALUE"
+                    return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(data)}}]}
                 data["bulgular"] = [{"bulunan_deger": "SYNTHETIC_VALUE", "tip": "TEST",
                                      "guven_seviyesi": confidence, "gerekce": "test"}]
             return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(data)}}]}
@@ -565,12 +571,19 @@ def test_malformed_llm_confidence_quarantines_even_when_audit_succeeds(tmp_path,
         report = _run_export(source, target, project)
         outcomes = {out.relative_path: out for out in report.outcomes}
         assert audit_calls
+        assert (target / "good.txt").read_text(encoding="utf-8") == "public text"
+        if confidence != "broken_structure":
+            assert report.files_quarantined_pending_audit == 0, report.summary_text()
+            assert outcomes["bad.txt"].final_state == "READY"
+            masked = (target / "bad.txt").read_text(encoding="utf-8")
+            assert "SYNTHETIC_VALUE" not in masked and masked.startswith("mask_")
+            return
         assert report.files_quarantined_pending_audit == 1
         assert report.status == "completed_with_warnings"
         assert outcomes["bad.txt"].final_state == "VALIDATION_FAILED"
-        assert "guven_seviyesi" in outcomes["bad.txt"].error
+        assert "bulgular" in outcomes["bad.txt"].error
         assert "TypeError" not in outcomes["bad.txt"].error
+        assert "SYNTHETIC_VALUE" not in outcomes["bad.txt"].error
         assert not (target / "bad.txt").exists()
-        assert (target / "good.txt").read_text(encoding="utf-8") == "public text"
     finally:
         _cleanup_identity(project)
