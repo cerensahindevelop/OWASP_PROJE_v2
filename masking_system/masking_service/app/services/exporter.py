@@ -1665,11 +1665,16 @@ def _finalize_file(
 # 2 duzeltme turu (her tur bir LLM denetimi daha) - sonsuz dongu olmaz.
 _AUDIT_REMEDIATION_TYPE = "DENETIM_BULGUSU"
 _MAX_REMEDIATION_ROUNDS = 2
+# Bundan uzun ya da alt satira gecen denetim alintisi otomatik maskelenmez,
+# insan onayina gider (buyuk bir parcayi tek yer tutucuyla ortmek riskli).
+_MAX_REMEDIATION_QUOTE_CHARS = 200
 # Otomatik duzeltme basarisizliginda insan onayi gerekcesine yazilan kontrol adlari.
 _REMEDIATION_CHECK_LABELS = {
     "kural": "sözlük kuralı bulunamadı",
     "maskeleme": "değerlerin güvenli sınırla maskelenmesi",
     "daraltma": "alıntının bir kısmı açık kalacaktı",
+    "cok_satirli_alinti": "alıntı birden fazla satıra yayılıyor",
+    "uzun_alinti": f"alıntı {_MAX_REMEDIATION_QUOTE_CHARS} karakterden uzun",
     "geri_donus": "geri dönüş doğrulaması",
     "sozdizimi": "sözdizimi doğrulaması",
     "acik_terim": "açık terim kontrolü",
@@ -1716,6 +1721,11 @@ def _try_remediation(
         if rule is None:
             return "kural"
         values.append((term.matched_value, rule, "dictionary"))
+    for finding in request.findings:
+        if "\n" in finding.ilgili_bolum or "\r" in finding.ilgili_bolum:
+            return "cok_satirli_alinti"
+        if len(finding.ilgili_bolum) > _MAX_REMEDIATION_QUOTE_CHARS:
+            return "uzun_alinti"
     audit_rule = synthetic_llm_rule(_AUDIT_REMEDIATION_TYPE)
     values.extend((finding.ilgili_bolum, audit_rule, "llm") for finding in request.findings)
 

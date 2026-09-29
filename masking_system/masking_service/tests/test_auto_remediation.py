@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from app.db.models import AuditLog, AuditWarning
 from app.services import exporter
 from app.services.audit_reviewer import AuditFinding, AuditVerdict
@@ -230,3 +232,50 @@ def test_narrowed_quote_dropping_only_punctuation_is_auto_remediated(db_session,
     output = (target / "src" / "d.py").read_text(encoding="utf-8")
     assert "Abc123" not in output and '"sifre"' in output
     assert _outcome(report, "src/d.py").final_state == "READY"
+
+
+@pytest.mark.parametrize("quote, released", [('k": "v', False), ('"v"', True)])
+def test_narrowing_examples(db_session, tmp_path, monkeypatch, quote, released):
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", _single_quote_audit(quote, '"v"'))
+
+    report, target = _export(db_session, tmp_path, {"src/e.py": 'cfg = {"k": "v"}\n'}, "auto-kv")
+
+    assert (target / "src" / "e.py").exists() is released
+    assert _outcome(report, "src/e.py").final_state == ("READY" if released else "SECURITY_QUARANTINE")
+
+
+def _quote_of_length(length: int) -> str:
+    # Harf ve bosluklardan olusan, tek satirlik tam `length` karakterlik alinti.
+    words = ("Kurum ic sistem adi " * (length // 20 + 1))[:length].rstrip()
+    return (words + "x" * length)[:length]
+
+
+@pytest.mark.parametrize("length, released", [(199, True), (200, True), (201, False)])
+def test_quote_length_limit(db_session, tmp_path, monkeypatch, length, released):
+    quote = _quote_of_length(length)
+    assert len(quote) == length and "\n" not in quote
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", _single_quote_audit(quote, quote))
+
+    report, target = _export(db_session, tmp_path, {"notes.txt": f"Not: {quote}\n"}, f"auto-len{length}")
+
+    assert (target / "notes.txt").exists() is released
+    if released:
+        assert quote not in (target / "notes.txt").read_text(encoding="utf-8")
+    else:
+        warning = db_session.query(AuditWarning).filter_by(run_id=report.run_id).one()
+        assert "otomatik düzeltme denendi" in warning.reasoning
+        assert any("check=uzun_alinti" in d for d in _trail(db_session, report))
+
+
+@pytest.mark.parametrize("quote, released", [("Hakan Yilmaz", True), ("Hakan\nYilmaz", False)])
+def test_multiline_quote_goes_to_review(db_session, tmp_path, monkeypatch, quote, released):
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", _single_quote_audit(quote, quote))
+
+    report, target = _export(db_session, tmp_path, {"notes.txt": f"Sorumlu: {quote}\n"}, "auto-ml")
+
+    assert (target / "notes.txt").exists() is released
+    if not released:
+        assert any("check=cok_satirli_alinti" in d for d in _trail(db_session, report))
