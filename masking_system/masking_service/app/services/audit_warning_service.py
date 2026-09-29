@@ -183,7 +183,14 @@ class AuditWarningService:
             warning.file_path, warning.masked_content, original_text=None,
             sql_dialect=settings.validation.sql_dialect,
         )
-        if syntax_error:
+        if syntax_error and settings.validation.syntax_failure_action == "warn":
+            # Gizlilik kontrolleri (tutarlilik, acik terim) gecti; denetim ve geri
+            # donus asagida yine calisir. Hata yalnizca uyari olarak kaydedilir.
+            self.db.add(AuditLog(
+                run_id=run.id, file_path=warning.file_path, action="skipped",
+                detail=f"validation_warning; syntax_failure_action=warn; {syntax_error}",
+            ))
+        elif syntax_error:
             return f"sözdizimi doğrulaması başarısız: {syntax_error}"
 
         known = set(self.db.scalars(select(ValueMapping.placeholder_value).where(

@@ -4,7 +4,7 @@ from typing import Literal
 
 # pydantic-settings: her ayar grubunu ortam degiskenlerinden (.env) okuyup
 # dogrulayan (Field(...) zorunlu alanlar, model_validator capraz kontroller) taban sinif.
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/core/config.py -> masking_system/.env (repo kok dizinindeki TEK .env
@@ -282,6 +282,14 @@ class ValidationSettings(BaseSettings):
     sql_dialect: str = Field(
         "", description="SQLGlot lehcesi: postgres, tsql, oracle, mysql vb.; bos ise ortak SQLGlot grameri."
     )
+    # block: maskelemenin sozdizimini bozdugu dosya ciktiya alinmaz (varsayilan).
+    # warn: tum gizlilik kontrollerinden gecmis dosya uyariyla ciktiya alinir.
+    # Otomatik duzeltme (exporter._try_remediation) ve Java .class her modda bloklar.
+    syntax_failure_action: Literal["warn", "block"] = Field(
+        "block",
+        validation_alias=AliasChoices("SYNTAX_FAILURE_ACTION", "VALIDATION_SYNTAX_FAILURE_ACTION"),
+        description="Maskeleme sonrasi sozdizimi hatasi: block (ciktiya alma) ya da warn (uyariyla yaz).",
+    )
 
 
 # Metin dosyasi kodlama tespitini yapilandiran ayarlar. On ek YOK: ortam
@@ -319,6 +327,22 @@ class EncodingSettings(BaseSettings):
         return tuple(part.strip() for part in self.legacy_text_encodings.split(",") if part.strip())
 
 
+# Bagimlilik lock dosyalari (bkz. app/services/lockfile_policy.py). Bu
+# host'lara giden URL'ler izin listesindedir; eslesme TAM host adiyladir
+# (alt alan adi kabul edilmez).
+class LockfileSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LOCKFILE_", env_file=_ENV_FILE, extra="ignore")
+
+    public_registry_hosts: str = Field(
+        "registry.npmjs.org,registry.yarnpkg.com,pypi.org,files.pythonhosted.org,crates.io,repo.packagist.org",
+        description="Lock dosyalarinda izin listesindeki public registry host'lari (virgulle ayrilmis, tam eslesme).",
+    )
+
+    @property
+    def public_registry_host_list(self) -> tuple[str, ...]:
+        return tuple(part.strip().lower() for part in self.public_registry_hosts.split(",") if part.strip())
+
+
 class Settings:
     # Her alt ayar grubunu kendi ortam degiskenlerinden okuyarak baslatir.
     def __init__(self) -> None:
@@ -329,6 +353,7 @@ class Settings:
         self.web = WebSettings()
         self.validation = ValidationSettings()
         self.encoding = EncodingSettings()
+        self.lockfile = LockfileSettings()
 
     # Geriye donuk uyumluluk icin duz erisim: settings.database_url
     @property

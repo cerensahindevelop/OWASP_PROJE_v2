@@ -79,7 +79,8 @@ def test_export_scans_all_supported_text_and_excludes_unsupported_files(tmp_path
         project_name=tmp_path.name, sicil_no="TEST-SCOPE", branch_name="test",
         initiated_by="TEST-SCOPE", enable_path_masking=False,
     ))
-    assert set(llm_calls) == {"math.py", "auth.yaml", "notes.txt", "plain.lock", "credentials.lock"}
+    # Lock dosyalari yerel katmanlarla taranir ama LLM'e gonderilmez (Asama 7a).
+    assert set(llm_calls) == {"math.py", "auth.yaml", "notes.txt"}
     assert set(audit_calls) == {"math.py", "auth.yaml", "notes.txt", "auth/empty.yaml"}
     assert set(local_calls) == {"math.py", "auth.yaml", "notes.txt", "plain.lock", "credentials.lock", "auth/empty.yaml"}
     assert (target / "math.py").read_bytes() == (source / "math.py").read_bytes()
@@ -90,6 +91,7 @@ def test_export_scans_all_supported_text_and_excludes_unsupported_files(tmp_path
     logs = db_session.scalars(select(AuditLog).where(AuditLog.run_id == report.run_id)).all()
     assert any(row.file_path == "math.py" and "scan_policy mode=mask presidio=True llm=True" in (row.detail or "") for row in logs)
     assert any(row.file_path == "notes.txt" and "scan_policy mode=mask presidio=True llm=True" in (row.detail or "") for row in logs)
+    assert any(row.file_path == "plain.lock" and "scan_policy mode=scan_only presidio=True llm=False" in (row.detail or "") for row in logs)
 
 
 @pytest.mark.parametrize("name", [".git/config", "nested/.git", "vendor/poetry.lock", "auth.pdf", "auth.zip", r"nested\.git\config"])
