@@ -297,6 +297,9 @@ class Match:
     # backward compatible; detector orchestration fills both fields.
     entity_type: str | None = None
     source_detector: str | None = None
+    # Olasiliksal kaynaklarin (LLM/Presidio) guven seviyesi; tutarlilik
+    # registry'sine kabul karari icin kullanilir.
+    confidence: str | None = None
 
 
 # Bir kuralin tanimi gecersiz/tutarsiz oldugunda (orn. pattern_type='regex'

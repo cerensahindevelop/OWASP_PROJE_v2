@@ -82,7 +82,28 @@ def test_bare_json_number_masked_as_valid_json_number_and_round_trips(db_session
     assert not unmask_report.has_unresolved_placeholders
 
 
-def test_consistency_pass_masks_value_already_mapped_as_text_elsewhere(db_session, tmp_path):
+def _llm_finds_number_only_in_notes(monkeypatch):
+    from app.services import audit_reviewer, exporter, llm_recognizer
+
+    async def fake(host, timeout, payload, api_key=None):
+        if payload["response_format"]["json_schema"]["name"] == "denetim_semasi":
+            data = {"risk_var": False, "bulgular": []}
+        elif "personel jsonnumq9z8y" in payload["messages"][1]["content"]:
+            data = {"bulgular": [{"bulunan_deger": "7650321", "tip": "KIMLIK_NO",
+                                  "guven_seviyesi": "yuksek", "gerekce": "personel numarasi"}]}
+        else:
+            data = {"bulgular": []}
+        return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(data)}}]}
+
+    vllm = exporter.settings.vllm
+    monkeypatch.setattr(vllm, "enabled", True)
+    monkeypatch.setattr(vllm, "host", "http://fake-llm")
+    monkeypatch.setattr(vllm, "model", "fake")
+    monkeypatch.setattr(llm_recognizer, "call_vllm", fake)
+    monkeypatch.setattr(audit_reviewer, "call_vllm", fake)
+
+
+def test_consistency_pass_masks_value_already_mapped_as_text_elsewhere(db_session, tmp_path, monkeypatch):
     """Ayni deger BIR dosyada metin/tirnakli baglamda (once tespit edilip
     harf-tabanli bir mapping alir), BASKA bir JSON dosyasinda tirnaksiz bir
     sayi olarak gecer - consistency-pass bu ikinci konum icin AYRI, sayisal
@@ -96,6 +117,11 @@ def test_consistency_pass_masks_value_already_mapped_as_text_elsewhere(db_sessio
     source.mkdir()
     # Ilk dosya: deger metin baglaminda - ilk turda BURADA tespit edilip
     # harf-tabanli (PREFIX_TEST_N) bir mapping alir.
+    # Deger yalnizca notes.txt'de, baglamindan (yuksek guvenli LLM bulgusu
+    # olarak) tespit edilir. Tutarlilik registry'si zayif kaynaklari (orn.
+    # Presidio US_DRIVER_LICENSE) yaymaz; uzun sayisal kimlikleri yuksek
+    # guvenli LLM'den kabul eder.
+    _llm_finds_number_only_in_notes(monkeypatch)
     (source / "notes.txt").write_text("personel jsonnumq9z8y numarasi: 7650321\n", encoding="utf-8")
     # Ikinci dosya: AYNI sayi (7650321), JSON'da TIRNAKSIZ - bu dosyanin
     # kendisinde "jsonnumq9z8y" kelimesi hic gecmiyor, bu deger ancak

@@ -257,10 +257,14 @@ class AuditWarningService:
         """Export'un tutarlilik registry'sinin DB'deki eslemelerden kurulmus hali."""
         rule_categories = dict(self.db.execute(select(FilterRule.id, FilterRule.category)).all())
         registry = SensitiveValueRegistry()
+        # Yalnizca kural kimligi olan (deterministik) eslemeler: LLM/NER
+        # eslemelerinin kaynagi ve guveni DB'de tutulmadigi icin projeye
+        # yayilacak otorite sayilmaz (bkz. consistency_masking kalite kapisi).
         registry.add_mapping_values([
             (row.original_value_plain or decrypt_value(row.original_value_encrypted),
-             rule_categories.get(row.rule_id, "POST_MASK_AUDIT"))
+             rule_categories[row.rule_id])
             for row in self._run_mapping_rows(run)
+            if row.rule_id is not None and row.rule_id in rule_categories
         ])
         return registry
 

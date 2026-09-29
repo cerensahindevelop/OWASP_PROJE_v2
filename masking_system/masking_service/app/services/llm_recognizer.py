@@ -102,7 +102,7 @@ def _augment_prompt(base_prompt: str, extra_instructions: list[str] | None) -> s
 # vLLM'e gonderilecek tespit istegini (prompt + JSON sema + metin) hazirlar.
 def build_detection_request(
     text: str, model: str, seed: int, extra_instructions: list[str] | None = None,
-    max_tokens: int = 512, disable_thinking: bool = False,
+    max_tokens: int = 512, disable_thinking: bool = False, presence_penalty: float = 0.0,
 ) -> dict:
     payload = {
         "model": model,
@@ -120,6 +120,8 @@ def build_detection_request(
     }
     if disable_thinking:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if presence_penalty:
+        payload["presence_penalty"] = presence_penalty
     return payload
 
 
@@ -148,6 +150,38 @@ async def call_vllm(host: str, timeout_seconds: float, payload: dict, api_key: s
         raise LLMRecognitionError(f"{message}: {detail}") from exc
 
 
+def _truncation_hint(choice: object) -> str:
+    """Explain the likely cause of a max_tokens cut, without echoing content.
+
+    Kucuk bir dosyada (orn. 600 karakter) token tavaninin dolmasi neredeyse
+    her zaman modelin dusunme (thinking) modunda calistigini ya da ayni
+    ciktiyi tekrarlayan bir donguye girdigini gosterir.
+    """
+    message = choice.get("message") if isinstance(choice, dict) else None
+    if not isinstance(message, dict):
+        return ""
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+    content = message.get("content") if isinstance(message.get("content"), str) else ""
+    if (isinstance(reasoning, str) and reasoning.strip()) or content.lstrip().startswith("<think>"):
+        return (
+            " - model DUSUNME (thinking) modunda yanit uretti; token butcesi dusunmeye harcandi. "
+            "VLLM_DISABLE_THINKING=true yapin ve vLLM'i --default-chat-template-kwargs "
+            "'{\"enable_thinking\": false}' ile baslatin"
+        )
+    stripped = content.strip()
+    if len(stripped) > 400:
+        tail = stripped[-400:]
+        # Ayni kisa parcanin arka arkaya tekrari: donguye giren model.
+        for size in range(8, 101):
+            unit = tail[-size:]
+            if tail.count(unit) >= max(3, 200 // size):
+                return (
+                    " - model ayni ciktiyi tekrarlayan bir donguye girdi. VLLM_PRESENCE_PENALTY "
+                    "(orn. 1.5) ayarini deneyin"
+                )
+    return ""
+
+
 def require_complete_response(raw_response: dict) -> None:
     try:
         choice = raw_response["choices"][0]
@@ -157,7 +191,10 @@ def require_complete_response(raw_response: dict) -> None:
     # Older compatible servers may omit finish_reason. A supplied non-stop
     # reason (length/content_filter/tool_calls) never constitutes a full scan.
     if finish == "length":
-        raise LLMTruncatedError("LLM yaniti tamamlanmadi (finish_reason stop degil: length, max_tokens siniri)")
+        raise LLMTruncatedError(
+            "LLM yaniti tamamlanmadi (finish_reason stop degil: length, max_tokens siniri)"
+            + _truncation_hint(choice)
+        )
     if finish is not None and finish != "stop":
         raise LLMRecognitionError("LLM yaniti tamamlanmadi (finish_reason stop degil)")
 
@@ -293,6 +330,7 @@ async def find_llm_detections(
                 chunk, vllm_settings.model, seed, extra_instructions,
                 max_tokens=getattr(vllm_settings, "max_tokens", 512),
                 disable_thinking=getattr(vllm_settings, "disable_thinking", False),
+                presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
             )
             try:
                 return await metrics.request(
