@@ -22,8 +22,8 @@ def test_actual_dictionary_leak_still_quarantines_with_precise_location(db_sessi
     from sqlalchemy import select
     from app.db.models import AuditWarning
     from app.services import exporter
-    from app.services.audit_reviewer import AuditVerdict
     from app.services.detectors import DetectorOutput
+    from app.services.llm_recognizer import LLMRecognitionError
 
     commit_term_upload(db_session, filename="terms.txt", content=b"ZetaLedger\n", category="pytest_real_leak")
 
@@ -31,11 +31,14 @@ def test_actual_dictionary_leak_still_quarantines_with_precise_location(db_sessi
         async def scan(self, text, metadata=None):
             return DetectorOutput(results=[])
 
-    async def clean_audit(*args, **kwargs):
-        return AuditVerdict(risky=False)
+    async def failed_audit(*args, **kwargs):
+        # Temiz bir denetimde acik terim otomatik maskelenir (bkz.
+        # tests/test_auto_remediation.py); denetim tamamlanamazsa otomatik
+        # duzeltme denenmez ve sizinti konumuyla insan onayina duser.
+        raise LLMRecognitionError("denetim tamamlanamadi")
 
     monkeypatch.setattr(exporter, "build_orchestrator", lambda *args, **kwargs: MissedDetection())
-    monkeypatch.setattr(exporter, "audit_masked_text", clean_audit)
+    monkeypatch.setattr(exporter, "audit_masked_text", failed_audit)
     source = tmp_path / "src"
     source.mkdir()
     (source / "query.sql").write_text("SELECT *\nFROM PUBLIC.T_ZetaLedger;\n", encoding="utf-8")

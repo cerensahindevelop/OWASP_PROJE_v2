@@ -205,7 +205,9 @@ def test_unverifiable_audit_findings_do_not_quarantine(tmp_path, monkeypatch):
         _cleanup(project)
 
 
-def test_verified_audit_finding_still_quarantines(tmp_path, monkeypatch):
+def test_verified_audit_finding_is_masked_never_released_open(tmp_path, monkeypatch):
+    # Dogrulanmis denetim bulgusu artik insan onayi yerine otomatik
+    # maskelenir; dosya ancak deger acik KALMADAN ciktiya yazilir.
     project = _project()
     try:
         source = tmp_path / "source"
@@ -219,8 +221,8 @@ def test_verified_audit_finding_still_quarantines(tmp_path, monkeypatch):
         monkeypatch.setattr(exporter_module.settings.presidio, "use_builtin_recognizers", False)
         _fake_llm(monkeypatch, detections=[], audit=audit)
         report = _run_export(source, target, project)
-        assert report.outcomes[0].final_state == "SECURITY_QUARANTINE"
-        assert not (target / "notes.txt").exists()
+        assert report.outcomes[0].final_state == "READY"
+        assert "Hakan Yilmaz" not in (target / "notes.txt").read_text(encoding="utf-8")
     finally:
         _cleanup(project)
 
