@@ -26,6 +26,19 @@ gösterirse karantinaya alır; doğrulanamayan "risk var" yanıtları dosyayı
 bekletmez. LLM'in serbest yazdığı bulgu türü sabit bir listeye eşlenir, böylece
 yer tutucu adına hassas bir terim girmez.
 
+Modelin tespit yanıtının yapısı (JSON / `bulgular` listesi) bozuksa o metin
+parçası hata sayılır ve dosya karantinaya alınır. Yapı sağlam ama tek bir bulgu
+bozuksa (boş ya da yanlış türde `tip`, geçersiz `guven_seviyesi`, eksik
+`gerekce`) parça düşürülmez: bulunan değer metinde birebir geçiyorsa bulgu `orta`
+güven ve `KURUMSAL_TANIMLAYICI` türüyle maskelenir, geçmiyorsa ya da değer hiç
+okunamıyorsa yalnızca o bulgu atılır. Onarılan/atılan sayıları işlem kaydına
+değer yazılmadan düşer (`llm_bulgu_semasi_bozuk onarilan=N atilan=M`).
+
+Tutarlılık adımı, aynı işlemin diğer dosyalarında maskelenen değerlerin açık
+kalan geçişlerini, açık geçiş kalmayana kadar en fazla 3 tur değiştirir. Sonra
+geri dönüş ve sözdizimi kontrolleri ile final güvenlik taraması çalışır; hâlâ
+açık geçiş varsa dosya dışa aktarılmaz.
+
 Onaydan sonra serbest bırakılan dosyalar çıktıdaki maskelenmiş yola yazılır,
 aynı işlemin diğer dosyalarında maskelenen değerlere karşı tutarlılık
 kontrolünden geçer ve imzalı bütünlük kaydına eklenir.
@@ -33,7 +46,10 @@ kontrolünden geçer ve imzalı bütünlük kaydına eklenir.
 Export web arayüzünde arka plan işi olarak çalışır; ekran işlenen/toplam dosya
 ilerlemesini gösterir. Export sırasında veritabanı yazma kilidi LLM
 çağrıları boyunca tutulmaz; aynı anda başka projelerin export'ları ve onay
-işlemleri beklemeden çalışabilir. Uygulama bir export sırasında kapanırsa
+işlemleri beklemeden çalışabilir. Presidio/spaCy analizi olay döngüsünü
+kilitlememek için ayrı bir thread'de (aynı işlemin dosyaları arasında sırayla)
+çalışır; böylece eşzamanlı LLM isteklerinde sahte zaman aşımı oluşmaz.
+Uygulama bir export sırasında kapanırsa
 işlem `recover-output` ile kapatılır (bkz. 4. bölüm).
 
 Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
