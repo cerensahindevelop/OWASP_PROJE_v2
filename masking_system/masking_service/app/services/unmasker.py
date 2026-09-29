@@ -37,6 +37,7 @@ from cryptography.fernet import InvalidToken
 # cozumu (roundtrip_validator.py ile PAYLASILAN AYNI fonksiyon). iter_project_files:
 # kaynak klasoru deterministik tarar. IdentityMismatchAdvisor/Suggestion:
 # yanlis kimlikle unmask calistirilmis olabilecegini tespit eden tani katmani.
+from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.db.models import AuditLog, MaskingContext, MaskingRun, ValueMapping
 from app.services.exclude_admin import load_active_exclude_specs
@@ -324,7 +325,8 @@ def _process_file_reverse(
     rel = str(scanned.relative_path)
 
     read_outcome = read_scanned_file(scanned, dest_path, max_inline_size,
-                                   encoding_hint=integrity_record["encoding"] if integrity_record else None)
+                                   encoding_hint=integrity_record["encoding"] if integrity_record else None,
+                                   legacy_encodings=settings.encoding.legacy_text_encoding_list)
 
     if read_outcome.status == ReadStatus.EXCLUDED:
         db.add(

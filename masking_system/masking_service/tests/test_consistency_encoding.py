@@ -9,12 +9,13 @@ failed_consistency_validation ile dusuyordu.
 
 from __future__ import annotations
 
+from app.services import exporter as exporter_module
 from app.services.exporter import _read_consistency_target
-from app.services.file_type import classify_bytes, write_text_preserving_encoding
+from app.services.file_type import write_text_preserving_encoding
 from app.services.roundtrip_validator import text_digest, verify_round_trip_digest
 
-# Bu kaynak, charset_normalizer'in maskelemeden once ve sonra FARKLI
-# kodlama tahmin ettigi gercek bir ornek (cp1258 -> cp1250).
+# Bu kaynak icin charset_normalizer maskelemeden once ve sonra FARKLI
+# kodlama tahmin ediyordu (cp1258 -> cp1250).
 _SOURCE = (
     "// Şirket içi sunucu güncellemesi\n"
     "public class A {\n"
@@ -24,10 +25,11 @@ _SOURCE = (
 _PLACEHOLDER = "IP_ADDRESS_0001"
 
 
-def test_consistency_reread_keeps_original_encoding(tmp_path):
+def test_consistency_reread_keeps_original_encoding(tmp_path, monkeypatch):
     masked = _SOURCE.replace("10.20.30.40", _PLACEHOLDER)
-    # Onkosul: tahmin gercekten kayiyor, yoksa test hicbir seyi kanitlamaz.
-    assert classify_bytes(_SOURCE.encode("cp1254"))[1] != classify_bytes(masked.encode("cp1254"))[1]
+    # Turkce tercihi bu ornekteki kaymayi artik onluyor; yeniden tahminin
+    # yine de kayabilecegi (baska bir Latin kodlamasi) durumu sabitliyoruz.
+    monkeypatch.setattr(exporter_module, "peek_classify", lambda path: (True, "cp1250"))
 
     target = tmp_path / "A.java"
     assert write_text_preserving_encoding(target, masked, "cp1254") == "cp1254"

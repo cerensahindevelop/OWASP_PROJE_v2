@@ -39,6 +39,19 @@ from charset_normalizer import from_bytes
 PEEK_SIZE = 8192
 _NONTEXT_RATIO_THRESHOLD = 0.30
 
+# Tespit/peek basarisiz oldugunda denenecek Turkce eski kodlamalar.
+# app/core/config.py EncodingSettings (LEGACY_TEXT_ENCODINGS) varsayilaniyla
+# AYNI olmali (bkz. tests/test_legacy_encoding.py).
+DEFAULT_LEGACY_TEXT_ENCODINGS: tuple[str, ...] = ("cp1254", "iso-8859-9")
+
+# charset_normalizer cp1254 metni siklikla cp1250/cp1252/cp1257/cp850 olarak
+# tahmin eder: ayni baytlar s-cedilla yerine t-cedilla, noktasiz i yerine
+# y-acute olarak cozulur ve Turkce sozluk terimleri/isimler eslesmez (sizinti
+# riski). Bu harfler cp1254'e OZGU bayt degerlerine denk gelir; tek baytlik
+# bir Latin tahmininde bu baytlar varsa dosya buyuk olasilikla cp1254'tur.
+_TURKISH_PREFERRED_ENCODING = "cp1254"
+_TURKISH_SPECIFIC_LETTERS = frozenset("şğıİŞĞ")
+
 # En uzun/en spesifik once: UTF-32 BOM'lari, UTF-16 BOM'larinin (\xff\xfe /
 # \xfe\xff) bir uzantisi oldugundan ONCE kontrol edilmeli, yoksa bir UTF-32
 # dosyasi yanlislikla UTF-16 sanilir. -sig codec'leri BOM'u decode'da
@@ -64,6 +77,56 @@ def _detect_bom_encoding(sample: bytes) -> str | None:
         if sample.startswith(signature):
             return encoding
     return None
+
+
+# Tek baytlik Latin kodlamalari (codecs.lookup(...).name bicimiyle). cp1251/
+# cp1253/cp1255/cp1256 ve iso8859-5/6/7/8/11 Latin DEGIL (Kiril, Yunan,
+# Ibrani, Arap, Tay) - bunlarda Turkce tercihi anlamsizdir. mac/hp/DOS Latin
+# varyantlari da dahil: charset_normalizer kisa cp1254 dosyalari icin
+# mac_latin2/hp_roman8 da tahmin edebiliyor (olculdu). Zaten Turkce olan
+# cp857/mac-turkish kasitli olarak YOK - gercek bir DOS/Mac Turkce dosyayi
+# cp1254'e cevirmek yanlis olur.
+_SINGLE_BYTE_LATIN_ENCODINGS = frozenset({
+    "cp1250", "cp1252", "cp1254", "cp1257", "cp1258",
+    "cp437", "cp850", "cp852", "cp858",
+    "iso8859-1", "iso8859-2", "iso8859-3", "iso8859-4", "iso8859-9",
+    "iso8859-10", "iso8859-13", "iso8859-14", "iso8859-15", "iso8859-16",
+    "mac-roman", "mac-latin2", "mac-iceland", "mac-croatian", "mac-romanian", "hp-roman8",
+})
+
+
+# Kodlama adinin tek baytlik bir Latin kodlamasi olup olmadigini soyler.
+def _is_single_byte_latin(encoding: str) -> bool:
+    try:
+        return codecs.lookup(encoding).name in _SINGLE_BYTE_LATIN_ENCODINGS
+    except LookupError:
+        return False
+
+
+# Tek baytlik bir Latin tahmini, cp1254'te Turkce harflere denk gelen baytlar
+# iceriyorsa cp1254'u tercih eder; aksi halde tahmini oldugu gibi dondurur.
+# Baytlar cp1254'te cozulemiyorsa (tanimsiz 0x81/0x8D/... baytlari) tahmin korunur.
+def prefer_turkish_encoding(data: bytes, encoding: str | None) -> str | None:
+    if not encoding or not _is_single_byte_latin(encoding):
+        return encoding
+    if codecs.lookup(encoding).name == _TURKISH_PREFERRED_ENCODING:
+        return encoding
+    try:
+        decoded = data.decode(_TURKISH_PREFERRED_ENCODING, errors="strict")
+    except UnicodeDecodeError:
+        return encoding
+    if _TURKISH_SPECIFIC_LETTERS.intersection(decoded):
+        return _TURKISH_PREFERRED_ENCODING
+    return encoding
+
+
+# Tum dosya baytlari uzerinden charset_normalizer tahmini (Turkce tercihiyle).
+# Pahalidir; yalnizca ucuz adaylar basarisiz olduktan sonra cagrilir.
+def guess_full_text_encoding(data: bytes) -> str | None:
+    best = from_bytes(data).best()
+    if best is None or not _looks_like_text(str(best)):
+        return None
+    return prefer_turkish_encoding(data, best.encoding)
 
 
 # Bir byte ornegine bakip metin mi binary mi oldugunu (ve encoding'ini) tahmin eder.
@@ -104,7 +167,7 @@ def classify_bytes(sample: bytes) -> tuple[bool, str | None]:
         return False, None
     if not _looks_like_text(str(best)):
         return False, None
-    return True, best.encoding
+    return True, prefer_turkish_encoding(sample, best.encoding)
 
 
 def _looks_like_text(text: str) -> bool:

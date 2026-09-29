@@ -913,7 +913,8 @@ def _prepare_file(
         return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(rel, status="excluded"))
 
     read_outcome = read_scanned_file(
-        scanned, dest_path, max_inline_size, copy_unscannable=False
+        scanned, dest_path, max_inline_size, copy_unscannable=False,
+        legacy_encodings=settings.encoding.legacy_text_encoding_list,
     )
 
     if read_outcome.status == ReadStatus.EXCLUDED:
@@ -1024,6 +1025,15 @@ def _prepare_file(
         )
 
     mode = "scan_only" if read_outcome.status == ReadStatus.SCAN_ONLY_TEXT_READY else "mask"
+    if read_outcome.encoding_fallback and run_id is not None:
+        # Yalnizca kodlama adi yazilir; icerik/bayt asla (bkz. modul ilkesi).
+        db.add(AuditLog(
+            run_id=run_id, file_path=rel, action="skipped",
+            detail=(
+                f"validation_warning; encoding_fallback encoding={read_outcome.encoding}; "
+                "metin kodlamasi tespit edilemedi, baytlar birebir korunarak okundu"
+            ),
+        ))
     if run_id is not None:
         db.add(AuditLog(
             run_id=run_id, file_path=rel, action="skipped",
