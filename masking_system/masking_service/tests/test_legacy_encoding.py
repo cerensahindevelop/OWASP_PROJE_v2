@@ -224,11 +224,6 @@ def test_non_latin_guess_prefers_cp1254_for_clearly_turkish_text(guess):
     assert prefer_turkish_encoding(_TURKISH.encode("cp1254"), guess) == "cp1254"
 
 
-@pytest.mark.parametrize("text", ["değer hesap", "GÜVENLİK sunucu", "için şube"])
-def test_non_latin_guess_is_kept_with_too_few_turkish_letters(text):
-    assert prefer_turkish_encoding(text.encode("cp1254"), "big5") == "big5"
-
-
 @pytest.mark.parametrize("encoding,text", [
     ("big5", "這是一個測試檔案，包含客戶資料與伺服器設定。"),
     ("johab", "이것은 고객 데이터와 서버 설정을 포함한 테스트 파일입니다."),
@@ -249,3 +244,47 @@ def test_genuine_foreign_text_keeps_its_encoding(encoding, text):
 def test_classify_bytes_short_turkish_misread_as_cjk_is_fixed(text):
     # Olculen gercek ornekler: charset_normalizer bunlari johab/big5hkscs sanıyordu.
     assert classify_bytes(text.encode("cp1254")) == (True, "cp1254")
+
+
+# --- Kisa dosyalar (3'ten az Turkce'ye ozgu harf) ---
+# Olcum: 1-3 kelimelik Turkce dosyalarin ~%33'u Latin disi bir kodlama
+# sanilip yanlis okunuyordu. Ikinci yol (kullanici onayli): ASCII-disi
+# karakterlerin TAMAMI Turk alfabesinden ve her biri ASCII harf iceren bir
+# kelimenin parcasi. Tek basina duran bir harf yetmez.
+
+@pytest.mark.parametrize("text", [
+    "// Güncelleme\n", "# şirket\n", "// değer\n", "// ağ\n", "// yapılandırma\n",
+    'x = "sunucu özel"\n', "Güncelleme için\n", "// düşüş\n",
+])
+@pytest.mark.parametrize("guess", ["cp1006", "big5", "big5hkscs", "johab", "utf_16_le", "utf_16_be"])
+def test_short_turkish_word_overrides_non_latin_guess(text, guess):
+    assert prefer_turkish_encoding(text.encode("cp1254"), guess) == "cp1254"
+
+
+@pytest.mark.parametrize("text", [
+    "// ü\n",           # kelimede ASCII harf yok
+    "// Güncelleme ³\n",  # Turk alfabesi disi karakter var
+    "// ağ ¹o\n",
+])
+def test_short_rule_needs_turkish_words_only(text):
+    assert prefer_turkish_encoding(text.encode("cp1254"), "big5") == "big5"
+
+
+@pytest.mark.parametrize("encoding,text", [
+    ("big5", "// 修正錯誤"), ("big5", "// 客戶資料"), ("big5", "# 設定檔"), ("big5", 'x = "伺服器"'),
+    ("gb2312", "// 修复错误"), ("gb2312", "# 配置文件"),
+    ("euc_kr", "// 버그 수정"), ("euc_kr", "# 설정 파일"), ("johab", "// 고객 데이터"),
+    ("cp1251", "// Исправить ошибку"), ("cp1251", "# Настройки"),
+    ("cp1256", "// إصلاح الخطأ"), ("cp1253", "// Διόρθωση"), ("cp1255", "// תיקון באג"),
+])
+def test_short_genuine_foreign_comment_keeps_its_encoding(encoding, text):
+    raw = (text + "\n").encode(encoding)
+    assert prefer_turkish_encoding(raw, encoding) == encoding
+
+
+@pytest.mark.parametrize("text", ["# şirket\n", "// değer\n", "// yapılandırma\n", "Güncelleme için\n"])
+def test_classify_bytes_reads_short_turkish_file_as_cp1254(text):
+    # Olculen gercek ornekler: cp1006/big5hkscs/utf_16 saniliyordu.
+    raw = text.encode("cp1254")
+    is_text, encoding = classify_bytes(raw)
+    assert is_text and raw.decode(encoding) == text

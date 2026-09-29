@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import codecs
+import re
 
 from app.services import bom_codecs  # Register persistent, endian-specific BOM codecs.
 
@@ -60,6 +61,14 @@ _TURKISH_SPECIFIC_LETTERS = frozenset("şğıİŞĞ")
 _TURKISH_ALPHABET_NON_ASCII = frozenset("şğıİŞĞçöüÇÖÜâîûÂÎÛ")
 _MIN_TURKISH_LETTERS_FOR_NON_LATIN = 3
 _MIN_TURKISH_ALPHABET_RATIO_FOR_NON_LATIN = 0.8
+
+# Kisa dosyalar icin ikinci yol: "// Güncelleme" gibi bir satirda 3 Turkce'ye
+# ozgu harf bile olmayabilir (olcum: 1-3 kelimelik Turkce dosyalarin ~%33'u
+# yanlis okunuyordu). Burada sayi yerine yapi aranir: ASCII-disi karakterlerin
+# TAMAMI Turk alfabesinden ve her biri ASCII harf iceren bir kelimenin
+# parcasi. Gercek yabanci metin cp1254 ile "³o", "Ý¹" gibi alfabe-disi
+# sembollere donusur ve bu sarti saglayamaz (27 kisa yabanci ornekte 0 hata).
+_LETTER_WORD_RE = re.compile(r"[^\W\d_]+")
 
 # Asla cp1254'e cevrilmeyen, zaten Turkce olan DOS/Mac kodlamalari. utf-8
 # ailesi ve BOM'lu (-sig) codec'ler de hic cevrilmez (bkz. prefer_turkish_encoding).
@@ -125,8 +134,22 @@ def _is_clearly_turkish(decoded: str) -> bool:
         return False
     specific = sum(char in _TURKISH_SPECIFIC_LETTERS for char in non_ascii)
     alphabet = sum(char in _TURKISH_ALPHABET_NON_ASCII for char in non_ascii)
-    return (specific >= _MIN_TURKISH_LETTERS_FOR_NON_LATIN
-            and alphabet / len(non_ascii) >= _MIN_TURKISH_ALPHABET_RATIO_FOR_NON_LATIN)
+    if (specific >= _MIN_TURKISH_LETTERS_FOR_NON_LATIN
+            and alphabet / len(non_ascii) >= _MIN_TURKISH_ALPHABET_RATIO_FOR_NON_LATIN):
+        return True
+    return alphabet == len(non_ascii) and _only_in_latin_words(decoded)
+
+
+# Her ASCII-disi harf, en az bir ASCII harf de iceren bir kelimenin parcasi mi.
+# ASCII-disi karakter tasiyan kelime-disi (harf olmayan) bir karakter de reddedilir.
+def _only_in_latin_words(decoded: str) -> bool:
+    covered = 0
+    for word in _LETTER_WORD_RE.findall(decoded):
+        non_ascii = sum(not char.isascii() for char in word)
+        if non_ascii and not any(char.isascii() for char in word):
+            return False
+        covered += non_ascii
+    return covered == sum(not char.isascii() for char in decoded)
 
 
 # Tahmin edilen kodlama yerine cp1254'u tercih etmeli mi karar verir:
