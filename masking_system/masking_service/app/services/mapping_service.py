@@ -55,7 +55,7 @@ from app.services.overlap_resolver import OverlapConflict, OverlapResolver
 from app.services.presidio_detector import PresidioDetector, PresidioRuleSpec
 from app.services.rule_engine import JSON_BARE_INTEGER_RE, JSON_NUMERIC_COUNTER_NAMESPACE, Match, RuleSpec, find_matches, make_json_numeric_placeholder
 from app.services.string_literal_index import StringLiteralIndex
-from app.services.term_classifier import classify_term
+from app.services.term_classifier import classify_term, is_generic_code_token
 from app.services.placeholder_policy import (
     CORPORATE_PLACEHOLDER_PREFIX,
     is_corporate_rule,
@@ -551,6 +551,13 @@ async def detect_matches(
     suppressed_results: list[tuple[DetectionResult, int]] = []
     policy = getattr(orchestrator, "decision_policy", None)
     for result in final_results:
+        if result.kaynak_motor in ("llm", "katman2_presidio") and not any(
+            ch.isalnum() for ch in (result.deger or "")
+        ):
+            # `&&`, `@`, `=` gibi harf/rakam icermeyen olasiliksal bulgular
+            # hassas deger olamaz; maskelenirse kodu bozar.
+            ignored_llm_results.append(result)
+            continue
         suppression = policy.is_suppressed(result, str(metadata.get("file_path", ""))) if (
             policy is not None and result.kaynak_motor == "llm"
         ) else None
@@ -559,6 +566,10 @@ async def detect_matches(
             continue
         if result.kaynak_motor == "llm":
             route = _llm_confidence_route(result.guven_seviyesi)
+            if is_generic_code_token(result.deger):
+                # `default`, `export`, `client` gibi genel/anahtar kelime
+                # degerler kodu bozar ve hassas degildir.
+                route = "ignore"
             if route == "review":
                 review_results.append(result)
                 continue
@@ -633,7 +644,7 @@ def apply_detections(
             db.add(AuditLog(
                 run_id=run_id, file_path=file_path or "", action="skipped",
                 detail=(f"finding={result.tip} ai_confidence={result.guven_seviyesi} "
-                        f"line={_line_number(text, result.start)} final=below_auto_mask_threshold"),
+                        f"source={result.kaynak_motor} line={_line_number(text, result.start)} final=not_masked"),
             ))
         for result, decision_id in outcome.suppressed_results:
             db.add(AuditLog(

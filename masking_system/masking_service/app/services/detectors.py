@@ -196,6 +196,7 @@ def detection_to_match(result: DetectionResult) -> Match:
         end=result.end,
         entity_type=result.tip,
         source_detector=result.kaynak_motor,
+        confidence=result.guven_seviyesi,
     )
 
 

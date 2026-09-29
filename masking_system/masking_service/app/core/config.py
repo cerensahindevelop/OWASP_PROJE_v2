@@ -138,6 +138,12 @@ class VLLMSettings(BaseSettings):
         "Ollama Parallel:1 icin 1; vLLM icin benchmark ile belirlenir. "
         "Ayri process/worker/CLI sinirlari toplanir; dagitik kota degildir.",
     )
+    presence_penalty: float = Field(
+        0.0, ge=0.0, le=2.0,
+        description="0'dan buyukse isteklere presence_penalty eklenir. Qwen3.x thinking kapaliyken "
+        "1.5 onerir; greedy (temperature=0) cozumde modelin ayni bulguyu tekrarlayip max_tokens'i "
+        "doldurmasini (finish_reason=length) engeller.",
+    )
     auto_mask_min_confidence: Literal["yuksek", "orta"] = Field(
         "orta",
         description="Bu guven seviyesinde ve ustundeki LLM tespitleri insan onayi beklemeden "

@@ -94,3 +94,54 @@ def classify_term(term: str) -> TermClassification:
         return TermClassification(normalized, "suspicious", f"'{normalized}' yaygin/genel bir kelime")
 
     return TermClassification(normalized, "ok", None)
+
+
+# Python disindaki yaygin dillerin (JS/TS, Java/Kotlin/C#, SQL, shell, YAML)
+# anahtar kelimeleri ve kod/config'te her yerde gecen genel tokenlar. LLM bir
+# bunlardan birini "kuruma ozgu" diye isaretlerse deger maskelenmez: tek bir
+# `default`/`export` bulgusu tutarlilik gecisiyle projedeki TUM dosyalara
+# yayilip sozdizimini bozuyordu.
+_CODE_KEYWORDS = {
+    # JS/TS
+    "abstract", "any", "as", "async", "await", "boolean", "break", "case", "catch", "class", "const",
+    "constructor", "continue", "debugger", "declare", "default", "delete", "do", "else", "enum", "export",
+    "extends", "false", "finally", "for", "from", "function", "get", "if", "implements", "import", "in",
+    "infer", "instanceof", "interface", "is", "keyof", "let", "module", "namespace", "never", "new", "null",
+    "number", "object", "of", "package", "private", "protected", "public", "readonly", "require", "return",
+    "satisfies", "set", "static", "string", "super", "switch", "symbol", "this", "throw", "true", "try",
+    "type", "typeof", "undefined", "unique", "unknown", "var", "void", "while", "with", "yield",
+    "use client", "use server", "use strict", "props", "children", "state", "props", "react", "next",
+    # Java/Kotlin/C#
+    "byte", "char", "double", "final", "float", "int", "long", "native", "short", "synchronized",
+    "throws", "transient", "volatile", "val", "fun", "override", "internal", "sealed", "data", "object",
+    "void", "using", "var", "record",
+    # SQL
+    "select", "insert", "update", "delete", "where", "join", "left", "right", "inner", "outer", "group",
+    "order", "by", "having", "limit", "offset", "table", "create", "drop", "alter", "index", "primary",
+    "foreign", "references", "values", "into", "null", "not", "and", "or", "database", "schema", "grant",
+    # shell / devops / config
+    "echo", "export", "then", "fi", "done", "esac", "local", "source", "sudo", "bash", "sh", "env",
+    "true", "false", "yes", "no", "on", "off", "localhost", "latest", "stable", "production", "staging",
+    "development", "dev", "prod", "debug", "info", "warn", "warning", "error", "http", "https", "api",
+    "version", "name", "image", "volumes", "services", "ports", "environment", "labels", "networks",
+}
+_CODE_KEYWORDS_FOLDED = {word.casefold() for word in _CODE_KEYWORDS}
+
+
+def is_generic_code_token(value: str) -> bool:
+    """True if `value` is too generic to be a sensitive/corporate identifier.
+
+    Python anahtar kelimeleri/stdlib modulleri, diger dillerin anahtar
+    kelimeleri, yaygin genel kelimeler, 3 karakterden kisa ya da salt sayisal
+    degerler. Salt sayisal degerler (orn. sicil no) deterministik kurallarla
+    yakalanir; bu fonksiyon LLM/Presidio gibi olasiliksal kaynaklar icindir.
+    """
+    normalized = (value or "").strip().strip("\"'`=:;,.-")
+    folded = normalized.casefold()
+    if folded in _CODE_KEYWORDS_FOLDED:
+        return True
+    if normalized.isdigit():
+        # Kisa sayilar (port, surum, sayac) geneldir; uzun sayilar (sicil,
+        # kimlik, hesap no) ayirt edicidir.
+        return len(normalized) < 6
+    return classify_term(normalized).status != "ok"

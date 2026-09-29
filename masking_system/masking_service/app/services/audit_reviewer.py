@@ -97,6 +97,7 @@ def load_audit_prompt() -> str:
 # vLLM'e gonderilecek denetim istegini (prompt + maskelenmis metin + sema) hazirlar.
 def build_audit_request(
     masked_text: str, model: str, seed: int, max_tokens: int = 512, disable_thinking: bool = False,
+    presence_penalty: float = 0.0,
 ) -> dict:
     payload = {
         "model": model,
@@ -114,6 +115,8 @@ def build_audit_request(
     }
     if disable_thinking:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if presence_penalty:
+        payload["presence_penalty"] = presence_penalty
     return payload
 
 
@@ -201,6 +204,7 @@ async def audit_masked_text(masked_text: str, vllm_settings) -> AuditVerdict:
                 chunk, vllm_settings.model, getattr(vllm_settings, "seed", 42),
                 max_tokens=getattr(vllm_settings, "max_tokens", 512),
                 disable_thinking=getattr(vllm_settings, "disable_thinking", False),
+                presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
             )
             verdict = await metrics.request(vllm_settings, payload, call_vllm, parse_audit_response, index)
             verified, dropped = verify_audit_findings(chunk, verdict.findings)

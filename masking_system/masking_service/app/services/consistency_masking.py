@@ -15,10 +15,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 import unicodedata
 
 from app.db.models import ValueMapping
 from app.services.rule_engine import JSON_BARE_INTEGER_RE, Match, PLACEHOLDER_RE, RuleSpec
+from app.services.term_classifier import is_generic_code_token
 from app.services.token_boundary_validator import TokenBoundaryValidator
 from app.services.string_literal_index import StringLiteralIndex
 
@@ -37,6 +39,93 @@ class SensitiveValueEntry:
     entity_type: str
     source_detectors: set[str] = field(default_factory=set)
     rule: RuleSpec | None = None
+    # True: deterministik bir kaynaktan (regex/sozluk/parametrik/kurumsal
+    # terim/ozel Presidio kurali/checksum'li Presidio tipi). False: olasiliksal
+    # kaynak; kod dosyalarinda yalnizca string ve yorum icinde uygulanir.
+    authoritative: bool = False
+
+
+# --- Registry kalite kapisi -------------------------------------------------
+# Registry'deki bir deger "dogrulanmis hassas deger" sayilir: projedeki HER
+# dosyada zorla maskelenir ve final taramada tek bir acik gecisi bile dosyayi
+# ciktidan dusurur. Bu yuzden ilk turda mapping ureten her bulgu otorite
+# sayilamaz. Gercek bir calismada spaCy NER'in markdown'da `useEffect`/`&&`
+# degerlerini ORGANIZATION, `0`/`1` degerlerini DATE_TIME diye isaretlemesi
+# registry uzerinden ~40.000 ek degisiklige ve yuzlerce dosyanin
+# (sozdizimi/round-trip) dusmesine yol acti.
+
+_DETERMINISTIC_PATTERN_TYPES = {"regex", "parametric", "presidio"}
+# Presidio'nun regex + checksum/format dogrulamali yerlesik tipleri.
+_PRESIDIO_STRUCTURED_TYPES = {"EMAIL_ADDRESS", "IP_ADDRESS", "CREDIT_CARD", "IBAN_CODE", "CRYPTO"}
+_WEAK_MIN_LENGTH = 4
+_PERSON_NAME_RE = re.compile(r"[^\W\d_][^\W\d_'’.-]*(?:\s+[^\W\d_][^\W\d_'’.-]*)+")
+
+
+def _has_word_content(value: str) -> bool:
+    return any(ch.isalnum() for ch in value)
+
+
+_WEAK_MIN_NUMERIC_ID_LENGTH = 6
+
+
+def _weak_value_ok(value: str, *, allow_numeric_id: bool = False) -> bool:
+    stripped = value.strip()
+    if stripped.isdigit():
+        # Kisa sayilar (0, 1, 4, port, surum) asla; yuksek guvenli LLM'in
+        # baglamdan buldugu uzun kimlik numaralari (sicil vb.) yayilabilir.
+        return allow_numeric_id and len(stripped) >= _WEAK_MIN_NUMERIC_ID_LENGTH
+    if len(stripped) < _WEAK_MIN_LENGTH:
+        return False
+    if not any(ch.isalpha() for ch in stripped):
+        return False
+    return not is_generic_code_token(stripped)
+
+
+def registry_authority(original_value: str, source: str, match: Match | None = None) -> str | None:
+    """Return 'authoritative', 'weak' or None (not admitted) for a first-pass value.
+
+    - Deterministik kaynaklar (sozluk/kurumsal terim/ogrenilmis karar, regex ve
+      secret kurallari, parametrik proje/sicil/branch, ozel Presidio kurallari,
+      checksum'li Presidio tipleri): harf/rakam iceriyorsa otorite.
+    - Yuksek guvenli LLM bulgulari ve Presidio PERSON (ad soyad biciminde):
+      bicim kapisindan (>=4 karakter, harf iceren, salt sayi olmayan, genel
+      kelime/anahtar kelime olmayan) gecerse 'weak'.
+    - Diger her sey (Presidio ORGANIZATION/DATE_TIME/NRP/LOCATION/
+      US_DRIVER_LICENSE vb., orta/dusuk guvenli LLM bulgulari): alinmaz;
+      kendi dosyasinda maskelenmis olarak kalir, projeye yayilmaz.
+    """
+    value = original_value or ""
+    if not _has_word_content(value):
+        return None
+    rule = match.rule if match is not None else None
+    pattern_type = rule.pattern_type if rule is not None else None
+    entity_type = ((match.entity_type if match is not None else None) or "").upper()
+    if source == "dictionary" or pattern_type in _DETERMINISTIC_PATTERN_TYPES:
+        return "authoritative"
+    if source == "katman2_presidio":
+        if entity_type in _PRESIDIO_STRUCTURED_TYPES:
+            return "authoritative"
+        if entity_type == "PERSON" and _PERSON_NAME_RE.fullmatch(value.strip()) and _weak_value_ok(value):
+            return "weak"
+        return None
+    if source == "llm":
+        confidence = match.confidence if match is not None else None
+        if confidence == "yuksek" and _weak_value_ok(value, allow_numeric_id=True):
+            return "weak"
+        return None
+    return None
+
+
+_CODE_SUFFIXES = {
+    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte",
+    ".py", ".java", ".kt", ".kts", ".scala", ".groovy", ".cs", ".go", ".rs", ".rb", ".php",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".swift", ".m", ".sh", ".bash", ".zsh", ".ps1", ".sql",
+    ".gradle",
+}
+
+
+def _is_code_file(file_path: str) -> bool:
+    return Path(file_path).suffix.lower() in _CODE_SUFFIXES
 
 
 class SensitiveValueRegistry:
@@ -69,6 +158,9 @@ class SensitiveValueRegistry:
 
             entity_type = match.entity_type or match.rule.category
             source = match.source_detector or "unknown"
+            authority = registry_authority(original_value, source, match)
+            if authority is None:
+                continue
             existing = self._entries.get(normalized)
             if existing is None:
                 self._entries[normalized] = SensitiveValueEntry(
@@ -77,19 +169,27 @@ class SensitiveValueRegistry:
                     entity_type=entity_type,
                     source_detectors={source},
                     rule=match.rule,
+                    authoritative=authority == "authoritative",
                 )
             else:
                 existing.source_detectors.add(source)
+                if authority == "authoritative" and not existing.authoritative:
+                    existing.authoritative = True
+                    existing.rule = match.rule
 
 
     def add_mapping_values(self, values: list[tuple[str, str]]) -> None:
-        """Register (original_value, entity_type) pairs from stored mappings.
+        """Register (original_value, entity_type) pairs of DETERMINISTIC stored mappings.
 
         Karantinadan sonradan serbest birakilan bir dosya export'un bellek-ici
-        registry'sini artik goremez; ayni kontrolu yapabilmek icin registry,
-        o islemin DB'deki eslemelerinden yeniden kurulur.
+        registry'sini artik goremez; ayni kontrolu yapabilmek icin registry o
+        islemin DB'deki eslemelerinden yeniden kurulur. Kaynagi/guveni DB'de
+        tutulmayan olasiliksal eslemeler (kural kimligi olmayanlar) cagiran
+        tarafindan verilmez.
         """
         for original_value, entity_type in values:
+            if not _has_word_content(original_value or ""):
+                continue
             normalized = normalize_sensitive_value(original_value or "")
             if not normalized or PLACEHOLDER_RE.fullmatch(original_value):
                 continue
@@ -98,6 +198,7 @@ class SensitiveValueRegistry:
                 original_value=original_value,
                 entity_type=entity_type,
                 source_detectors={"stored_mapping"},
+                authoritative=True,
             ))
 
 
@@ -122,10 +223,18 @@ def _is_word_char(char: str) -> bool:
 
 
 def _has_safe_boundaries(text: str, start: int, end: int, value: str) -> bool:
-    """Reject word/identifier substring matches such as ABC in ABCService."""
-    if value and _is_word_char(value[0]) and start > 0 and _is_word_char(text[start - 1]):
+    """Reject spans whose replacement would fuse with neighbouring text.
+
+    Placeholder'lar `mask_` ile baslar ve rakamla biter. Komsu karakter bir
+    kelime karakteriyse (harf/rakam/_) degerin kendi son karakteri ne olursa
+    olsun yer tutucu komsusuyla birlesir: `default=` + `noprint_wrappers`
+    -> `mask_x_233noprint_wrappers` (cozulemez) ya da `ERP-` + `2026` ->
+    `mask_x_12026` (baska bir esleme gibi cozulur, uzunluk uyusmaz). Bu
+    yuzden sinir, degerin kenarina degil KOMSU karakterlere gore kontrol edilir.
+    """
+    if start > 0 and _is_word_char(text[start - 1]):
         return False
-    if value and _is_word_char(value[-1]) and end < len(text) and _is_word_char(text[end]):
+    if end < len(text) and _is_word_char(text[end]):
         return False
     return True
 
@@ -172,6 +281,7 @@ def find_consistency_occurrences(text: str, registry: SensitiveValueRegistry, *,
     accepted: list[ConsistencyOccurrence] = []
     string_index = StringLiteralIndex(text, file_path)
     is_json_file = Path(file_path).suffix.lower().lstrip(".") == "json"
+    is_code_file = _is_code_file(file_path)
 
     for entry in registry.entries():
         needle = entry.normalized_value
@@ -200,6 +310,16 @@ def find_consistency_occurrences(text: str, registry: SensitiveValueRegistry, *,
             # remains safe to replace next to language-neutral separators
             # such as ``.`` or ``(``; substring protection above still blocks
             # cases such as ABC inside ABCService.
+            # Olasiliksal kaynakli bir degerin baska bir dosyadaki karari, kod
+            # dosyasinin kendi baglamini ezmemeli: kodda yalnizca string ve
+            # yorum icinde degistirilir (ciplak kod token'i olarak asla).
+            if (
+                not entry.authoritative
+                and is_code_file
+                and string_index.enclosing(start, end) is None
+                and not string_index.in_comment(start, end)
+            ):
+                continue
             if not _EXACT_BOUNDARY_VALIDATOR.is_exact_span_allowed(
                 text,
                 start,
