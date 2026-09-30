@@ -24,10 +24,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.core.config import settings
 from app.services.llm_recognizer import (
     LLMRecognitionError, call_vllm, chunk_text, describe_file_context, require_complete_response,
     run_chunk_scans, scan_with_split, with_file_context,
 )
+from app.services.encoded_blobs import find_encoded_blobs
+from app.services.llm_input_view import build_llm_input_view
 from app.services.llm_runtime import LLMScanMetrics, current_llm_file
 from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE
 
@@ -194,14 +197,22 @@ def verify_audit_findings(text: str, findings: list[AuditFinding]) -> tuple[list
 # Maskelenmis metni LLM ile denetler ("hala bir ipucu kalmis mi?"). LLM kapaliysa risksiz sayar.
 # Chunk'lar tespit adimiyla ayni sekilde es zamanli denetlenir (toplam sinir:
 # llm_runtime._gate); ilk hatada kalan chunk'lar iptal edilir ve dosya karantinaya gider.
-async def audit_masked_text(masked_text: str, vllm_settings, file_path: str | None = None) -> AuditVerdict:
+async def audit_masked_text(
+    masked_text: str, vllm_settings, file_path: str | None = None, blob_min_chars: int | None = None,
+) -> AuditVerdict:
     if not vllm_settings.enabled:
         return AuditVerdict(risky=False)
     if not vllm_settings.host or not vllm_settings.model:
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
-    overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
-    chunks = chunk_text(masked_text, vllm_settings.max_file_chars, overlap_chars)
     file_path = file_path or current_llm_file()
+    # Gomulu ikili veri bloklari (base64 resim/ikon) denetime de gonderilmez;
+    # alintilar gorunum metninde dogrulanir, gizlenmeyen metin birebir aynidir.
+    if blob_min_chars is None:
+        blob_min_chars = settings.scan.encoded_blob_min_chars
+    blobs = find_encoded_blobs(masked_text, blob_min_chars)
+    view = build_llm_input_view(masked_text, vllm_settings, blob_spans=blobs, phase="audit", file_path=file_path)
+    overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
+    chunks = chunk_text(view.text, vllm_settings.max_file_chars, overlap_chars)
     file_context = describe_file_context(file_path)
     with LLMScanMetrics("audit", len(chunks), file_path) as metrics:
         async def audit_chunk(index: int, offset: int, chunk: str) -> list[AuditFinding]:

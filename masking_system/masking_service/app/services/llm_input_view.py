@@ -17,9 +17,14 @@ eslenemez ve atilir (o aralik zaten Katman 1 tarafindan maskelenir).
 
 from __future__ import annotations
 
+import logging
 import re
 from bisect import bisect_right
 from dataclasses import dataclass
+
+from app.services.encoded_blobs import ENCODED_BLOB_CATEGORY
+
+logger = logging.getLogger("uvicorn.error.llm")
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -46,6 +51,10 @@ class RedactedView:
     @property
     def is_identity(self) -> bool:
         return not self.regions
+
+    @property
+    def hidden_chars(self) -> int:
+        return sum(region.orig_end - region.orig_start for region in self.regions)
 
     def to_original(self, start: int, end: int) -> tuple[int, int] | None:
         """Gorunumdeki [start, end) araligini orijinal metne esler.
@@ -138,3 +147,27 @@ def build_redacted_view(text: str, spans: list[tuple[int, int, str]]) -> Redacte
         cursor = end
     parts.append(text[cursor:])
     return RedactedView(text="".join(parts), regions=tuple(regions))
+
+
+def build_llm_input_view(
+    text: str, vllm_settings, known_spans: list[tuple[int, int, str]] | None = None,
+    blob_spans: list[tuple[int, int]] | None = None, *,
+    phase: str = "detection", file_path: str | None = None,
+) -> RedactedView:
+    """LLM'e gidecek gorunumu kurar: Katman 1'in kesin bulgulari
+    (VLLM_REDACT_KNOWN_FINDINGS) ve gomulu ikili veri bloklari
+    (SCAN_ENCODED_BLOB_MIN_CHARS; orn. .resx icindeki base64 resimler)
+    gecici yer tutucuyla degistirilir. Loga yalnizca sayilar yazilir.
+    """
+    spans: list[tuple[int, int, str]] = []
+    if known_spans and getattr(vllm_settings, "redact_known_findings", False):
+        spans.extend(known_spans)
+    blobs = blob_spans or []
+    spans.extend((start, end, ENCODED_BLOB_CATEGORY) for start, end in blobs)
+    view = build_redacted_view(text, spans)
+    if blobs:
+        logger.info(
+            "llm_input_encoded_blobs file=%r phase=%s blobs=%d hidden_chars=%d original_chars=%d sent_chars=%d",
+            file_path, phase, len(blobs), view.hidden_chars, len(text), len(view.text),
+        )
+    return view

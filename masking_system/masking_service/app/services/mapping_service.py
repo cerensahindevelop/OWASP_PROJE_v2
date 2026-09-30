@@ -465,7 +465,7 @@ def build_orchestrator(
     # dururdu, LLMDetector'a hic iletilmiyordu.
     llm_instructions = [r.description for r in rules if r.pattern_type == "llm" and r.description]
     registry.register(LLMDetector(settings.vllm, extra_instructions=llm_instructions))
-    orchestrator = DetectionOrchestrator(registry)
+    orchestrator = DetectionOrchestrator(registry, encoded_blob_min_chars=settings.scan.encoded_blob_min_chars)
     orchestrator.decision_policy = decision_policy
     return orchestrator
 

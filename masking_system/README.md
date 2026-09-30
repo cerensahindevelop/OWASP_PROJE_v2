@@ -62,6 +62,14 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
   bunları tekrar listelemez, çıktı token'ı ve yanıt kesilmesi azalır. Çıktıdaki
   maskeleme her zaman orijinal metin üzerinden yapılır. Kapatmak için
   `VLLM_REDACT_KNOWN_FINDINGS=false`. Presidio bulguları gizlenmez.
+- **Gömülü ikili veri LLM'e ve Presidio'ya gitmez.** `.resx` içindeki base64
+  resim/ikonlar, hex dökümleri gibi `SCAN_ENCODED_BLOB_MIN_CHARS` (varsayılan
+  512) ve üstü uzunluktaki bloklar çözülerek sınıflandırılır; gerçekten ikili
+  veri olanlar LLM'e `mask_kodlanmis_ikili_veri_<n>` yer tutucusuyla gider,
+  Presidio'ya boşluk olarak girer. Okunabilir metne çözülen base64 (ör. base64
+  ile gizlenmiş bir config) ve identifier/yol listeleri gönderilmeye devam eder.
+  Katman 1 (sözlük/regex) blokları yine tarar, çıktı metni değişmez. Log satırı:
+  `llm_input_encoded_blobs ... blobs=N hidden_chars=M`. Kapatmak için `0`.
 - **Kelime ortası eşleşme yok.** LLM'in bildirdiği değer yalnızca kelime/identifier
   sınırında eşlenir (`PoseidonGatewayClient` içindeki `Poseidon` eşlenir,
   `Alignment` içindeki `Ali` eşlenmez). `VLLM_MIN_AUTO_MASK_CHARS` (varsayılan 3)

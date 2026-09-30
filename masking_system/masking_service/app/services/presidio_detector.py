@@ -13,6 +13,7 @@ from pathlib import Path
 # dogal-dil kategorileri icin rastgelelik/entropi filtresi. rule_engine:
 # ozel kurallarin RuleSpec'e cevrimi ve cakisma yardimcisi (_overlaps).
 from app.services.detectors import DetectionResult, DetectorOutput, placeholder_prefix_for_type, synthetic_llm_rule
+from app.services.encoded_blobs import blank_spans
 from app.services.entropy import NATURAL_LANGUAGE_ENTITY_TYPES, is_high_entropy
 from app.services.rule_engine import RuleSpec, _compile_flags, _overlaps
 # chunk_text: buyuk metinleri overlap'li parcalara bolen ortak yardimci -
@@ -183,10 +184,14 @@ class PresidioDetector:
         allow_spans = self._find_allow_list_spans(content)
         entities = self._entities_for_file(metadata)
         results: list[DetectionResult] = []
+        # Gomulu ikili veri (base64 resim/ikon) analize bosluk olarak girer:
+        # spaCy orada anlamsiz PERSON/ORGANIZATION bulgulari uretip resim
+        # verisini maskeletmesin ve zaman harcamasin. Ofsetler degismez.
+        analysis_text = blank_spans(content, (metadata or {}).get("encoded_blob_spans", []))
 
         # spaCy/Presidio CPU-bound: olay dongusunde calisirsa eszamanli LLM
         # isteklerinin zamanlayicilari ilerlemez ve sahte zaman asimi olusur.
-        analyzed = await asyncio.to_thread(self._analyze_serialized, content, entities)
+        analyzed = await asyncio.to_thread(self._analyze_serialized, analysis_text, entities)
         for item in analyzed:
             span = (item.start, item.end)
             if _overlaps(span, protected_spans) or _overlaps(span, allow_spans):

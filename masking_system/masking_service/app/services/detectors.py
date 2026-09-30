@@ -17,6 +17,7 @@ from typing import Protocol
 
 # Katman 1 (sozluk/regex) kural motoru: RuleSpec/Match veri tipleri ve
 # kurallari derleyip eslestiren fonksiyonlar buradan alinir.
+from app.services.encoded_blobs import find_encoded_blobs
 from app.services.rule_engine import Match, RuleSpec, compile_rules, find_matches_compiled
 
 
@@ -100,13 +101,17 @@ class DetectorRegistry:
 # (bkz. asagidaki scan metodunun NOT'u).
 class DetectionOrchestrator:
     # Calistirilacak detector'larin kayitli oldugu registry'yi saklar.
-    def __init__(self, registry: DetectorRegistry) -> None:
+    # encoded_blob_min_chars: gomulu ikili veri bloklari dosya basina bir kez
+    # bulunur ve metadata["encoded_blob_spans"] ile katmanlara verilir (0 = kapali).
+    def __init__(self, registry: DetectorRegistry, encoded_blob_min_chars: int = 0) -> None:
         self.registry = registry
+        self.encoded_blob_min_chars = encoded_blob_min_chars
 
     # Tum kayitli detector katmanlarini (Rule->Presidio->LLM) sirayla calistirip
     # bulgularini birlestirir. Cakisma cozumu burada degil, OverlapResolver'da yapilir.
     async def scan(self, content: str, metadata: dict | None = None) -> DetectorOutput:
         metadata = dict(metadata or {})
+        metadata.setdefault("encoded_blob_spans", find_encoded_blobs(content, self.encoded_blob_min_chars))
         base_consumed: list[tuple[int, int]] = list(metadata.get("consumed_spans", []))
         results: list[DetectionResult] = []
         already_masked: list[tuple[int, int]] = []

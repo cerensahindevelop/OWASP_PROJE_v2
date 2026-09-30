@@ -353,6 +353,18 @@ class ValidationSettings(BaseSettings):
     )
 
 
+# Tespit katmanlarinin ortak tarama ayarlari - SCAN_* on ekli ortam degiskenleri.
+class ScanSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="SCAN_", env_file=_ENV_FILE, extra="ignore")
+
+    encoded_blob_min_chars: int = Field(
+        512, ge=0,
+        description="Bu uzunluk ve ustundeki gomulu ikili veri bloklari (orn. .resx icindeki "
+        "base64 resim/ikon, hex dokum) Presidio ve LLM'e gonderilmez; okunabilir metne cozulen "
+        "base64 gonderilmeye devam eder. Katman 1 (sozluk/regex) bloklari yine tarar. 0 = kapali.",
+    )
+
+
 # Metin dosyasi kodlama tespitini yapilandiran ayarlar. On ek YOK: ortam
 # degiskeni dogrudan LEGACY_TEXT_ENCODINGS'tir.
 #
@@ -414,6 +426,7 @@ class Settings:
         self.web = WebSettings()
         self.validation = ValidationSettings()
         self.encoding = EncodingSettings()
+        self.scan = ScanSettings()
         self.lockfile = LockfileSettings()
 
     # Geriye donuk uyumluluk icin duz erisim: settings.database_url

@@ -51,7 +51,7 @@ import httpx
 from app.core.http_diagnostics import http_error_detail
 from app.services.detectors import LLM_FALLBACK_ENTITY_TYPE, DetectionResult, normalize_llm_entity_type
 from app.services.rule_engine import _overlaps
-from app.services.llm_input_view import RedactedView, build_redacted_view
+from app.services.llm_input_view import RedactedView, build_llm_input_view
 from app.services.text_chunking import chunk_text as _overlap_chunks
 from app.services.llm_runtime import LLMScanMetrics
 
@@ -443,14 +443,6 @@ async def run_chunk_scans(chunks: list[tuple[int, str]], scan_chunk) -> list:
         raise
 
 
-# Katman 1'in kesin bulgularini LLM girdisinden cikaran gorunumu kurar
-# (bkz. llm_input_view). Ayar kapaliysa ya da bulgu yoksa metin aynen gider.
-def _llm_input_view(text: str, known_spans: list[tuple[int, int, str]] | None, vllm_settings) -> RedactedView:
-    if not known_spans or not getattr(vllm_settings, "redact_known_findings", False):
-        return RedactedView.identity(text)
-    return build_redacted_view(text, known_spans)
-
-
 # Gorunum koordinatlarindaki bulguyu orijinal metne tasir; gecici yer
 # tutucuyla cakisan bulgu eslenemez ve atilir.
 def _to_original(view: RedactedView, detection: DetectionResult) -> DetectionResult | None:
@@ -471,6 +463,7 @@ async def find_llm_detections(
     extra_instructions: list[str] | None = None,
     repair_stats: FindingRepairStats | None = None,
     known_spans: list[tuple[int, int, str]] | None = None,
+    blob_spans: list[tuple[int, int]] | None = None,
 ) -> list[DetectionResult]:
     if not vllm_settings.enabled:
         return []
@@ -478,7 +471,9 @@ async def find_llm_detections(
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
 
     file_path = (metadata or {}).get("file_path")
-    view = _llm_input_view(text, known_spans, vllm_settings)
+    view = build_llm_input_view(
+        text, vllm_settings, known_spans, blob_spans, phase="detection", file_path=file_path,
+    )
     view_consumed = view.to_view_spans(consumed)
     overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
     chunks = chunk_text(view.text, vllm_settings.max_file_chars, overlap_chars)

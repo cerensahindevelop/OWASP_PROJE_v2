@@ -62,6 +62,7 @@ class LLMDetector:
             results = await find_llm_detections(
                 content, consumed, self.vllm_settings, metadata, self.extra_instructions,
                 repair_stats=repair_stats, known_spans=_known_spans(metadata),
+                blob_spans=metadata.get("encoded_blob_spans"),
             )
         except LLMRecognitionError as exc:
             detail = "LLM taramasi tamamlanamadi; dosya VALIDATION_FAILED"
