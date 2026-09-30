@@ -59,9 +59,11 @@ Onaydan sonra serbest bırakılan dosyalar çıktıdaki maskelenmiş yola yazıl
 aynı işlemin diğer dosyalarında maskelenen değerlere karşı tutarlılık
 kontrolünden geçer ve imzalı bütünlük kaydına eklenir.
 
-Karantinadaki bir dosya için "Yanlış Alarm" ya da "Maskele" seçildiğinde son
-LLM denetimi veritabanı yazma kilidi tutulmadan çalışır; bu sırada diğer
-export'lar beklemez. Dosya ve bütünlük kaydı ancak karar veritabanına
+Karantinadaki bir dosya için "Yanlış Alarm" ya da "Maskele" seçildiğinde ve
+inceleme kararları (onay/ret/dosyayı maskele) tamamlandığında son LLM denetimi
+veritabanı yazma kilidi tutulmadan çalışır; bu sırada diğer export'lar
+beklemez. İnceleme kararları denetimden önce kaydedilir; onaylanan değer
+maskelenemezse karar geri alınır. Dosya ve bütünlük kaydı ancak karar veritabanına
 kaydedilirse kalır; kayıt başarısız olursa geri alınır. Doğrulamadan geçemeyen
 bir karar kalıcı hale gelmez (yalnızca işlem kaydına yazılır). "Yanlış Alarm"
 denetimin gösterdiği tüm değerleri kapsar. Son denetim aynı değeri daha kısa
@@ -73,9 +75,17 @@ silinse bile değer export anındaki gerekçeden gösterilir. Bütünlük kaydı
 (manifest) güncellemesi işletim sistemi dosya kilidiyle korunur; backend birden
 fazla worker/süreçle çalıştırılabilir. Kilit dosyası çıktı klasörünün yanında
 (`.<klasör>.masking-manifest.lock`) durur, indirilen çıktıya girmez; 30 saniyede
-alınamazsa işlem hata verir ve tekrar denenebilir. İnceleme kararlarından
-sonraki son denetim, karar işleminin içinde çalıştığı için yazma kilidini
-tutmaya devam eder.
+alınamazsa işlem hata verir ve tekrar denenebilir.
+
+Aynı içerik, aynı karar: export sırasında bir dosyanın LLM denetim sonucu
+karantina kaydına şifreli olarak yazılır. Dosya içeriği ve denetim ayarları
+(model, prompt, parçalama, dosya adı) değişmeden serbest bırakılırsa model
+yeniden sorulmaz, kayıtlı sonuç kullanılır; böylece aynı dosya bir denemede
+geçip diğerinde takılmaz. İçerik değiştiyse (ör. "Maskele" ya da tutarlılık
+maskelemesi) model yeniden çalışır ve başarısız denemenin sonucu da kaydedilir.
+Modeli hiç çağırmadan üretilen "temiz" sonuçlar (LLM kapalı, denetim atlandı)
+kaydedilmez. Kayıt `alembic upgrade head` ile eklenen `denetim_sonucu`
+sütunundadır.
 
 Export web arayüzünde arka plan işi olarak çalışır; ekran işlenen/toplam dosya
 ilerlemesini gösterir. Export sırasında veritabanı yazma kilidi LLM

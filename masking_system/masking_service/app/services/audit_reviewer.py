@@ -84,6 +84,9 @@ class AuditFinding:
 class AuditVerdict:
     risky: bool
     findings: list[AuditFinding] = field(default_factory=list)
+    # False: model hic cagrilmadi (LLM kapali ya da denetim atlandi). Boyle bir
+    # sonuc kaydedilip yeniden kullanilmaz - denetimin yerini tutmaz.
+    audited: bool = True
 
     # Bulgulari insan-okunur tek bir metne birlestirir.
     def reasoning_text(self) -> str:
@@ -201,7 +204,7 @@ async def audit_masked_text(
     masked_text: str, vllm_settings, file_path: str | None = None, blob_min_chars: int | None = None,
 ) -> AuditVerdict:
     if not vllm_settings.enabled:
-        return AuditVerdict(risky=False)
+        return AuditVerdict(risky=False, audited=False)
     if not vllm_settings.host or not vllm_settings.model:
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
     file_path = file_path or current_llm_file()
@@ -251,3 +254,60 @@ async def audit_masked_text(
         for finding in verified:
             findings.setdefault(finding.ilgili_bolum or finding.aciklama, finding)
     return AuditVerdict(risky=bool(findings), findings=list(findings.values()))
+
+
+# ---------------------------------------------------------------------------
+# Ayni icerik, ayni karar: denetim sonucunun kaydi
+# ---------------------------------------------------------------------------
+# Model temperature=0 ile bile calismadan calismaya farkli alinti/bulgu
+# dondurebilir. Export'ta denetlenen icerik serbest birakma aninda BIREBIR
+# ayniysa, kayitli sonuc kullanilir; icerik ya da denetimi etkileyen bir ayar
+# (model, prompt, parcalama, ikili veri esigi, dosya adi) degistiyse anahtar
+# tutmaz ve model yeniden cagrilir. Kayit alintilari (acik degerleri) icerdigi
+# icin sifrelenir.
+
+def audit_record_key(content: str, file_path: str, vllm_settings, blob_min_chars: int | None = None) -> str:
+    import hashlib
+    if blob_min_chars is None:
+        blob_min_chars = settings.scan.encoded_blob_min_chars
+    material = {
+        "content": hashlib.sha256(content.encode("utf-8", "surrogatepass")).hexdigest(),
+        "file": describe_file_context(file_path),
+        "model": vllm_settings.model,
+        "prompt": hashlib.sha256(load_audit_prompt().encode("utf-8")).hexdigest(),
+        "max_file_chars": vllm_settings.max_file_chars,
+        "overlap": getattr(vllm_settings, "chunk_overlap_chars", 500),
+        "max_tokens": getattr(vllm_settings, "max_tokens", 1024),
+        "seed": getattr(vllm_settings, "seed", 42),
+        "disable_thinking": getattr(vllm_settings, "disable_thinking", False),
+        "presence_penalty": getattr(vllm_settings, "presence_penalty", 0.0),
+        "blob_min_chars": blob_min_chars,
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def encode_audit_record(verdict: AuditVerdict, key: str) -> str | None:
+    if not verdict.audited:
+        return None
+    from app.core.crypto import encrypt_value
+    payload = {
+        "version": 1, "key": key, "risky": verdict.risky,
+        "findings": [[f.aciklama, f.ilgili_bolum] for f in verdict.findings],
+    }
+    return encrypt_value(json.dumps(payload, ensure_ascii=False))
+
+
+def decode_audit_record(record: str | None, key: str) -> AuditVerdict | None:
+    """Kayit bu icerik+ayar anahtarina aitse sonucu dondurur; aksi halde None."""
+    if not record:
+        return None
+    from app.core.crypto import decrypt_value
+    try:
+        payload = json.loads(decrypt_value(record))
+        if payload.get("version") != 1 or payload.get("key") != key or not isinstance(payload.get("risky"), bool):
+            return None
+        findings = [AuditFinding(aciklama=str(a), ilgili_bolum=str(b)) for a, b in payload["findings"]]
+    except Exception:
+        # Bozuk/eski anahtarla sifrelenmis kayit: yeniden denetlenir (asla "temiz" sayilmaz).
+        return None
+    return AuditVerdict(risky=payload["risky"], findings=findings)

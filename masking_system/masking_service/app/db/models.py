@@ -543,6 +543,12 @@ class AuditWarning(Base):
         comment="Dosyanin export ciktisindaki MASKELENMIS goreli yolu. Serbest birakma bu yola "
         "yazar; file_path kaynak yoludur ve proje/kurum adini acik icerebilir. Eski kayitlarda NULL.",
     )
+    audit_record: Mapped[str | None] = mapped_column(
+        "denetim_sonucu", Text, nullable=True,
+        comment="Bu icerik icin alinmis son LLM denetim sonucu (sifreli; icerik ve denetim ayarlarinin "
+        "anahtariyla). Icerik birebir ayniysa serbest birakmada model yeniden cagrilmaz - ayni "
+        "icerik ayni karari alir. NULL: kayit yok ya da denetim yapilmadi.",
+    )
     status: Mapped[str] = mapped_column(
         "durum", String(20), nullable=False, default="pending",
         comment="'pending', 'confirmed' (risk gercek, dosya karantinada kalir) ya da "

@@ -79,7 +79,7 @@ def _cleanup(context_id: int) -> None:
             text("SELECT id FROM maskeleme_calismalari WHERE baglam_id=:c"), {"c": context_id}).all()]
         db.execute(text("DELETE FROM ogrenilen_bulgu_kararlari WHERE baglam_id=:c"), {"c": context_id})
         for run_id in run_ids:
-            for table in ("denetim_kaydi", "denetim_uyarilari", "islem_yer_tutucu_sayaclari"):
+            for table in ("denetim_kaydi", "gozden_gecirme_kuyrugu", "denetim_uyarilari", "islem_yer_tutucu_sayaclari"):
                 db.execute(text(f"DELETE FROM {table} WHERE calisma_id=:r"), {"r": run_id})
         db.execute(text("DELETE FROM deger_eslemeleri WHERE baglam_id=:c"), {"c": context_id})
         db.execute(text("DELETE FROM maskeleme_calismalari WHERE baglam_id=:c"), {"c": context_id})
@@ -340,3 +340,207 @@ def test_term_quarantine_shows_recorded_clear_value_when_dictionary_changed(db_s
     detail = describe_audit_warning(warning, db_session)
     assert detail["evidence"][0]["found_value"] == "Hakan Yilmaz"
     assert "⟦Hakan Yilmaz⟧" in detail["evidence"][0]["excerpt"]
+
+
+# 10 ------------------------------------------------------------------------
+# Inceleme kararlari (onay/ret/dosyayi maskele) sonrasi son denetim de yazma
+# kilidini tutmaz; maskeleme hatasi karari geri almaya devam eder.
+
+def _make_review_hold(db, tmp_path, values):
+    from app.db.models import ReviewQueue
+    content = "\n".join(f"key{i} = '{value}'" for i, value in enumerate(values)) + "\n"
+    context, run, warning = _make(db, tmp_path, content, reasoning="INCELEME_GEREKLI: karar bekliyor")
+    items = []
+    for value in values:
+        item = ReviewQueue(run_id=run.id, file_path=warning.file_path, found_value=value,
+                           entity_type="SECRET", confidence_level="orta", reason="risk")
+        db.add(item)
+        items.append(item)
+    db.flush()
+    return context, run, warning, items
+
+
+@pytest.mark.parametrize("action", ["approve", "reject", "mask_file"])
+def test_review_decision_does_not_hold_write_lock_during_final_audit(tmp_path, monkeypatch, action):
+    from app.services.review_service import ReviewService
+
+    with SessionLocal() as db:
+        context, _, warning, items = _make_review_hold(db, tmp_path, ["GizliDeger1"])
+        db.commit()
+        context_id, warning_id, item_id = context.id, warning.id, items[0].id
+
+    other_writer = {}
+
+    async def fake(content, _settings):
+        conn = sqlite3.connect(settings.database.resolved_path, timeout=0.5)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.rollback()
+            other_writer["ok"] = True
+        except sqlite3.OperationalError as exc:
+            other_writer["ok"] = False
+            other_writer["error"] = str(exc)
+        finally:
+            conn.close()
+        return AuditVerdict(risky=False)
+
+    monkeypatch.setattr(service_module, "audit_masked_text", fake)
+    try:
+        with SessionLocal() as db:
+            getattr(ReviewService(db), action)(item_id)
+            db.commit()
+            warning = db.get(AuditWarning, warning_id)
+            assert warning.status == "dismissed"
+        assert other_writer == {"ok": True}
+        released = (tmp_path / "output" / "src" / "config.py").read_text()
+        assert ("GizliDeger1" in released) is (action == "reject")
+    finally:
+        _cleanup(context_id)
+
+
+def test_review_masking_error_still_rolls_back_the_decision(tmp_path, monkeypatch):
+    from app.db.models import ReviewQueue
+    from app.services import review_masking
+    from app.services.review_service import ReviewService
+
+    with SessionLocal() as db:
+        context, _, _, items = _make_review_hold(db, tmp_path, ["GizliDeger1"])
+        db.commit()
+        context_id, item_id = context.id, items[0].id
+
+    def broken(*args, **kwargs):
+        raise ValueError("Otomatik maskeleme geri dönüş doğrulamasından geçemedi")
+
+    monkeypatch.setattr(review_masking, "mask_review_values", broken)
+    try:
+        with SessionLocal() as db:
+            with pytest.raises(ValueError, match="geri dönüş"):
+                ReviewService(db).approve(item_id)
+            db.rollback()
+        with SessionLocal() as db:
+            assert db.get(ReviewQueue, item_id).status == "pending"
+    finally:
+        _cleanup(context_id)
+
+
+# 11 ------------------------------------------------------------------------
+# Ayni icerik, ayni karar: kayitli denetim sonucu yeniden kullanilir.
+
+def _enable_llm(monkeypatch):
+    monkeypatch.setattr(settings.vllm, "enabled", True)
+    monkeypatch.setattr(settings.vllm, "host", "http://fake")
+    monkeypatch.setattr(settings.vllm, "model", "fake-model")
+
+
+def _counting_audit(monkeypatch, *quotes):
+    calls = {"n": 0}
+
+    async def fake(content, _settings):
+        calls["n"] += 1
+        findings = [AuditFinding("ad", quote) for quote in quotes if quote in content]
+        return AuditVerdict(risky=bool(findings), findings=findings)
+
+    monkeypatch.setattr(service_module, "audit_masked_text", fake)
+    return calls
+
+
+def _record(content, file_path, *quotes):
+    from app.services.audit_reviewer import audit_record_key, encode_audit_record
+    verdict = AuditVerdict(risky=bool(quotes), findings=[AuditFinding("ad", q) for q in quotes])
+    return encode_audit_record(verdict, audit_record_key(content, file_path, settings.vllm))
+
+
+def test_dismiss_reuses_recorded_verdict_for_identical_content(db_session, tmp_path, monkeypatch):
+    _enable_llm(monkeypatch)
+    content = "# sahibi KisiGizli\n# ekip Takim\n"
+    _, _, warning = _make(db_session, tmp_path, content, values=["KisiGizli"])
+    warning.audit_record = _record(content, warning.file_path, "KisiGizli")
+    # Model yeniden sorulsaydi bu kez baska bir sey bulacakti.
+    calls = _counting_audit(monkeypatch, "Takim")
+
+    released = asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
+
+    assert released.status == "dismissed"
+    assert calls["n"] == 0
+
+
+def test_changed_content_is_audited_again(db_session, tmp_path, monkeypatch):
+    _enable_llm(monkeypatch)
+    content = "owner = 'KisiGizli'\n"
+    _, _, warning = _make(db_session, tmp_path, content, values=["KisiGizli"])
+    warning.audit_record = _record(content, warning.file_path, "KisiGizli")
+    calls = _counting_audit(monkeypatch)
+
+    # mask() icerigi degistirir: kayit o icerige ait degil, model cagrilir.
+    asyncio.run(AuditWarningService(db_session).mask(warning.id))
+
+    assert calls["n"] == 1
+
+
+def test_failed_attempt_is_repeatable_with_the_same_verdict(db_session, tmp_path, monkeypatch):
+    _enable_llm(monkeypatch)
+    content = "# sahibi KisiGizli\n# yedek Ahmet\n"
+    _, _, warning = _make(db_session, tmp_path, content, values=["KisiGizli"])
+    calls = _counting_audit(monkeypatch, "Ahmet")
+
+    with pytest.raises(ValueError, match="bastırılmamış risk"):
+        asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
+    # Model artik "temiz" dese bile ayni icerik ayni karari alir.
+    _counting_audit(monkeypatch)
+    with pytest.raises(ValueError, match="bastırılmamış risk"):
+        asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
+    assert calls["n"] == 1
+
+
+def test_audit_record_is_bound_to_content_and_settings(monkeypatch):
+    from app.services.audit_reviewer import audit_record_key, decode_audit_record, encode_audit_record
+    _enable_llm(monkeypatch)
+    verdict = AuditVerdict(risky=True, findings=[AuditFinding("ad", "KisiGizli")])
+    key = audit_record_key("a = 'KisiGizli'", "src/a.py", settings.vllm)
+    record = encode_audit_record(verdict, key)
+
+    assert "KisiGizli" not in record  # sifreli
+    assert decode_audit_record(record, key) == verdict
+    assert decode_audit_record(record, audit_record_key("a = 'Baska'", "src/a.py", settings.vllm)) is None
+    assert decode_audit_record(record, audit_record_key("a = 'KisiGizli'", "src/b.yaml", settings.vllm)) is None
+    monkeypatch.setattr(settings.vllm, "model", "baska-model")
+    assert decode_audit_record(record, audit_record_key("a = 'KisiGizli'", "src/a.py", settings.vllm)) is None
+    assert decode_audit_record("bozuk-kayit", key) is None
+    # Modeli hic cagirmayan "temiz" sonuc kaydedilmez: denetimin yerini tutmaz.
+    assert encode_audit_record(AuditVerdict(risky=False, audited=False), key) is None
+
+
+def test_export_records_the_verdict_and_dismiss_reuses_it(tmp_path, monkeypatch):
+    from tests.test_review_rate_and_release import _cleanup as cleanup_project, _fake_llm, _project
+    from tests.test_exporter_failure_handling import _run_export
+    from app.services import exporter as exporter_module
+    from app.services.audit_reviewer import audit_record_key, decode_audit_record
+
+    project = _project()
+    try:
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "notes.txt").write_text("sahibi Hakan\nYilmaz\n", encoding="utf-8")
+        target = tmp_path / "target"
+
+        # Cok satirli alinti otomatik duzeltilmez: dosya karantinaya duser.
+        def audit(_chunk):
+            return {"risk_var": True, "bulgular": [{"aciklama": "kisi adi", "ilgili_bolum": "Hakan\nYilmaz"}]}
+
+        monkeypatch.setattr(exporter_module.settings.presidio, "use_builtin_recognizers", False)
+        calls = _fake_llm(monkeypatch, detections=[], audit=audit)
+        report = _run_export(source, target, project)
+        assert report.outcomes[0].final_state == "SECURITY_QUARANTINE"
+        audits_during_export = calls["audit"]
+
+        with SessionLocal() as db:
+            warning = db.scalars(select(AuditWarning).where(AuditWarning.run_id == report.run_id)).one()
+            key = audit_record_key(warning.masked_content, warning.file_path, settings.vllm)
+            recorded = decode_audit_record(warning.audit_record, key)
+            assert [f.ilgili_bolum for f in recorded.findings] == ["Hakan\nYilmaz"]
+            asyncio.run(AuditWarningService(db).dismiss(warning.id))
+            db.commit()
+        assert calls["audit"] == audits_during_export  # model yeniden cagrilmadi
+        assert (target / "notes.txt").is_file()
+    finally:
+        cleanup_project(project)

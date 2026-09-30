@@ -38,7 +38,7 @@ class ReviewService:
 
     # Bulguyu onaylar, degeri kalici bir placeholder'a baglar ve dosyanin
     # kalan kararlari bittiyse yeniden dogrulama akisini tetikler.
-    def approve(self, review_id: int) -> ReviewQueue:
+    def approve(self, review_id: int, *, finalize: bool = True) -> ReviewQueue:
         item = self.review_queue.transition_pending(review_id, status="approved")
         if item.run_id is not None and item.found_value:
             run = self.db.get(MaskingRun, item.run_id)
@@ -64,7 +64,8 @@ class ReviewService:
                             detail=f"gozden gecirme onayi ile eslendi: placeholder={mapping.placeholder_value}",
                         )
                     )
-        self._finalize_file_when_complete(item)
+        if finalize:
+            self._finalize_file_when_complete(item)
         return item
 
     def mask_file(self, review_id: int) -> dict:
@@ -88,7 +89,11 @@ class ReviewService:
         )).all())
         with self.db.begin_nested():
             for pending_id in ids:
-                self.approve(pending_id)
+                self.approve(pending_id, finalize=False)
+        # Son dogrulama savepoint disinda bir kez calisir: kararlari commit edip
+        # LLM denetimini yazma kilidi tutmadan yapar (bkz. finalize_review_hold).
+        self._finalize_file_when_complete(item)
+        self.db.refresh(hold)
         written = hold.status == "dismissed"
         return {"run_id": item.run_id, "file_path": item.file_path, "written": written,
                 "message": ("Riskli ifadeler sistem tarafından maskelendi, eşlemeler kaydedildi ve dosya çıktıya eklendi."

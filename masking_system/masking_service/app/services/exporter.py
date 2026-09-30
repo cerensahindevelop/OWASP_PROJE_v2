@@ -36,7 +36,7 @@ from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.core.exceptions import ExportInProgressError
 from app.db.models import AuditLog, AuditWarning, MaskingContext, MaskingRun, ValueMapping
-from app.services.audit_reviewer import AuditVerdict, audit_masked_text
+from app.services.audit_reviewer import AuditVerdict, audit_masked_text, audit_record_key, encode_audit_record
 from app.services.consistency_masking import (
     SensitiveValueRegistry,
     apply_consistency_replacements,
@@ -439,7 +439,7 @@ def _rule_breakdown(mappings, rule_names_by_id: dict[int, str]) -> dict[str, int
 # bir dosya icin DB'ye bir AuditWarning kaydi ekler - insan onayi bu kayit uzerinden yapilir.
 def _create_audit_warning(
     db: Session, *, run_id: int, file_path: str, masked_content: str, encoding: str | None, reasoning: str,
-    audit_failed: bool, output_path: str | None = None,
+    audit_failed: bool, output_path: str | None = None, audit_record: str | None = None,
 ) -> None:
     db.add(
         AuditWarning(
@@ -450,6 +450,7 @@ def _create_audit_warning(
             reasoning=reasoning,
             audit_failed=audit_failed,
             output_path=output_path,
+            audit_record=audit_record,
         )
     )
 
@@ -1609,7 +1610,7 @@ def _audit_skippable(masked_file: _MaskedFile) -> bool:
 
 async def _audit_masked_file(masked_file: _MaskedFile) -> "AuditVerdict | LLMRecognitionError":
     if _audit_skippable(masked_file):
-        return AuditVerdict(risky=False)
+        return AuditVerdict(risky=False, audited=False)
     return await _audit_one(masked_file.masked_text, masked_file.prep.rel)
 
 
@@ -1643,11 +1644,21 @@ def _finalize_file(
 ) -> "FileOutcome | _RemediationRequest":
     prep = masked_file.prep
 
+    # Bu icerigin (bastirma filtresinden ONCEKI, ham) denetim sonucu karantina
+    # kaydina yazilir: icerik degismeden serbest birakilirsa ayni karar kullanilir.
+    audit_record = None
+    if isinstance(audit_result, AuditVerdict) and settings.vllm.enabled:
+        audit_record = encode_audit_record(
+            audit_result, audit_record_key(masked_file.masked_text, prep.rel, settings.vllm),
+        )
+
     # Otomatik duzeltme denenip basarisiz olduysa (bkz. _fallback_after_remediation)
     # insan onayina dusen her uyarinin gerekcesine hangi kontrolde kaldigi eklenir.
     def _warn(**kwargs) -> None:
         if remediation_note:
             kwargs["reasoning"] = f"{kwargs['reasoning']}\n({remediation_note})"
+        if kwargs.get("masked_content") == masked_file.masked_text:
+            kwargs.setdefault("audit_record", audit_record)
         _create_audit_warning(db, **kwargs)
 
     # Herhangi bir detector katmani (Katman 1/2/3, hangisi olursa olsun) bu
