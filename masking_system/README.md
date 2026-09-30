@@ -5,6 +5,22 @@ otomatik maskeleyen, ihtiyaç halinde geri dönüştürülebilir hale getiren si
 SQLite kullanır - ayrı bir DB sunucusu gerekmez. Detaylı mimari/güvenlik
 notları için `app/` altındaki modül docstring'lerine bakın.
 
+## Parola / sır ataması kuralı
+
+`generic_secret_assignment` (sözlük/regex katmanı, LLM'den bağımsız) şu
+anahtarların değerini maskeler: `password`, `passwd`, `passphrase`, `pwd`,
+`pass`, `secret`, `token`, `api_key`, `credential(s)`, `parola`, `şifre`/`sifre`
+(önekli/sonekli biçimleri, JSON anahtarları ve connection string alanları dahil).
+Değer en az 6 karakter olmalıdır. Parola sayılmayanlar: ortam değişkeni ve şablon
+referansları (`${DB_PASS}`, `$DB_PASS`, `%PASSWORD%`, `{{ vault.pw }}`),
+`null`/`changeme`/`******` gibi yer tutucular, `{token}`/`%s` biçim yer tutucuları,
+ölçü/ayar anahtarları (`token_count`, `password_min_length`, `token_url`,
+`password_file`) ve tırnaksız kod ifadeleri (`token = tokenizer`,
+`token: Optional`, `secret_key = s3_connection`). Bilinen sınırlar: tırnaksız ve
+yalnızca harften oluşan parola (`pwd=sunshine`) ile kodda parametre olarak geçen
+parola (`new NetworkCredential("sa", "…")`) bu kuralla yakalanmaz, LLM
+katmanına kalır. Kural `alembic upgrade head` ile güncellenir.
+
 ## LLM tarama kapsamı
 
 `VLLM_ENABLED=true` olduğunda, desteklenen tüm metin dosyaları sözlük/regex,
