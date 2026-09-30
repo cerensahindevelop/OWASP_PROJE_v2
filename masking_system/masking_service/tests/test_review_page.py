@@ -4,6 +4,17 @@ from streamlit.testing.v1 import AppTest
 
 from app.webapp import review_page
 
+# AppTest varsayilan 3 sn: yuk altindaki makinede (tam test takimi, CI)
+# sayfanin ilk cizimi bunu asabiliyor ("AppTest script run timed out after
+# 3(s)"). Sinir yalnizca asili kalan bir calistirmayi yakalamak icindir.
+APP_TEST_TIMEOUT_SECONDS = 30
+
+
+def _review_app() -> AppTest:
+    return AppTest.from_string(
+        "from app.webapp.review_page import render\nrender()", default_timeout=APP_TEST_TIMEOUT_SECONDS,
+    )
+
 
 def test_review_page_shows_file_location_reason_and_separate_actions(monkeypatch):
     monkeypatch.setattr(review_page, "get_identity", lambda: {
@@ -19,7 +30,7 @@ def test_review_page_shows_file_location_reason_and_separate_actions(monkeypatch
     ])
     monkeypatch.setattr(review_page.api_client, "list_pending_reviews", lambda **_: [])
     monkeypatch.setattr(review_page.api_client, "list_runs", lambda **_: [])
-    app = AppTest.from_string("from app.webapp.review_page import render\nrender()").run()
+    app = _review_app().run()
     assert not app.exception
     assert any("sql/query.sql" in markdown.value for markdown in app.markdown)
     assert any("Satır 9, sütun 20" in markdown.value for markdown in app.markdown)
@@ -43,7 +54,7 @@ def test_equivalent_findings_are_grouped_with_one_pair_of_actions(monkeypatch):
                         entity_type="INTERNAL_ID", confidence_level="orta", reason="kurum içi kimlik",
                         surrounding_context="y = personelsicilno"),
     ])
-    app = AppTest.from_string("from app.webapp.review_page import render\nrender()").run()
+    app = _review_app().run()
     assert not app.exception
     assert any("2 dosya / 2 kullanım" in caption.value for caption in app.caption)
     assert [button.label for button in app.button] == ["Tümünü Gizle", "src/a.py — Maskele", "src/b.py — Maskele", "Yanlış Alarm"]
@@ -66,7 +77,7 @@ def test_automatic_file_action_uses_backend_without_text_editor(monkeypatch):
         calls.append(review_id)
         return SimpleNamespace(written=True, message="Dosya sistem tarafından maskelendi ve çıktıya eklendi.")
     monkeypatch.setattr(review_page.api_client, "mask_review_file", mask_file)
-    app = AppTest.from_string("from app.webapp.review_page import render\nrender()").run()
+    app = _review_app().run()
     app.button(key="mask_file_0_9").click().run()
     assert not app.exception
     assert calls == [9]
