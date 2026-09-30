@@ -28,6 +28,12 @@ _IGNORED_DIRS = {
     ".turbo",
     ".venv",
     "venv",
+    # .NET derleme ara ciktilari (project.assets.json, *.g.cs, *.cache) ve IDE
+    # onbellekleri: derlemede yeniden uretilir, kaynak kod degildir.
+    "obj",
+    ".vs",
+    ".gradle",
+    "bower_components",
 }
 
 _IGNORED_SUFFIXES = {
@@ -66,12 +72,18 @@ _ARCHIVE_SUFFIXES = {".zip", ".tar", ".gz", ".tgz", ".rar", ".7z"}
 # file_pipeline.py read_scanned_file, exporter.py _finalize_scan_only).
 _LOCK_FILENAMES = {
     "package-lock.json",
+    "npm-shrinkwrap.json",
     "yarn.lock",
     "pnpm-lock.yaml",
     "poetry.lock",
     "pipfile.lock",
+    "packages.lock.json",   # NuGet
+    "project.assets.json",  # NuGet restore ciktisi (obj/ disinda da bulunabilir)
+    "go.sum",
+    "package.resolved",     # Swift PM
+    "gradle.lockfile",
 }
-_LOCK_SUFFIXES = {".lock"}
+_LOCK_SUFFIXES = {".lock", ".lockfile"}
 
 def ignored_directory_reason(relative_path: Path) -> str | None:
     """Also excludes a .git worktree pointer file before reading its content."""

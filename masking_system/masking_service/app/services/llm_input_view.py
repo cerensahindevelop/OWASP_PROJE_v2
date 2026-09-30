@@ -22,7 +22,7 @@ import re
 from bisect import bisect_right
 from dataclasses import dataclass
 
-from app.services.encoded_blobs import ENCODED_BLOB_CATEGORY
+from app.services.encoded_blobs import ENCODED_BLOB_CATEGORY, count_unrecognized_encoded_lines
 
 logger = logging.getLogger("uvicorn.error.llm")
 
@@ -147,6 +147,36 @@ def build_redacted_view(text: str, spans: list[tuple[int, int, str]]) -> Redacte
         cursor = end
     parts.append(text[cursor:])
     return RedactedView(text="".join(parts), regions=tuple(regions))
+
+
+@dataclass
+class LLMInputStats:
+    """Bir dosyanin LLM'e giden is yuku (yalnizca sayilar, icerik yok)."""
+
+    chunks: int = 0
+    original_chars: int = 0
+    sent_chars: int = 0
+    hidden_chars: int = 0
+    unrecognized_encoded_lines: int = 0
+
+    def record(self, text: str, view: RedactedView, chunks: int) -> None:
+        self.chunks = chunks
+        self.original_chars = len(text)
+        self.sent_chars = len(view.text)
+        self.hidden_chars = view.hidden_chars
+        self.unrecognized_encoded_lines = count_unrecognized_encoded_lines(view.text)
+
+    # Dosya beklenenden cok LLM istegi uretiyorsa ya da gizlenmemis kodlanmis
+    # veri iceriyorsa, islem kaydina yazilacak icerik-siz uyari; yoksa None.
+    def workload_notice(self, warn_chunks: int) -> str | None:
+        too_many = 0 < warn_chunks <= self.chunks
+        if not too_many and not self.unrecognized_encoded_lines:
+            return None
+        return (
+            f"llm_is_yuku_yuksek parca={self.chunks} gonderilen_karakter={self.sent_chars} "
+            f"gizlenen_karakter={self.hidden_chars} "
+            f"taninmayan_kodlanmis_satir={self.unrecognized_encoded_lines}"
+        )
 
 
 def build_llm_input_view(

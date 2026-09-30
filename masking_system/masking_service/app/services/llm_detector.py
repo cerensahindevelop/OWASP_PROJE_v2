@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from app.services.file_classifier import should_ignore_path, is_archive_filename
@@ -11,8 +12,11 @@ from app.services.file_classifier import should_ignore_path, is_archive_filename
 # find_llm_detections/LLMRecognitionError: asil vLLM cagrisini ve
 # dogrulamayi yapan katman - bu dosya sadece detector arayuzune uydurur.
 from app.services.detectors import DetectorOutput
+from app.services.llm_input_view import LLMInputStats
 from app.services.llm_recognizer import FindingRepairStats, LLMRecognitionError, find_llm_detections
 from app.services.token_boundary_validator import is_authoritative_result
+
+logger = logging.getLogger("uvicorn.error.llm")
 
 
 # Katman 1'in (sozluk/regex/ogrenilmis karar) kesin bulgulari: LLM'e bu
@@ -58,11 +62,12 @@ class LLMDetector:
             return DetectorOutput()
         consumed = list(metadata.get("consumed_spans", []))
         repair_stats = FindingRepairStats()
+        input_stats = LLMInputStats()
         try:
             results = await find_llm_detections(
                 content, consumed, self.vllm_settings, metadata, self.extra_instructions,
                 repair_stats=repair_stats, known_spans=_known_spans(metadata),
-                blob_spans=metadata.get("encoded_blob_spans"),
+                blob_spans=metadata.get("encoded_blob_spans"), input_stats=input_stats,
             )
         except LLMRecognitionError as exc:
             detail = "LLM taramasi tamamlanamadi; dosya VALIDATION_FAILED"
@@ -70,6 +75,12 @@ class LLMDetector:
                 detail += f" (dosya={file_path})"
             return DetectorOutput(errors=[f"{detail}: {exc}"])
         notices = []
+        workload = input_stats.workload_notice(getattr(self.vllm_settings, "warn_chunks_per_file", 0))
+        if workload:
+            # Yeni bir dosya bicimi LLM'i yavaslatiyorsa saatler sonra degil,
+            # ilk dosyada gorunsun (bkz. `python -m app.cli llm-is-yuku` on-tahmini).
+            logger.warning("%s file=%r", workload, file_path)
+            notices.append(workload)
         if repair_stats.repaired or repair_stats.dropped:
             notices.append(
                 f"llm_bulgu_semasi_bozuk onarilan={repair_stats.repaired} atilan={repair_stats.dropped}"

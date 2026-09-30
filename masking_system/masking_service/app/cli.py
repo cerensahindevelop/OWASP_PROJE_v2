@@ -7,20 +7,25 @@
     python -m app.cli unmask --kaynak ./maskeli --hedef ./geri-donusturulmus \\
         --proje Poseidon --sicil EMP-1001 --branch main
     python -m app.cli rapor-son-islem --proje Poseidon
+    python -m app.cli llm-is-yuku --kaynak ./proje
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 # typer: CLI komutlarini tanimlayan framework - argumanlari parse eder.
 import typer
 
 from app.db.session import session_scope
+from app.core.config import settings
 from app.core.exceptions import MaskingSystemError
 from app.services import reporting
-from app.services.exporter import ExportValidationError, export_project
+from app.services.exclude_admin import load_active_exclude_specs
+from app.services.exporter import DEFAULT_MAX_INLINE_SIZE, ExportValidationError, export_project
+from app.services.llm_workload import estimate_project
 from app.services.rule_admin import RuleValidationError, add_rule, list_rules, set_rule_active
 from app.services.unmasker import ContextNotFoundError, unmask_project
 
@@ -176,6 +181,44 @@ def export(
         typer.echo(report.summary_text())
         if report.status != "completed":
             raise typer.Exit(code=2)
+
+
+# Export oncesi LLM is yuku tahmini: LLM'e istek gonderilmez, DB'ye yazilmaz.
+@app.command("llm-is-yuku")
+def llm_is_yuku(
+    kaynak: str = typer.Option(..., "--kaynak", help="Kaynak proje klasoru"),
+    ilk: int = typer.Option(20, "--ilk", help="Listelenecek en agir dosya sayisi"),
+    istek_suresi: float = typer.Option(
+        0.0, "--istek-suresi", help="Olculen ortalama LLM istek suresi (sn); verilirse toplam sure tahmin edilir",
+    ),
+) -> None:
+    """Hangi dosyalarin LLM'e kac parca gidecegini ve taramayi yavaslatacak
+    dosya bicimlerini (gomulu ikili veri, minified kod) export'tan once gosterir."""
+    with session_scope() as db:
+        exclude_specs = load_active_exclude_specs(db)
+    workloads = estimate_project(
+        Path(kaynak), exclude_specs, settings.vllm,
+        blob_min_chars=settings.scan.encoded_blob_min_chars, max_inline_size=DEFAULT_MAX_INLINE_SIZE,
+        legacy_encodings=settings.encoding.legacy_text_encoding_list,
+    )
+    total_requests = sum(workload.requests for workload in workloads)
+    hidden = sum(workload.stats.hidden_chars for workload in workloads)
+    typer.echo(f"LLM'e gidecek metin dosyasi: {len(workloads)}  tahmini istek (tespit+denetim): {total_requests}  "
+               f"gizlenecek ikili veri: {hidden:,} karakter")
+    if istek_suresi > 0:
+        minutes = total_requests * istek_suresi / max(1, settings.vllm.max_concurrent_requests) / 60
+        typer.echo(f"Tahmini LLM suresi: ~{minutes:.0f} dk "
+                   f"(VLLM_MAX_CONCURRENT_REQUESTS={settings.vllm.max_concurrent_requests})")
+    typer.echo(f"{'istek':>6} {'gonderilen':>11} {'gizlenen':>10}  dosya  [uyari]")
+    for workload in workloads[:ilk]:
+        hints = f"  [{', '.join(workload.hints)}]" if workload.hints else ""
+        typer.echo(f"{workload.requests:>6} {workload.stats.sent_chars:>11,} {workload.stats.hidden_chars:>10,}  "
+                   f"{workload.path}{hints}")
+    if any("taninmayan kodlanmis veri" in workload.hints for workload in workloads):
+        typer.secho(
+            "UYARI: Bazi dosyalarda gizlenemeyen kodlanmis-veri benzeri satirlar var; bunlar LLM'e gider. "
+            "Gerekiyorsa haric tutma kuraliyla ayirin ya da bicimi bildirin.", fg=typer.colors.YELLOW,
+        )
 
 
 # Maskelenmis klasoru proje/sicil/branch kimligine ait eslemelerle geri

@@ -210,6 +210,11 @@ class VLLMSettings(BaseSettings):
         "gonderilir: model bilinen degerleri tekrar listelemez, cikti token'i ve kesilme azalir. "
         "Ciktidaki maskeleme her zaman orijinal metin uzerinden yapilir.",
     )
+    warn_chunks_per_file: int = Field(
+        10, ge=0,
+        description="Bir dosya bu sayida ya da daha fazla LLM parcasina bolunuyorsa (ya da "
+        "gizlenmemis kodlanmis veri iceriyorsa) islem kaydina ve loga uyari yazilir. 0 = kapali.",
+    )
     min_auto_mask_chars: int = Field(
         3, ge=0,
         description="Bu uzunluktan kisa LLM bulgulari otomatik maskelenmez: guven 'dusuk'e "

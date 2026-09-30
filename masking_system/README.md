@@ -62,14 +62,31 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
   bunları tekrar listelemez, çıktı token'ı ve yanıt kesilmesi azalır. Çıktıdaki
   maskeleme her zaman orijinal metin üzerinden yapılır. Kapatmak için
   `VLLM_REDACT_KNOWN_FINDINGS=false`. Presidio bulguları gizlenmez.
-- **Gömülü ikili veri LLM'e ve Presidio'ya gitmez.** `.resx` içindeki base64
-  resim/ikonlar, hex dökümleri gibi `SCAN_ENCODED_BLOB_MIN_CHARS` (varsayılan
-  512) ve üstü uzunluktaki bloklar çözülerek sınıflandırılır; gerçekten ikili
-  veri olanlar LLM'e `mask_kodlanmis_ikili_veri_<n>` yer tutucusuyla gider,
+- **Gömülü ikili veri LLM'e ve Presidio'ya gitmez.** Dosya türünden bağımsız,
+  içeriğe göre tanınan biçimler: satır satır base64/hex (`.resx`, PEM, MIME),
+  tırnaklı/birleştirilmiş base64 (C#/Java/JS sabitleri, `.ipynb` çıktıları),
+  base64url, data URI (HTML/CSS/SVG), bayt dizileri (`0x89, 0x50, …`,
+  `byte[] {…}`, `\x89\x50…`). `SCAN_ENCODED_BLOB_MIN_CHARS` (varsayılan 512) ve
+  üstü uzunluktaki bloklar çözülerek sınıflandırılır; gerçekten ikili veri
+  olanlar LLM'e `mask_kodlanmis_ikili_veri_<n>` yer tutucusuyla gider,
   Presidio'ya boşluk olarak girer. Okunabilir metne çözülen base64 (ör. base64
   ile gizlenmiş bir config) ve identifier/yol listeleri gönderilmeye devam eder.
   Katman 1 (sözlük/regex) blokları yine tarar, çıktı metni değişmez. Log satırı:
   `llm_input_encoded_blobs ... blobs=N hidden_chars=M`. Kapatmak için `0`.
+- **Erken uyarı.** Bir dosya `VLLM_WARN_CHUNKS_PER_FILE` (varsayılan 10) ya da
+  daha fazla LLM parçasına bölünüyorsa veya gizlenemeyen kodlanmış-veri benzeri
+  satırlar içeriyorsa işlem kaydına ve loga `llm_is_yuku_yuksek parca=…
+  taninmayan_kodlanmis_satir=…` uyarısı yazılır (içerik yazılmaz). Böylece
+  tanınmayan yeni bir dosya biçimi saatler sonra değil ilk dosyada görünür.
+- **Export öncesi tahmin.** `python -m app.cli llm-is-yuku --kaynak <proje>
+  [--istek-suresi 12]` LLM'e hiç istek göndermeden dosya başına tahmini istek
+  sayısını, gizlenecek ikili veriyi ve uyarıları (tanınmayan kodlanmış veri,
+  minified kod) listeler. Ağır ama gereksiz dosyalar hariç tutma kuralıyla
+  ayrılabilir.
+- **Üretilmiş dosyalar.** `obj/`, `.vs/`, `.gradle/`, `bower_components/`
+  dizinleri taranmaz; `packages.lock.json`, `project.assets.json`,
+  `npm-shrinkwrap.json`, `go.sum`, `Package.resolved`, `*.lockfile` kilit dosyası
+  sayılır (LLM'e gitmez, yerel katmanlarla taranır).
 - **Kelime ortası eşleşme yok.** LLM'in bildirdiği değer yalnızca kelime/identifier
   sınırında eşlenir (`PoseidonGatewayClient` içindeki `Poseidon` eşlenir,
   `Alignment` içindeki `Ali` eşlenmez). `VLLM_MIN_AUTO_MASK_CHARS` (varsayılan 3)

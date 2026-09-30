@@ -51,7 +51,7 @@ import httpx
 from app.core.http_diagnostics import http_error_detail
 from app.services.detectors import LLM_FALLBACK_ENTITY_TYPE, DetectionResult, normalize_llm_entity_type
 from app.services.rule_engine import _overlaps
-from app.services.llm_input_view import RedactedView, build_llm_input_view
+from app.services.llm_input_view import LLMInputStats, RedactedView, build_llm_input_view
 from app.services.text_chunking import chunk_text as _overlap_chunks
 from app.services.llm_runtime import LLMScanMetrics
 
@@ -464,6 +464,7 @@ async def find_llm_detections(
     repair_stats: FindingRepairStats | None = None,
     known_spans: list[tuple[int, int, str]] | None = None,
     blob_spans: list[tuple[int, int]] | None = None,
+    input_stats: LLMInputStats | None = None,
 ) -> list[DetectionResult]:
     if not vllm_settings.enabled:
         return []
@@ -477,6 +478,8 @@ async def find_llm_detections(
     view_consumed = view.to_view_spans(consumed)
     overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
     chunks = chunk_text(view.text, vllm_settings.max_file_chars, overlap_chars)
+    if input_stats is not None:
+        input_stats.record(text, view, len(chunks))
     seed = getattr(vllm_settings, "seed", 42)
     min_value_chars = getattr(vllm_settings, "min_auto_mask_chars", 0)
     file_context = describe_file_context(file_path)
