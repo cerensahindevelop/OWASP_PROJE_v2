@@ -88,7 +88,9 @@ def _llm_finds_number_only_in_notes(monkeypatch):
     async def fake(host, timeout, payload, api_key=None):
         if payload["response_format"]["json_schema"]["name"] == "denetim_semasi":
             data = {"risk_var": False, "bulgular": []}
-        elif "personel jsonnumq9z8y" in payload["messages"][1]["content"]:
+        # Sozluk terimi (jsonnumq9z8y) LLM'e gecici yer tutucuyla gider;
+        # sahte model bu yuzden terime degil cevresindeki metne bakar.
+        elif "numarasi: 7650321" in payload["messages"][1]["content"]:
             data = {"bulgular": [{"bulunan_deger": "7650321", "tip": "KIMLIK_NO",
                                   "guven_seviyesi": "yuksek", "gerekce": "personel numarasi"}]}
         else:

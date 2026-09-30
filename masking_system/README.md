@@ -55,6 +55,33 @@ işlem `recover-output` ile kapatılır (bkz. 4. bölüm).
 Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
 `VLLM_HOST` ve `VLLM_MODEL` değerlerini kendi sunucusunun sunduğu adla ayarlayın.
 
+### LLM verimliliği ve hız
+
+- **Bilinen değerler modele gösterilmez.** Katman 1'in (sözlük/regex) kesin
+  bulguları LLM'e `mask_<tür>_<n>` biçimli geçici yer tutucularla gider; model
+  bunları tekrar listelemez, çıktı token'ı ve yanıt kesilmesi azalır. Çıktıdaki
+  maskeleme her zaman orijinal metin üzerinden yapılır. Kapatmak için
+  `VLLM_REDACT_KNOWN_FINDINGS=false`. Presidio bulguları gizlenmez.
+- **Kelime ortası eşleşme yok.** LLM'in bildirdiği değer yalnızca kelime/identifier
+  sınırında eşlenir (`PoseidonGatewayClient` içindeki `Poseidon` eşlenir,
+  `Alignment` içindeki `Ali` eşlenmez). `VLLM_MIN_AUTO_MASK_CHARS` (varsayılan 3)
+  altındaki değerler otomatik maskelenmez, `dusuk` güvenle
+  `VLLM_LOW_CONFIDENCE_ACTION` kuralına düşer.
+- **Dosya bağlamı.** Sistem promptunun sonuna yalnızca dosya adı ve uzantısı
+  eklenir (dizin yolu gönderilmez).
+- **Eşzamanlılık.** Tespit ve denetim adımları bir dosyanın parçalarını eş zamanlı
+  gönderir; bir sonraki dosya grubunun tespiti, mevcut grubun denetimiyle aynı
+  anda yürür. Toplam LLM isteği yine `VLLM_MAX_CONCURRENT_REQUESTS` ile sınırlıdır.
+- **İsteğe bağlı denetim atlama.** `VLLM_AUDIT_UNCHANGED_FILES=false` iken hiçbir
+  katmanın değiştirmediği ve LLM tespiti hatasız biten dosyalar ikinci LLM
+  denetimine gönderilmez. Hız kazancı büyüktür ama ikinci bağımsız kontrol
+  kalkar; varsayılan `true`.
+- **Hazır profiller.** `VLLM_PROFILE=ollama-dev` ya da `vllm-intra`, açıkça
+  verilmemiş `VLLM_*` ayarlarını doldurur (tek tek verilen değer her zaman
+  önceliklidir). Eşzamanlılık değerlerini `scripts/benchmark_llm.py` ile doğrulayın.
+- **vLLM prefix caching.** Sistem promptu her istekte aynı önekle başlar; vLLM'i
+  `--enable-prefix-caching` ile başlatmak ilk token gecikmesini düşürür.
+
 ## 1. İnternetsiz (offline/intra) ortamda kurulum — adım adım (PowerShell)
 
 Bu bölüm, hiçbir adımda internete çıkmadan, önceden hazırlanmış bir **offline
@@ -230,6 +257,18 @@ cd ..
 ```
 
 ## 2. Çalıştırma (backend + UI, iki ayrı süreç)
+
+### Hızlı başlatma (tek komut)
+
+```powershell
+cd C:\masking\masking_service
+.\start.ps1            # ilk kurulumda: .\start.ps1 --migrate
+```
+
+Linux/macOS: `.venv/bin/python start.py`. Betik `.env` ayarlarını ve veritabanını
+kontrol eder, backend'i başlatıp `/health` yanıt verene kadar bekler, sonra web
+arayüzünü açar. `Ctrl+C` ikisini birlikte kapatır. Aşağıdaki adımlar süreçleri
+elle başlatmak isteyenler içindir.
 
 Dosya ve proje dışa aktarımında, özel işleyicisi bulunmayan ve içeriği metin olarak tanınamayan dosyalar
 **desteklenmeyen içerik** olarak raporlanır. Bu karar proje adına veya `.bin`

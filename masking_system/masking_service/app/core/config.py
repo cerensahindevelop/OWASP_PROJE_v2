@@ -83,8 +83,39 @@ class SecuritySettings(BaseSettings):
 # varsayilanla gelir: bu katman strictly opt-in'dir - VLLM_HOST/MODEL dolu
 # olsa bile enabled=false iken vLLM'e hic istek gitmez, mevcut
 # regex/checksum pipeline'i hicbir degisiklik olmadan calismaya devam eder.
+# Hazir ayar profilleri: VLLM_PROFILE ile secilir ve YALNIZCA .env'de/ortamda
+# acikca verilmemis alanlari doldurur - tek tek verilen her VLLM_* degeri
+# profilden onceliklidir. Degerler baslangic noktasidir; eszamanlilik
+# scripts/benchmark_llm.py ile kendi donaniminizda dogrulanmalidir.
+VLLM_PROFILES: dict[str, dict[str, object]] = {
+    # Gelistirici makinesi, Ollama (Parallel:1): tek istek, kucuk yanit butcesi.
+    "ollama-dev": {
+        "max_concurrent_requests": 1,
+        "file_batch_size": 4,
+        "max_file_chars": 6000,
+        "max_tokens": 512,
+        "timeout_seconds": 200.0,
+    },
+    # Kurum ici vLLM (continuous batching): paralel istek, thinking kapali.
+    "vllm-intra": {
+        "max_concurrent_requests": 4,
+        "file_batch_size": 16,
+        "max_file_chars": 6000,
+        "max_tokens": 2048,
+        "disable_thinking": True,
+        "transient_retries": 2,
+    },
+}
+
+
 class VLLMSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VLLM_", env_file=_ENV_FILE, extra="ignore")
+
+    profile: Literal["", "ollama-dev", "vllm-intra"] = Field(
+        "",
+        description="Hazir ayar profili (ollama-dev | vllm-intra). Yalnizca acikca verilmemis "
+        "VLLM_* alanlarini doldurur; bos ise kod varsayilanlari gecerlidir.",
+    )
 
     enabled: bool = Field(
         False,
@@ -173,6 +204,36 @@ class VLLMSettings(BaseSettings):
         "max_concurrent_requests ile ayrica korunur; bu deger yalnizca LLM beklerken diger "
         "dosyalarin kural/Presidio taramasinin ilerlemesini saglar.",
     )
+    redact_known_findings: bool = Field(
+        True,
+        description="Katman 1'in (sozluk/regex) kesin bulgulari LLM'e gecici yer tutucuyla "
+        "gonderilir: model bilinen degerleri tekrar listelemez, cikti token'i ve kesilme azalir. "
+        "Ciktidaki maskeleme her zaman orijinal metin uzerinden yapilir.",
+    )
+    min_auto_mask_chars: int = Field(
+        3, ge=0,
+        description="Bu uzunluktan kisa LLM bulgulari otomatik maskelenmez: guven 'dusuk'e "
+        "indirilir ve VLLM_LOW_CONFIDENCE_ACTION (ignore/review) uygulanir. 0 = kapali.",
+    )
+    audit_unchanged_files: bool = Field(
+        True,
+        description="false ise, tespit katmanlarinin HIC degistirmedigi (maskelenecek bir sey "
+        "bulunmayan) ve LLM tespiti basariyla tamamlanan dosyalar ikinci LLM denetiminden "
+        "gecirilmez. Hiz kazanci buyuktur ama ikinci bagimsiz goz kalkar; varsayilan true.",
+    )
+
+    # Secilen profilin degerlerini, acikca verilmemis alanlara yazar.
+    @model_validator(mode="before")
+    @classmethod
+    def apply_profile(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        profile = str(data.get("profile") or "").strip()
+        if profile and profile not in VLLM_PROFILES:
+            raise ValueError(f"VLLM_PROFILE bilinmiyor: {profile} (gecerli: {', '.join(VLLM_PROFILES)})")
+        for field_name, value in VLLM_PROFILES.get(profile, {}).items():
+            data.setdefault(field_name, value)
+        return data
 
     # LLM acikken (enabled=true) host/model bos ya da .env.example'daki
     # CHANGE_ME sablon degeriyle birakilmissa hata verir - aksi halde uygulama

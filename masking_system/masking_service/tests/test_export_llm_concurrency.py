@@ -140,3 +140,53 @@ def test_bounded_limits_concurrent_execution_to_semaphore_size():
     asyncio.run(_run())
 
     assert max_observed == max_concurrent, f"semafor ihlal edildi: en fazla {max_observed} es zamanli calisti"
+
+
+def test_next_batch_detection_overlaps_current_batch_audit(cleanup, tmp_path, monkeypatch):
+    """Boru hatti: batch N+1'in tespiti, batch N'in LLM denetimi bitmeden
+    baslar (eskiden her batch Faz A/C/D bariyeriyle tamamen bitiyordu).
+    Cikti ve rapor yine dosya sirasiyla ve eksiksiz olmalidir."""
+    project = f"{_IDENTITY_PREFIX}-pipeline"
+    cleanup.append(project)
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    for i in range(_FILE_COUNT):
+        (source_dir / f"file_{i}.txt").write_text(f"icerik {i}\n", encoding="utf-8")
+    target_dir = tmp_path / "target"
+    events: list[tuple[str, str]] = []
+
+    class _FakeOrchestrator:
+        async def scan(self, text, metadata=None):
+            events.append(("detect_start", text.strip()))
+            await asyncio.sleep(0.01)
+            return DetectorOutput()
+
+    async def _slow_audit(masked_text, vllm_settings):
+        events.append(("audit_start", masked_text.strip()))
+        await asyncio.sleep(_SLEEP_SECONDS)
+        events.append(("audit_end", masked_text.strip()))
+        return exporter_module.AuditVerdict(risky=False)
+
+    monkeypatch.setattr(exporter_module, "build_orchestrator", lambda *a, **kw: _FakeOrchestrator())
+    monkeypatch.setattr(exporter_module, "audit_masked_text", _slow_audit)
+    monkeypatch.setattr(exporter_module.settings.vllm, "max_concurrent_requests", 1)
+    monkeypatch.setattr(exporter_module.settings.vllm, "file_batch_size", 2)
+
+    identity = (project, "P-TEST-0001", "pytest-branch")
+    with SessionLocal() as db:
+        report = asyncio.run(
+            exporter_module.export_project(
+                db, source_path=str(source_dir), project_name=identity[0], sicil_no=identity[1],
+                branch_name=identity[2], target_path=str(target_dir), initiated_by=identity[1],
+            )
+        )
+        db.commit()
+
+    assert report.files_scanned == _FILE_COUNT
+    assert sorted(p.name for p in target_dir.iterdir() if p.is_file() and p.suffix == ".txt") == [
+        f"file_{i}.txt" for i in range(_FILE_COUNT)
+    ]
+    first_batch_audit_end = events.index(("audit_end", "icerik 0"))
+    second_batch_detect = events.index(("detect_start", "icerik 2"))
+    assert second_batch_detect < first_batch_audit_end, events

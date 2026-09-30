@@ -116,6 +116,9 @@ class DetectionOrchestrator:
 
         for detector in self.registry.enabled_detectors():
             metadata["consumed_spans"] = list(base_consumed) + list(already_masked)
+            # Onceki katmanlarin bulgulari (salt okunur). LLM katmani, Katman
+            # 1'in kesin bulgularini model girdisinden cikarmak icin kullanir.
+            metadata["prior_results"] = tuple(results)
             try:
                 output = await detector.detect(content, metadata)
             except Exception as exc:

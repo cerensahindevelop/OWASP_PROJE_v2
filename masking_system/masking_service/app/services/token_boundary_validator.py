@@ -28,7 +28,7 @@ Iki ayri durum ele alinir:
    "genisletip maskelemek" hala gecersiz olurdu (orn. `app.route` bir URL
    degil, bir Flask decorator'idir; genisletilmis haliyle bile
    maskelenmemelidir). Istisna: Katman 1 (regex/sozluk - bkz.
-   _is_authoritative_result) gibi belirlenimli/kesin bir kaynagin eslesmesi
+   is_authoritative_result) gibi belirlenimli/kesin bir kaynagin eslesmesi
    TAM token'a genisletilip nokta/parantez ve komsu tokeni tuketmeden
    degistirilir - degisken/method/class/field/package/annotation/SQL
    identifier'lari (`schema.table`, `namespace.member`, `getSubeAdi()`)
@@ -88,7 +88,7 @@ def _looks_like_identifier(token: str) -> bool:
     return bool(token) and (token[0].isalpha() or token[0] == "_")
 
 
-def _is_authoritative_result(result: DetectionResult) -> bool:
+def is_authoritative_result(result: DetectionResult) -> bool:
     """Return whether a deterministic match may mask a whole code identifier.
 
     Katman 1 (regex/sozluk - RuleBasedDetector/LearnedSensitiveDetector,
@@ -211,7 +211,7 @@ class TokenBoundaryValidator:
                 # the same separator for qualified identifiers.  A trusted,
                 # full-token replacement can be applied in place without
                 # consuming either neighbour or changing the punctuation.
-                if _is_authoritative_result(result):
+                if is_authoritative_result(result):
                     # A dictionary term can be part of T_TERM or TermService.
                     # Replace the complete identifier, preserving separators
                     # and calls, so the placeholder remains reversible.

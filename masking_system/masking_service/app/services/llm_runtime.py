@@ -31,6 +31,12 @@ def llm_file_context(file_path: str):
         _file_path.reset(token)
 
 
+# llm_file_context ile isaretlenmis, su an taranan dosyanin yolu (yoksa None).
+def current_llm_file() -> str | None:
+    path = _file_path.get()
+    return None if path == "<unknown>" else path
+
+
 def _gate(settings):
     loop = asyncio.get_running_loop()
     gates = getattr(loop, "_masking_llm_gates", None)

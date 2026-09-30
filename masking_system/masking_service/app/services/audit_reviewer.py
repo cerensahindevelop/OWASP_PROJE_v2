@@ -25,9 +25,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.services.llm_recognizer import (
-    LLMRecognitionError, call_vllm, chunk_text, require_complete_response, scan_with_split,
+    LLMRecognitionError, call_vllm, chunk_text, describe_file_context, require_complete_response,
+    run_chunk_scans, scan_with_split, with_file_context,
 )
-from app.services.llm_runtime import LLMScanMetrics
+from app.services.llm_runtime import LLMScanMetrics, current_llm_file
 from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE
 
 logger = logging.getLogger("uvicorn.error.llm")
@@ -99,7 +100,7 @@ def load_audit_prompt() -> str:
 # vLLM'e gonderilecek denetim istegini (prompt + maskelenmis metin + sema) hazirlar.
 def build_audit_request(
     masked_text: str, model: str, seed: int, max_tokens: int = 512, disable_thinking: bool = False,
-    presence_penalty: float = 0.0,
+    presence_penalty: float = 0.0, file_context: str | None = None,
 ) -> dict:
     payload = {
         "model": model,
@@ -111,7 +112,7 @@ def build_audit_request(
             "json_schema": {"name": "denetim_semasi", "schema": _AUDIT_SCHEMA, "strict": True},
         },
         "messages": [
-            {"role": "system", "content": load_audit_prompt()},
+            {"role": "system", "content": with_file_context(load_audit_prompt(), file_context)},
             {"role": "user", "content": masked_text},
         ],
     }
@@ -191,23 +192,27 @@ def verify_audit_findings(text: str, findings: list[AuditFinding]) -> tuple[list
 
 
 # Maskelenmis metni LLM ile denetler ("hala bir ipucu kalmis mi?"). LLM kapaliysa risksiz sayar.
-async def audit_masked_text(masked_text: str, vllm_settings) -> AuditVerdict:
+# Chunk'lar tespit adimiyla ayni sekilde es zamanli denetlenir (toplam sinir:
+# llm_runtime._gate); ilk hatada kalan chunk'lar iptal edilir ve dosya karantinaya gider.
+async def audit_masked_text(masked_text: str, vllm_settings, file_path: str | None = None) -> AuditVerdict:
     if not vllm_settings.enabled:
         return AuditVerdict(risky=False)
     if not vllm_settings.host or not vllm_settings.model:
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
     overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
     chunks = chunk_text(masked_text, vllm_settings.max_file_chars, overlap_chars)
-    findings: dict[str, AuditFinding] = {}
-    with LLMScanMetrics("audit", len(chunks)) as metrics:
-        for index, (offset, chunk) in enumerate(chunks, 1):
+    file_path = file_path or current_llm_file()
+    file_context = describe_file_context(file_path)
+    with LLMScanMetrics("audit", len(chunks), file_path) as metrics:
+        async def audit_chunk(index: int, offset: int, chunk: str) -> list[AuditFinding]:
             # Tek parcayi denetler, yalnizca metinde dogrulanan bulgulari doner.
-            async def scan(_part_offset: int, part: str, index: int = index) -> list[AuditFinding]:
+            async def scan(_part_offset: int, part: str) -> list[AuditFinding]:
                 payload = build_audit_request(
                     part, vllm_settings.model, getattr(vllm_settings, "seed", 42),
                     max_tokens=getattr(vllm_settings, "max_tokens", 1024),
                     disable_thinking=getattr(vllm_settings, "disable_thinking", False),
                     presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
+                    file_context=file_context,
                 )
                 verdict = await metrics.request(vllm_settings, payload, call_vllm, parse_audit_response, index)
                 verified, dropped = verify_audit_findings(part, verdict.findings)
@@ -222,11 +227,16 @@ async def audit_masked_text(masked_text: str, vllm_settings) -> AuditVerdict:
             # Yanit max_tokens'ta kesilirse parca bolunup yeniden denetlenir
             # (tespit adimiyla ayni sinirlar); sinirda hala kesikse hata
             # caller'a ulasir ve dosya karantinaya gider.
-            verified = await scan_with_split(scan, index, offset, chunk, overlap_chars)
-            # Risk yalnizca metinde dogrulanan somut bir alintiya dayanir;
-            # modelin "risk var" deyip dogrulanabilir alinti vermemesi
-            # dosyayi karantinaya almaz.
-            for finding in verified:
-                # Same cited section across overlapping chunks is one audit finding.
-                findings.setdefault(finding.ilgili_bolum or finding.aciklama, finding)
+            return await scan_with_split(scan, index, offset, chunk, overlap_chars)
+
+        chunk_findings = await run_chunk_scans(chunks, audit_chunk)
+
+    # Risk yalnizca metinde dogrulanan somut bir alintiya dayanir; modelin
+    # "risk var" deyip dogrulanabilir alinti vermemesi dosyayi karantinaya
+    # almaz. Chunk sirasiyla birlestirilir -> deterministik sonuc; overlap'li
+    # chunk'larda ayni alinti tek bulgudur.
+    findings: dict[str, AuditFinding] = {}
+    for verified in chunk_findings:
+        for finding in verified:
+            findings.setdefault(finding.ilgili_bolum or finding.aciklama, finding)
     return AuditVerdict(risky=bool(findings), findings=list(findings.values()))

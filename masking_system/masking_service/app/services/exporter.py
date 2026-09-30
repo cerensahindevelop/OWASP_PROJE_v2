@@ -896,6 +896,58 @@ async def _bounded(coro, semaphore: asyncio.Semaphore):
         return await coro
 
 
+# Faz A'ya hazirlanmis bir dosya grubu (batch): kaynak dosyalar, hazirlik
+# sonuclari ve Faz D'de rapor/audit log icin saklanan yol maskeleme sonuclari.
+@dataclass
+class _PreparedBatch:
+    files: list
+    preps: list["_FilePrep"]
+    masked_paths: list[Path]
+    path_mappings: list[list]
+
+
+# Yol maskeleme + Faz A hazirligi (okuma/siniflandirma) - hizli I/O, sirali.
+def _prepare_batch(
+    db: Session, run_id: int, files: list, path_plans: dict, output_target: Path, max_inline_size: int,
+) -> _PreparedBatch:
+    batch = _PreparedBatch(files=files, preps=[], masked_paths=[], path_mappings=[])
+    for scanned in files:
+        masked_relative_path, path_mappings = path_plans[scanned.relative_path]
+        prep = _prepare_file(db, run_id, scanned, output_target / masked_relative_path, max_inline_size)
+        prep.masked_rel = masked_relative_path.as_posix()
+        batch.preps.append(prep)
+        batch.masked_paths.append(masked_relative_path)
+        batch.path_mappings.append(path_mappings)
+    return batch
+
+
+# Faz A (es zamanli, DB'ye dokunmaz): erken-cikis yapmamis dosyalarin tespiti.
+# Donus: preps indeksi -> DetectionOutcome.
+async def _detect_batch(
+    orchestrator: DetectionOrchestrator, preps: list["_FilePrep"], semaphore: asyncio.Semaphore,
+) -> dict[int, DetectionOutcome]:
+    ready_indices = [i for i, prep in enumerate(preps) if prep.outcome is None]
+    outcomes = await asyncio.gather(
+        *(_bounded(_detect_for_prep(orchestrator, preps[i]), semaphore) for i in ready_indices)
+    )
+    return dict(zip(ready_indices, outcomes))
+
+
+# Batch'in tespitini arka planda baslatir; sonuc Faz B'den hemen once beklenir.
+def _start_detection(
+    orchestrator: DetectionOrchestrator, batch: _PreparedBatch, semaphore: asyncio.Semaphore,
+) -> asyncio.Future:
+    return asyncio.ensure_future(_detect_batch(orchestrator, batch.preps, semaphore))
+
+
+# Onceden baslatilmis (prefetch) bir tespit gorevini iptal edip bitmesini bekler.
+async def _cancel_detection(task: asyncio.Future | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
 # Faz A hazirligi bitmis, tespite (detect_matches) hazir HALE GELMIS ya da
 # erken-cikis yapmis (outcome doluysa) bir dosyanin durumu.
 @dataclass
@@ -1515,6 +1567,24 @@ def _run_scan_only_final_verification(
                 db, run_id, report, output_file,
                 status="failed_detection", final_state="VALIDATION_FAILED", reason=reason,
             )
+
+
+# VLLM_AUDIT_UNCHANGED_FILES=false iken ikinci denetimin atlanabildigi dosya:
+# hicbir katman metni degistirmedi ve LLM tespiti hatasiz tamamlandi. Boyle
+# bir dosyada denetim, tespitin gordugu metnin aynisini tekrar okur.
+def _audit_skippable(masked_file: _MaskedFile) -> bool:
+    return (
+        not settings.vllm.audit_unchanged_files
+        and masked_file.masked_text == masked_file.prep.text
+        and not masked_file.llm_errors
+        and not masked_file.detector_crashes
+    )
+
+
+async def _audit_masked_file(masked_file: _MaskedFile) -> "AuditVerdict | LLMRecognitionError":
+    if _audit_skippable(masked_file):
+        return AuditVerdict(risky=False)
+    return await _audit_one(masked_file.masked_text, masked_file.prep.rel)
 
 
 # Maskelenmis bir metni post-mask LLM denetiminden gecirir; LLM hatasini deger olarak dondurur (raise etmez).
@@ -2199,6 +2269,7 @@ async def export_project(
 
     failed = False
     publication = None
+    next_detection: asyncio.Future | None = None
     # Ara commit'ler (asagida) sonrasi mapping onbellegindeki ORM nesneleri
     # her erisimde yeniden SELECT'lenmesin diye; cikista eski deger geri yuklenir.
     previous_expire_on_commit = db.expire_on_commit
@@ -2288,7 +2359,12 @@ async def export_project(
         # yazma) dosya sirasiyla ve sirali calistigi icin placeholder
         # numaralandirmasi batch boyutundan bagimsizdir.
         batch_size = max(1, getattr(settings.vllm, "file_batch_size", 1), settings.vllm.max_concurrent_requests)
-        semaphore = asyncio.Semaphore(batch_size)
+        # Tespit (siradaki batch) ve denetim (bu batch) boru hattinda ayni
+        # anda yurudugu icin ayri dosya slotlari kullanir; biri digerinin
+        # slotlarini tuketip boru hattini sirali hale getirmesin. LLM istek
+        # siniri ikisi icin ortak olarak llm_runtime._gate ile korunur.
+        detection_slots = asyncio.Semaphore(batch_size)
+        audit_slots = asyncio.Semaphore(batch_size)
 
         all_files = list(iter_project_files(source, exclude_specs, prune_ignored=True))
         total_files = len(all_files)
@@ -2388,30 +2464,26 @@ async def export_project(
         # (bkz. repository list_pending_for_identity).
         db.commit()
 
-        for batch_start in range(0, total_files, batch_size):
-            batch = all_files[batch_start : batch_start + batch_size]
+        # BORU HATTI: bir sonraki batch'in Faz A tespiti (Presidio + LLM),
+        # bu batch'in Faz C denetimi ve Faz D/E'si ile ES ZAMANLI yurur;
+        # boylece bir batch'in en yavas dosyasi siradaki batch'in taramasini
+        # bekletmez. Faz A DB'ye dokunmaz; hazirlik (DB'ye yazan) yine sirali
+        # ve yazma kilidi altinda yapilir. Placeholder numaralandirmasi sirali
+        # Faz B'de verildigi icin cikti bu es zamanliliktan etkilenmez.
+        batches = [all_files[start : start + batch_size] for start in range(0, total_files, batch_size)]
+        prepared_next = (
+            _prepare_batch(db, run.id, batches[0], path_plans, output_target, max_inline_size) if batches else None
+        )
+        if prepared_next is not None:
+            next_detection = _start_detection(orchestrator, prepared_next, detection_slots)
 
-            # Yol maskeleme + Faz A hazirligi (okuma/siniflandirma) - hizli
-            # I/O, sirali. path_masking sonuclari Faz D'de audit log/rapor
-            # icin saklaniyor.
-            preps: list[_FilePrep] = []
-            batch_masked_paths: list[Path] = []
-            batch_path_mappings: list[list] = []
-            for scanned in batch:
-                masked_relative_path, path_mappings = path_plans[scanned.relative_path]
-                dest_path = output_target / masked_relative_path
-                prep = _prepare_file(db, run.id, scanned, dest_path, max_inline_size)
-                prep.masked_rel = masked_relative_path.as_posix()
-                preps.append(prep)
-                batch_masked_paths.append(masked_relative_path)
-                batch_path_mappings.append(path_mappings)
-
-            # Faz A (es zamanli): erken-cikis yapmamis dosyalarin tespiti.
-            ready_indices = [i for i, p in enumerate(preps) if p.outcome is None]
-            detection_outcomes = await asyncio.gather(
-                *(_bounded(_detect_for_prep(orchestrator, preps[i]), semaphore) for i in ready_indices)
-            )
-            outcome_by_index = dict(zip(ready_indices, detection_outcomes))
+        for batch_number in range(len(batches)):
+            prepared, outcome_by_index = prepared_next, await next_detection
+            prepared_next = next_detection = None
+            batch = prepared.files
+            preps = prepared.preps
+            batch_masked_paths = prepared.masked_paths
+            batch_path_mappings = prepared.path_mappings
 
             # Faz B (sirali, DB yazan): apply_detections + round-trip.
             _acquire_write_lock(db, run.id)
@@ -2507,14 +2579,23 @@ async def export_project(
                         final_state="VALIDATION_FAILED",
                     )
 
+            # Siradaki batch'in hazirligi hala yazma kilidi altindayken yapilir;
+            # tespiti asagidaki Faz C/D/E ile es zamanli baslar.
+            if batch_number + 1 < len(batches):
+                prepared_next = _prepare_batch(
+                    db, run.id, batches[batch_number + 1], path_plans, output_target, max_inline_size,
+                )
+
             # Faz C (LLM denetimi) yazma kilidi tutulmadan calissin.
             db.commit()
+            if prepared_next is not None:
+                next_detection = _start_detection(orchestrator, prepared_next, detection_slots)
 
             # Phase C audits every supported, prepared text file, including
             # files for which the initial detectors found no matches.
             masked_indices = [i for i, r in enumerate(batch_results) if isinstance(r, _MaskedFile)]
             audit_results = await asyncio.gather(
-                *(_bounded(_audit_one(batch_results[i].masked_text, preps[i].rel), semaphore) for i in masked_indices)
+                *(_bounded(_audit_masked_file(batch_results[i]), audit_slots) for i in masked_indices)
             )
             audit_by_index = dict(zip(masked_indices, audit_results))
 
@@ -2570,7 +2651,7 @@ async def export_project(
             while pending:
                 db.commit()
                 reaudits = await asyncio.gather(
-                    *(_bounded(_audit_one(item.current.masked_text, preps[i].rel), semaphore) for i, item in pending)
+                    *(_bounded(_audit_one(item.current.masked_text, preps[i].rel), audit_slots) for i, item in pending)
                 )
                 _acquire_write_lock(db, run.id)
                 next_pending: list[tuple[int, _PendingRemediation]] = []
@@ -2634,7 +2715,8 @@ async def export_project(
                 if progress_callback is not None:
                     progress_callback(processed, total_files, str(scanned.relative_path))
 
-            # Sonraki batch'in Faz A'si (LLM tespiti) yazma kilidi tutulmadan calissin.
+            # Batch'in rapor/cikti kayitlari kalici olsun; siradaki batch'in
+            # tespiti bu sirada zaten yazma kilidi tutulmadan yuruyor.
             db.commit()
 
         # Ilk turda dogrulanip mapping'e donusen degerleri, detector/context
@@ -2771,6 +2853,7 @@ async def export_project(
     except BaseException:
         failed = True
         report.status = "failed"
+        await _cancel_detection(next_detection)
         db.rollback()
         _mark_run_failed(db, run.id)
         raise

@@ -32,7 +32,8 @@ def lines(n, width=60):
 
 def test_chunks_are_requested_concurrently_and_output_is_deterministic(monkeypatch):
     # 4 chunk; chunk'lar ters sirada tamamlanir, sonuc yine offset sirasinda olmali.
-    content = 'ALFA' + 'x' * 5900 + 'BETA' + 'x' * 5900 + 'GAMA' + 'x' * 5900 + 'DELTA'
+    # Degerlerden sonraki bosluk: LLM degeri kelime ortasinda eslenmez (ALFAxxx).
+    content = 'ALFA ' + 'x' * 5899 + 'BETA ' + 'x' * 5899 + 'GAMA ' + 'x' * 5899 + 'DELTA'
     active = peak = 0
 
     async def fake(host, timeout, payload, api_key=None):
@@ -72,7 +73,7 @@ def test_admission_gate_still_limits_parallel_chunks(monkeypatch):
 
 def test_truncated_chunk_is_split_and_rescanned_with_correct_offsets(monkeypatch):
     body = lines(50)  # 3000 karakter, tek chunk
-    content = 'HEAD_KOD' + body + 'TAIL_KOD'
+    content = 'HEAD_KOD ' + body[1:] + 'TAIL_KOD'
     sent = []
 
     async def fake(host, timeout, payload, api_key=None):

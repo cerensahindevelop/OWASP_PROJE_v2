@@ -98,8 +98,9 @@ def copy_project_source(output: Path) -> None:
     for directory in ("app", "alembic", "tests", "scripts", ".streamlit"):
         shutil.copytree(SERVICE / directory, destination / directory, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", "secrets.toml", ".env", "*.db"))
-    for filename in ("api_app.py", "streamlit_app.py", "alembic.ini", "pytest.ini", "requirements.txt",
-                     "requirements-intranet.txt", "requirements-validation.txt", "constraints-offline-windows.txt"):
+    for filename in ("api_app.py", "streamlit_app.py", "start.py", "start.ps1", "alembic.ini", "pytest.ini",
+                     "requirements.txt", "requirements-intranet.txt", "requirements-validation.txt",
+                     "constraints-offline-windows.txt"):
         shutil.copy2(SERVICE / filename, destination / filename)
     for filename in (".env.example", "README.md"):
         shutil.copy2(SERVICE.parent / filename, output / "source" / filename)

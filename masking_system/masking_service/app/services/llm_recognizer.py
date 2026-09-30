@@ -19,8 +19,14 @@ Guvenlik/guvenilirlik ilkeleri (asla degistirilmemeli):
      dusurulmez: degeri metinde birebir geciyorsa bulgu `orta` guven ve
      KURUMSAL_TANIMLAYICI tipiyle kabul edilir, gecmiyorsa yalnizca o bulgu
      atilir. Ikisi de FindingRepairStats ile sayilir ve AuditLog'a yazilir.
+  5. LLM degeri yalnizca kelime/identifier sinirinda eslenir (camelCase ve
+     harf-rakam gecisi sinir sayilir); `Alignment` icindeki `Ali` eslenmez.
+     VLLM_MIN_AUTO_MASK_CHARS'tan kisa degerlerin guveni `dusuk`e iner.
+  6. Katman 1'in kesin bulgulari LLM'e gecici yer tutucuyla gider (bkz.
+     llm_input_view); bulgu ofsetleri orijinal metne geri eslenir, gecici
+     yer tutucuyla cakisan bulgu atilir.
 
-Bir dosyanin chunk'lari (ve farkli dosyalarin cagrilari) eszamanli taranir;
+Bir dosyanin chunk'lari (ve farkli dosyalarin cagrilari) run_chunk_scans ile eszamanli taranir;
 toplam eszamanlilik llm_runtime._gate ile sinirlidir (tespit ve audit ayni
 endpoint admission sinirini paylasir). Sonuclar chunk sirasiyla birlestirilir.
 max_tokens'ta kesilen (finish_reason=length) bir chunk ikiye bolunup yalnizca
@@ -33,7 +39,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import monotonic
 
@@ -45,6 +51,7 @@ import httpx
 from app.core.http_diagnostics import http_error_detail
 from app.services.detectors import LLM_FALLBACK_ENTITY_TYPE, DetectionResult, normalize_llm_entity_type
 from app.services.rule_engine import _overlaps
+from app.services.llm_input_view import RedactedView, build_redacted_view
 from app.services.text_chunking import chunk_text as _overlap_chunks
 from app.services.llm_runtime import LLMScanMetrics
 
@@ -118,10 +125,28 @@ def _augment_prompt(base_prompt: str, extra_instructions: list[str] | None) -> s
     return f"{base_prompt}\n\nAyrica, kurum tanimli su ozel kategorilere de dikkat et:\n{bullet_list}"
 
 
+# Modele dosya turu ipucu verir (orn. "application.yml", "pom.xml"). Yalnizca
+# dosya ADI gonderilir, dizin yolu gonderilmez; bulgular yine sadece taranan
+# metinde birebir dogrulandigi icin bu satirdan deger uretilemez.
+def describe_file_context(file_path: str | None) -> str | None:
+    name = Path(str(file_path or "").replace("\\", "/")).name
+    if not name:
+        return None
+    suffix = Path(name).suffix.lstrip(".").lower() or "yok"
+    return f"Dosya baglami (yalnizca bilgi, taranacak metin degildir): ad={name!r} uzanti={suffix}"
+
+
+# Sistem promptunun SONUNA dosya baglamini ekler. Sona eklemek, sabit prompt
+# onekini tum isteklerde ayni tutar (vLLM --enable-prefix-caching isabeti).
+def with_file_context(system_prompt: str, file_context: str | None) -> str:
+    return f"{system_prompt}\n\n{file_context}" if file_context else system_prompt
+
+
 # vLLM'e gonderilecek tespit istegini (prompt + JSON sema + metin) hazirlar.
 def build_detection_request(
     text: str, model: str, seed: int, extra_instructions: list[str] | None = None,
     max_tokens: int = 512, disable_thinking: bool = False, presence_penalty: float = 0.0,
+    file_context: str | None = None,
 ) -> dict:
     payload = {
         "model": model,
@@ -133,7 +158,10 @@ def build_detection_request(
             "json_schema": {"name": "bulgular_semasi", "schema": _FINDINGS_SCHEMA, "strict": True},
         },
         "messages": [
-            {"role": "system", "content": _augment_prompt(load_llm_prompt(), extra_instructions)},
+            {
+                "role": "system",
+                "content": with_file_context(_augment_prompt(load_llm_prompt(), extra_instructions), file_context),
+            },
             {"role": "user", "content": text},
         ],
     }
@@ -218,6 +246,37 @@ def require_complete_response(raw_response: dict) -> None:
         raise LLMRecognitionError("LLM yaniti tamamlanmadi (finish_reason stop degil)")
 
 
+# `pos` bir kelime/identifier siniri mi? Harf-rakam gecisi, camelCase
+# (`poseidonGateway` -> `Gateway`) ve kisaltma sonu (`HTTPServer` -> `Server`)
+# sinir sayilir; kelimenin ortasi (`Alignment` icindeki `Ali`) sayilmaz.
+def _is_token_boundary(text: str, pos: int) -> bool:
+    if pos <= 0 or pos >= len(text):
+        return True
+    before, after = text[pos - 1], text[pos]
+    if not (before.isalnum() and after.isalnum()):
+        return True
+    if before.isalpha() != after.isalpha():
+        return True
+    if before.islower() and after.isupper():
+        return True
+    return before.isupper() and after.isupper() and pos + 1 < len(text) and text[pos + 1].islower()
+
+
+# LLM degerinin metindeki, kelime ortasina denk gelmeyen gecisleri. Kisa/genel
+# bir deger (`core`, `Ali`) baska kelimelerin icinde eslesip - sinir dogrulayici
+# eslesmeyi tum identifier'a genislettigi icin - ilgisiz kodu maskelemesin.
+def _aligned_occurrences(value: str, text: str):
+    for match in re.finditer(re.escape(value), text):
+        if _is_token_boundary(text, match.start()) and _is_token_boundary(text, match.end()):
+            yield match
+
+
+# Cok kisa degerler (orn. 1-2 karakter) guvenle otomatik maskelenemez: guven
+# `dusuk`e indirilir, boylece VLLM_LOW_CONFIDENCE_ACTION (ignore/review) karar verir.
+def _effective_confidence(value: str, confidence: str, min_value_chars: int) -> str:
+    return "dusuk" if len(value.strip()) < min_value_chars else confidence
+
+
 # vLLM yanitini ayristirir; her bulguyu metinde GERCEKTEN gecip gecmedigini kontrol ederek dogrular.
 def parse_and_verify_detections(
     raw_response: dict,
@@ -227,6 +286,7 @@ def parse_and_verify_detections(
     base_offset: int = 0,
     source: str = "llm",
     repair_stats: FindingRepairStats | None = None,
+    min_value_chars: int = 0,
 ) -> list[DetectionResult]:
     require_complete_response(raw_response)
     try:
@@ -279,8 +339,9 @@ def parse_and_verify_detections(
         else:
             entity_type = normalize_llm_entity_type(raw_type)
             raw_item = dict(item)
+        confidence = _effective_confidence(value, confidence, min_value_chars)
 
-        for m in re.finditer(re.escape(value), text):
+        for m in _aligned_occurrences(value, text):
             span = (base_offset + m.start(), base_offset + m.end())
             if _overlaps(span, protected_spans):
                 continue
@@ -350,6 +411,57 @@ async def scan_with_split(scan, index: int, offset: int, chunk: str, overlap_cha
     return results
 
 
+# Bir dosyanin tum chunk'larini es zamanli tarar ve sonuclari chunk sirasiyla
+# dondurur (toplam eszamanlilik llm_runtime._gate ile sinirli). Tespit ve
+# denetim ortak kullanir. Ilk hatada kardes gorevler HEMEN iptal edilir -
+# gather'in sonradan iptali, bosalan _gate slotunu kuyruktaki chunk'in
+# almasina yetismez. TaskGroup yerine gather: ExceptionGroup sarmalamasi
+# olmadan LLMRecognitionError caller'a aynen ulasir; kismi sonuc asla donmez.
+async def run_chunk_scans(chunks: list[tuple[int, str]], scan_chunk) -> list:
+    tasks: list[asyncio.Future] = []
+
+    async def scan_or_cancel_siblings(index: int, offset: int, chunk: str):
+        try:
+            return await scan_chunk(index, offset, chunk)
+        except BaseException:
+            current = asyncio.current_task()
+            for task in tasks:
+                if task is not current:
+                    task.cancel()
+            raise
+
+    tasks.extend(
+        asyncio.ensure_future(scan_or_cancel_siblings(index, offset, chunk))
+        for index, (offset, chunk) in enumerate(chunks, 1)
+    )
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+# Katman 1'in kesin bulgularini LLM girdisinden cikaran gorunumu kurar
+# (bkz. llm_input_view). Ayar kapaliysa ya da bulgu yoksa metin aynen gider.
+def _llm_input_view(text: str, known_spans: list[tuple[int, int, str]] | None, vllm_settings) -> RedactedView:
+    if not known_spans or not getattr(vllm_settings, "redact_known_findings", False):
+        return RedactedView.identity(text)
+    return build_redacted_view(text, known_spans)
+
+
+# Gorunum koordinatlarindaki bulguyu orijinal metne tasir; gecici yer
+# tutucuyla cakisan bulgu eslenemez ve atilir.
+def _to_original(view: RedactedView, detection: DetectionResult) -> DetectionResult | None:
+    if view.is_identity:
+        return detection
+    span = view.to_original(detection.start or 0, detection.end or 0)
+    if span is None:
+        return None
+    return replace(detection, start=span[0], end=span[1])
+
+
 # Metni parcalara bolup her parcayi LLM ile tarar, sonuclari birlestirir. LLM kapaliysa bos liste doner.
 async def find_llm_detections(
     text: str,
@@ -358,19 +470,25 @@ async def find_llm_detections(
     metadata: dict | None = None,
     extra_instructions: list[str] | None = None,
     repair_stats: FindingRepairStats | None = None,
+    known_spans: list[tuple[int, int, str]] | None = None,
 ) -> list[DetectionResult]:
     if not vllm_settings.enabled:
         return []
     if not vllm_settings.host or not vllm_settings.model:
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
 
+    file_path = (metadata or {}).get("file_path")
+    view = _llm_input_view(text, known_spans, vllm_settings)
+    view_consumed = view.to_view_spans(consumed)
     overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
-    chunks = chunk_text(text, vllm_settings.max_file_chars, overlap_chars)
+    chunks = chunk_text(view.text, vllm_settings.max_file_chars, overlap_chars)
     seed = getattr(vllm_settings, "seed", 42)
+    min_value_chars = getattr(vllm_settings, "min_auto_mask_chars", 0)
+    file_context = describe_file_context(file_path)
     detections: dict[tuple, DetectionResult] = {}
     confidence_rank = {"dusuk": 0, "orta": 1, "yuksek": 2}
 
-    with LLMScanMetrics("detection", len(chunks), (metadata or {}).get("file_path")) as metrics:
+    with LLMScanMetrics("detection", len(chunks), file_path) as metrics:
         # Tek chunk'i tarar; kesilirse scan_with_split yalnizca bu chunk'i
         # bolup yeniden tarar (basarili chunk'lar tekrar gonderilmez).
         async def scan_chunk(index: int, offset: int, chunk: str) -> list[DetectionResult]:
@@ -380,47 +498,27 @@ async def find_llm_detections(
                     max_tokens=getattr(vllm_settings, "max_tokens", 1024),
                     disable_thinking=getattr(vllm_settings, "disable_thinking", False),
                     presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
+                    file_context=file_context,
                 )
                 return await metrics.request(
                     vllm_settings, payload, call_vllm,
                     lambda raw: parse_and_verify_detections(
-                        raw, part, consumed, base_offset=part_offset, repair_stats=repair_stats,
+                        raw, part, view_consumed, base_offset=part_offset, repair_stats=repair_stats,
+                        min_value_chars=min_value_chars,
                     ),
                     index,
                 )
 
             return await scan_with_split(scan, index, offset, chunk, overlap_chars)
 
-        # Hata veren chunk kardeslerini HEMEN iptal eder: gather'in sonradan
-        # iptali, bosalan _gate slotunu kuyruktaki chunk'in almasina yetismez.
-        async def scan_or_cancel_siblings(index: int, offset: int, chunk: str) -> list[DetectionResult]:
-            try:
-                return await scan_chunk(index, offset, chunk)
-            except BaseException:
-                current = asyncio.current_task()
-                for task in tasks:
-                    if task is not current:
-                        task.cancel()
-                raise
-
-        # Tum chunk'lar es zamanli baslar (sinir: metrics.request icindeki _gate).
-        # TaskGroup yerine gather: ExceptionGroup sarmalamasi olmadan
-        # LLMRecognitionError caller'a aynen ulasir; ilk hatada kalan
-        # gorevler iptal edilir - kismi sonuc asla dondurulmez.
-        tasks: list[asyncio.Future] = []
-        tasks.extend(asyncio.ensure_future(scan_or_cancel_siblings(index, offset, chunk))
-                     for index, (offset, chunk) in enumerate(chunks, 1))
-        try:
-            chunk_results = await asyncio.gather(*tasks)
-        except BaseException:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
+        chunk_results = await run_chunk_scans(chunks, scan_chunk)
 
         # Chunk sirasiyla birlestir -> deterministik cikti.
         for chunk_detections in chunk_results:
-            for detection in chunk_detections:
+            for view_detection in chunk_detections:
+                detection = _to_original(view, view_detection)
+                if detection is None:
+                    continue
                 key = (detection.start, detection.end, detection.tip)
                 previous = detections.get(key)
                 if previous is None or confidence_rank[detection.guven_seviyesi] > confidence_rank[previous.guven_seviyesi]:

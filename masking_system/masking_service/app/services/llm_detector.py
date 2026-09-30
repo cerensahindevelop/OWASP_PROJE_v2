@@ -12,6 +12,19 @@ from app.services.file_classifier import should_ignore_path, is_archive_filename
 # dogrulamayi yapan katman - bu dosya sadece detector arayuzune uydurur.
 from app.services.detectors import DetectorOutput
 from app.services.llm_recognizer import FindingRepairStats, LLMRecognitionError, find_llm_detections
+from app.services.token_boundary_validator import is_authoritative_result
+
+
+# Katman 1'in (sozluk/regex/ogrenilmis karar) kesin bulgulari: LLM'e bu
+# araliklar gecici yer tutucuyla gonderilir (bkz. llm_input_view). Presidio
+# gibi olasiliksal bulgular DAHIL EDILMEZ - sonradan reddedilebilirler ve
+# o durumda LLM'in degeri gormus olmasi gerekir.
+def _known_spans(metadata: dict) -> list[tuple[int, int, str]]:
+    return [
+        (result.start, result.end, result.tip)
+        for result in metadata.get("prior_results", ())
+        if is_authoritative_result(result) and result.start is not None and result.end is not None
+    ]
 
 
 # Katman 3 (LLM tabanli) tespiti, DetectorRegistry'nin bekledigi ortak
@@ -48,7 +61,7 @@ class LLMDetector:
         try:
             results = await find_llm_detections(
                 content, consumed, self.vllm_settings, metadata, self.extra_instructions,
-                repair_stats=repair_stats,
+                repair_stats=repair_stats, known_spans=_known_spans(metadata),
             )
         except LLMRecognitionError as exc:
             detail = "LLM taramasi tamamlanamadi; dosya VALIDATION_FAILED"

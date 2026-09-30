@@ -43,7 +43,7 @@ def test_chunks_cover_every_character_with_overlap(text):
 
 
 def test_tail_and_boundary_findings_are_detected_once_with_global_offsets(monkeypatch):
-    content = 'x'*5700 + 'ATLAS' + 'x'*15000 + 'SON_KOD'
+    content = 'x'*5700 + 'ATLAS ' + 'x'*14999 + 'SON_KOD'
     calls = []
     async def fake(host, timeout, payload, api_key=None):
         chunk = payload['messages'][1]['content']
