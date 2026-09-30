@@ -10,33 +10,89 @@ ayri: buradaki "onayla/reddet" anlami TERSTIR -
   - dismiss(): dar kapsamli suppression karari olusturur; sozluk, syntax,
     placeholder/restore ve AI final denetimini yeniden calistirir. Yalnizca
     hepsi gecerse maskelenmis icerigi hedef klasore yazar.
+
+dismiss()/mask() uc asamada calisir:
+  A. Aday icerik bir SAVEPOINT icinde hazirlanir (maskeleme, tutarlilik,
+     LLM'siz kontroller), savepoint geri alinir ve transaction commit edilir:
+     SQLite yazma kilidi LLM cagrisi boyunca TUTULMAZ.
+  B. LLM final denetimi aday icerik uzerinde, DB'ye yazmadan calisir.
+  C. Kisa bir yazma transaction'inda aday yeniden (deterministik) uretilir,
+     durum atomik olarak gecirilir, kararlar kaydedilir, dosya yazilir ve
+     commit edilir. Commit basarisiz olursa yazilan dosya ve manifest kaydi
+     geri alinir (bkz. _register_release_undo) - "dosya disarida ama DB
+     'karantinada' diyor" durumu olusmaz. Basarisiz dogrulama hicbir karari
+     (suppression, esleme) kalici yapmaz; yalnizca denetim kaydi yazilir.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.db.models import AuditLog, AuditWarning, FilterRule, MaskingContext, MaskingRun, ValueMapping
 from app.services.consistency_masking import SensitiveValueRegistry, find_consistency_occurrences
-from app.services.integrity_manifest import read_manifest, write_manifest, file_digest, source_tag
+from app.core.exceptions import ReviewAlreadyProcessedError
+from app.services.integrity_manifest import manifest_lock, read_manifest, write_manifest, file_digest, source_tag
 from app.services.mapping_service import load_active_rules, mapping_scope_for_run, mask_relative_path
 from app.services.roundtrip_validator import text_digest
 from app.services.rule_engine import reverse_text
 from app.repository.audit_warning_repository import SqlAlchemyAuditWarningRepository
-from app.services.audit_reviewer import AuditVerdict, audit_masked_text
+from app.services.audit_reviewer import audit_masked_text
 from app.services.llm_runtime import llm_file_context
 from app.services.audit_warning_details import describe_audit_warning
 from app.services.file_type import write_text_preserving_encoding
-from app.services.learned_decisions import LearnedDecisionPolicy, remember_decision
+from app.services.learned_decisions import LearnedDecisionPolicy, covered_by_values, remember_decision
 from app.services.llm_recognizer import LLMRecognitionError
 from app.services.rule_engine import PLACEHOLDER_RE
 from app.services.syntax_validator import validate_masked_syntax
 from app.services.term_upload import find_leaked_terms
+
+
+
+
+_PENDING_RELEASES_KEY = "audit_warning_pending_release_undos"
+
+
+def _forget_releases(session: Session) -> None:
+    session.info.get(_PENDING_RELEASES_KEY, []).clear()
+
+
+def _undo_uncommitted_releases(session: Session, transaction) -> None:
+    # after_commit (yalnizca en distaki commit'te) listeyi zaten bosaltir; en
+    # distaki transaction commit'siz biterse (rollback, basarisiz commit,
+    # close) serbest birakilan dosyalar ve manifest kayitlari geri alinir.
+    if transaction.parent is not None:
+        return
+    _undo_pending_releases(session)
+
+
+def _undo_pending_releases(session: Session) -> None:
+    pending = session.info.get(_PENDING_RELEASES_KEY)
+    while pending:
+        pending.pop()()
+
+
+def _register_release_undo(db: Session, undo: Callable[[], None]) -> None:
+    pending = db.info.get(_PENDING_RELEASES_KEY)
+    if pending is None:
+        pending = db.info[_PENDING_RELEASES_KEY] = []
+        event.listen(db, "after_commit", _forget_releases)
+        event.listen(db, "after_transaction_end", _undo_uncommitted_releases)
+    pending.append(undo)
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    """Serbest birakilacak icerigin hazirlanmis hali (asama A/C)."""
+    content: str
+    consistency_count: int
+    error: str | None
 
 
 class AuditWarningService:
@@ -70,62 +126,26 @@ class AuditWarningService:
     # Bulguyu yanlis alarm sayar; dar suppression ve FINAL PASS basariliysa serbest birakir.
     async def dismiss(self, warning_id: int) -> AuditWarning:
         """Learn a narrow suppression and release only after a complete final pass."""
-        warning = self.db.get(AuditWarning, warning_id)
-        if warning is None or warning.status != "pending":
-            from app.core.exceptions import ReviewAlreadyProcessedError
-            raise ReviewAlreadyProcessedError(f"denetim_uyarilari id={warning_id} zaten islenmis veya yok")
+        warning = self._pending_warning(warning_id)
         if warning.audit_failed:
             raise ValueError("Teknik doğrulama hatası kullanıcı kararıyla geçilemez; proje yeniden çalıştırılmalıdır")
         run = self.db.get(MaskingRun, warning.run_id)
         if run is None:
             raise ValueError("İlgili export işlemi bulunamadı")
-
-        details = describe_audit_warning(warning, self.db)
-        learned_ids: list[int] = []
-        for evidence in details.get("evidence", []):
-            value = str(evidence.get("found_value", "")).strip()
-            if not value:
-                continue
-            learned = remember_decision(
-                self.db, context_id=run.context_id, decision_type="suppression",
-                value=value, entity_type="POST_MASK_AUDIT", file_path=warning.file_path,
-                source_review_id=None,
-            )
-            learned_ids.append(learned.id)
-        self.db.add(AuditLog(
-            run_id=run.id, file_path=warning.file_path, action="skipped",
-            detail=(f"warning_id={warning.id} ai_result=risky user_decision=false_alarm "
-                    f"suppression_rule_ids={learned_ids or 'none'} revalidation=started"),
-        ))
-
-        error = self._apply_run_consistency(warning, run)
-        if error is None:
-            error = await self._final_pass(warning, run)
-        if error is not None:
-            self.db.add(AuditLog(
-                run_id=run.id, file_path=warning.file_path, action="error",
-                detail=f"revalidation=failed final_output=blocked reason={error}",
-            ))
-            self.db.commit()
-            raise ValueError(f"Dosya yeniden doğrulamadan geçemedi ve çıktıya eklenmedi: {error}")
-
-        warning = self.audit_warnings.transition_pending(warning_id, status="dismissed")
-        self._release_to_target(warning)
-        self.db.add(AuditLog(
-            run_id=run.id, file_path=warning.file_path, action="skipped",
-            detail="revalidation=passed final_output=written",
-        ))
-        return warning
+        # Kanitlarin TAMAMI (ekran siniri yok): bastirilmayan bir alinti final
+        # denetimde yeniden bulunur ve dosya hicbir zaman cikamaz.
+        suppressions = self._evidence_values(warning)
+        return await self._release_with_revalidation(
+            warning, run, mask_values=[], suppressions=suppressions,
+            failure_message="Dosya yeniden doğrulamadan geçemedi ve çıktıya eklenmedi",
+            decision_detail="user_decision=false_alarm",
+        )
 
     async def mask(self, warning_id: int) -> AuditWarning:
         """Automatically mask verified audit evidence and release after validation."""
-        from app.core.exceptions import ReviewAlreadyProcessedError
         from app.services.file_classifier import is_lock_filename
-        from app.services.review_masking import mask_review_values
 
-        warning = self.db.get(AuditWarning, warning_id)
-        if warning is None or warning.status != "pending":
-            raise ReviewAlreadyProcessedError("Bu dosya kararı zaten işlenmiş veya bulunamadı.")
+        warning = self._pending_warning(warning_id, message="Bu dosya kararı zaten işlenmiş veya bulunamadı.")
         if warning.audit_failed:
             raise ValueError("Teknik doğrulama hatası otomatik düzenlemeyle geçilemez; projeyi yeniden tarayın.")
         if warning.encoding == "java-class-v1" or is_lock_filename(Path(warning.file_path).name):
@@ -135,91 +155,22 @@ class AuditWarningService:
         run = self.db.get(MaskingRun, warning.run_id)
         if run is None:
             raise ValueError("İlgili maskeleme işlemi bulunamadı.")
-        details = describe_audit_warning(warning, self.db, evidence_limit=None)
-        values = [(item["found_value"], "POST_MASK_AUDIT") for item in details["evidence"]
-                  if item.get("found_value")]
+        values = [(value, "POST_MASK_AUDIT") for value in self._evidence_values(warning)]
         if not values:
             raise ValueError("Denetim dosyada birebir bulunan bir ifade belirtmedi; otomatik maskeleme yapılamadı.")
-        with self.db.begin_nested():
-            warning.masked_content = mask_review_values(
-                self.db, run, warning.masked_content, warning.file_path, values,
-            )
-            self.db.flush()
-            error = self._apply_run_consistency(warning, run)
-            if error is None:
-                error = await self._final_pass(warning, run)
-            if error is not None:
-                raise ValueError(f"Otomatik maskeleme sonrası dosya çıktıya eklenmedi: {error}")
-            warning = self.audit_warnings.transition_pending(warning_id, status="dismissed")
-            self._release_to_target(warning)
-            self.db.add(AuditLog(
-                run_id=run.id, file_path=warning.file_path, action="replaced",
-                detail="user_decision=automatic_mask revalidation=passed final_state=READY final_output=written",
-            ))
-        return warning
-
-    async def _final_pass(self, warning: AuditWarning, run: MaskingRun) -> str | None:
-        if warning.encoding == "java-class-v1":
-            return "Java class dosyası için orijinal projeyi yeniden tarayın; metin önizlemesinden bytecode oluşturulamaz"
-        if not run.target_path:
-            return "export hedef klasörü bulunamadı"
-        target = Path(run.target_path).resolve()
-        try:
-            output_rel = self._output_relative_path(warning, run)
-        except ValueError as exc:
-            return str(exc)
-        destination = (target / output_rel).resolve()
-        try:
-            destination.relative_to(target)
-        except ValueError:
-            return "karantina dosya yolu hedef klasörün dışına çıkıyor"
-        if find_consistency_occurrences(
-            warning.masked_content, self._run_registry(run), file_path=warning.file_path
-        ):
-            return "tutarlılık kontrolünde bu işlemde maskelenen bir değer dosyada açık kaldı"
-        if find_leaked_terms(self.db, warning.masked_content):
-            return "kurumsal terim son kontrolünde açık değer kaldı"
-        syntax_error = validate_masked_syntax(
-            warning.file_path, warning.masked_content, original_text=None,
-            sql_dialect=settings.validation.sql_dialect,
+        return await self._release_with_revalidation(
+            warning, run, mask_values=values, suppressions=[],
+            failure_message="Otomatik maskeleme sonrası dosya çıktıya eklenmedi",
+            decision_detail="user_decision=automatic_mask",
         )
-        if syntax_error and settings.validation.syntax_failure_action == "warn":
-            # Gizlilik kontrolleri (tutarlilik, acik terim) gecti; denetim ve geri
-            # donus asagida yine calisir. Hata yalnizca uyari olarak kaydedilir.
-            self.db.add(AuditLog(
-                run_id=run.id, file_path=warning.file_path, action="skipped",
-                detail=f"validation_warning; syntax_failure_action=warn; {syntax_error}",
-            ))
-        elif syntax_error:
-            return f"sözdizimi doğrulaması başarısız: {syntax_error}"
-
-        known = set(self.db.scalars(select(ValueMapping.placeholder_value).where(
-            ValueMapping.context_id == run.context_id,
-            ValueMapping.run_id == mapping_scope_for_run(self.db, run.id),
-        )).all())
-        unresolved = sorted({m.group(0) for m in PLACEHOLDER_RE.finditer(warning.masked_content)} - known)
-        if unresolved:
-            return f"geri dönüş doğrulaması başarısız; {len(unresolved)} yer tutucu çözülemiyor"
-
-        try:
-            with llm_file_context(warning.file_path):
-                verdict = await audit_masked_text(warning.masked_content, settings.vllm)
-        except LLMRecognitionError as exc:
-            return f"AI güvenlik doğrulaması tamamlanamadı: {exc}"
-
-        policy = LearnedDecisionPolicy.load(self.db, run.context_id)
-        remaining = []
-        for finding in verdict.findings if verdict.risky else []:
-            if policy.suppression_for_value(finding.ilgili_bolum, warning.file_path) is None:
-                remaining.append(finding)
-        if verdict.risky and not verdict.findings:
-            return "final AI denetimi risk bildirdi ancak doğrulanabilir ifade belirtmedi"
-        if verdict.risky and remaining:
-            return f"final AI denetimi {len(remaining)} bastırılmamış risk buldu"
-        return None
 
     async def finalize_review_hold(self, warning: AuditWarning) -> None:
-        """Apply completed review decisions, then release through the same final pass."""
+        """Apply completed review decisions, then release through the same final pass.
+
+        Cagiran (ReviewService) kendi yazma transaction'i icindedir; bu yol
+        transaction'i bolemez. Dosya yine commit'e baglidir: commit olmazsa
+        yazilan dosya ve manifest kaydi geri alinir.
+        """
         run = self.db.get(MaskingRun, warning.run_id)
         if run is None:
             return
@@ -229,16 +180,21 @@ class AuditWarningService:
             ReviewQueue.run_id == run.id, ReviewQueue.file_path == warning.file_path,
             ReviewQueue.status == "approved", ReviewQueue.found_value.is_not(None),
         )).all()
+        content = warning.masked_content
         if approved:
             from app.services.review_masking import mask_review_values
-            warning.masked_content = mask_review_values(
-                self.db, run, warning.masked_content, warning.file_path,
+            # Hata yukari tasinir: inceleme karari da geri alinir.
+            content = mask_review_values(
+                self.db, run, content, warning.file_path,
                 [(review.found_value, review.entity_type) for review in approved],
             )
-
-        error = self._apply_run_consistency(warning, run)
+        candidate = self._prepare_candidate(warning, run, [], content=content)
+        # Onaylanan maskelemeler dogrulama basarisiz olsa da karantina kopyasina islenir.
+        warning.masked_content = candidate.content
+        self._log_consistency(warning, run, candidate.consistency_count)
+        error = candidate.error
         if error is None:
-            error = await self._final_pass(warning, run)
+            error = await self._ai_check(candidate.content, warning, run)
         if error is not None:
             warning.audit_failed = True
             warning.reasoning = f"İnceleme kararları sonrası doğrulama başarısız: {error}"
@@ -254,11 +210,195 @@ class AuditWarningService:
             detail="review_decisions=complete revalidation=passed final_output=written",
         ))
 
+    # Geriye uyumluluk: LLM'siz kontroller + LLM final denetimi, mevcut icerik uzerinde.
+    async def _final_pass(self, warning: AuditWarning, run: MaskingRun) -> str | None:
+        error = self._offline_checks(warning.masked_content, warning, run)
+        if error is None:
+            error = await self._ai_check(warning.masked_content, warning, run)
+        return error
+
+    # ------------------------------------------------------------------
+    # Uc asamali serbest birakma (bkz. modul dokumani)
+    # ------------------------------------------------------------------
+
+    async def _release_with_revalidation(
+        self, warning: AuditWarning, run: MaskingRun, *,
+        mask_values: list[tuple[str, str]], suppressions: list[str],
+        failure_message: str, decision_detail: str,
+    ) -> AuditWarning:
+        warning_id = warning.id
+
+        # A: aday icerik; hicbir yazma kalici degil, kilit LLM'den once birakilir.
+        savepoint = self.db.begin_nested()
+        try:
+            candidate = self._prepare_candidate(warning, run, mask_values)
+        finally:
+            savepoint.rollback()
+        self.db.commit()
+
+        # B: LLM final denetimi - DB'ye yazmaz.
+        error = candidate.error
+        if error is None:
+            error = await self._ai_check(candidate.content, warning, run, extra_suppressions=suppressions)
+        if error is not None:
+            self._record_failure(warning, run, decision_detail, error)
+            raise ValueError(f"{failure_message}: {error}")
+
+        # C: kisa yazma transaction'i.
+        savepoint = self.db.begin_nested()
+        try:
+            again = self._prepare_candidate(warning, run, mask_values)
+            if again.error is not None or again.content != candidate.content:
+                raise _StaleCandidate(again.error or "dosya ya da eşlemeler doğrulama sırasında değişti; işlemi tekrarlayın")
+            warning = self.audit_warnings.transition_pending(warning_id, status="dismissed")
+            warning.masked_content = again.content
+            self._log_consistency(warning, run, again.consistency_count)
+            learned_ids = [
+                remember_decision(
+                    self.db, context_id=run.context_id, decision_type="suppression",
+                    value=value, entity_type="POST_MASK_AUDIT", file_path=warning.file_path,
+                    source_review_id=None,
+                ).id
+                for value in suppressions
+            ]
+            self._release_to_target(warning)
+            suppression_detail = f" suppression_rule_ids={learned_ids}" if suppressions else ""
+            self.db.add(AuditLog(
+                run_id=run.id, file_path=warning.file_path,
+                action="replaced" if mask_values else "skipped",
+                detail=(f"warning_id={warning_id} ai_result=risky {decision_detail}{suppression_detail} "
+                        "revalidation=passed final_state=READY final_output=written"),
+            ))
+            savepoint.commit()
+        except _StaleCandidate as exc:
+            savepoint.rollback()
+            self._record_failure(warning, run, decision_detail, str(exc))
+            raise ValueError(f"{failure_message}: {exc}") from None
+        except BaseException:
+            savepoint.rollback()
+            # Asama A'da commit edildigi icin bekleyen geri almalarin tamami bu denemeye ait.
+            _undo_pending_releases(self.db)
+            raise
+        # Commit basarisiz olursa after_transaction_end dosyayi geri alir.
+        try:
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+        return warning
+
+    def _pending_warning(self, warning_id: int, message: str | None = None) -> AuditWarning:
+        warning = self.db.get(AuditWarning, warning_id)
+        if warning is None or warning.status != "pending":
+            raise ReviewAlreadyProcessedError(message or f"denetim_uyarilari id={warning_id} zaten islenmis veya yok")
+        return warning
+
+    def _evidence_values(self, warning: AuditWarning) -> list[str]:
+        details = describe_audit_warning(warning, self.db, evidence_limit=None)
+        values = (str(item.get("found_value", "")).strip() for item in details.get("evidence", []))
+        return list(dict.fromkeys(value for value in values if value))
+
+    def _record_failure(self, warning: AuditWarning, run: MaskingRun, decision_detail: str, error: str) -> None:
+        # Yalnizca denetim kaydi kalici olur; karar/esleme yazilmaz, dosya bekler.
+        self.db.add(AuditLog(
+            run_id=run.id, file_path=warning.file_path, action="error",
+            detail=f"warning_id={warning.id} {decision_detail} revalidation=failed final_output=blocked reason={error}",
+        ))
+        self.db.commit()
+
+    def _prepare_candidate(
+        self, warning: AuditWarning, run: MaskingRun, mask_values: list[tuple[str, str]],
+        *, content: str | None = None,
+    ) -> _Candidate:
+        from app.services.review_masking import mask_review_values
+
+        content = warning.masked_content if content is None else content
+        if mask_values:
+            try:
+                content = mask_review_values(self.db, run, content, warning.file_path, mask_values)
+            except ValueError as exc:
+                return _Candidate(content, 0, str(exc))
+        content, count, error = self._with_run_consistency(content, warning, run)
+        if error is None:
+            error = self._offline_checks(content, warning, run)
+        return _Candidate(content, count, error)
+
+    def _offline_checks(self, content: str, warning: AuditWarning, run: MaskingRun) -> str | None:
+        if warning.encoding == "java-class-v1":
+            return "Java class dosyası için orijinal projeyi yeniden tarayın; metin önizlemesinden bytecode oluşturulamaz"
+        if not run.target_path:
+            return "export hedef klasörü bulunamadı"
+        target = Path(run.target_path).resolve()
+        try:
+            output_rel = self._output_relative_path(warning, run)
+        except ValueError as exc:
+            return str(exc)
+        destination = (target / output_rel).resolve()
+        try:
+            destination.relative_to(target)
+        except ValueError:
+            return "karantina dosya yolu hedef klasörün dışına çıkıyor"
+        if find_consistency_occurrences(content, self._run_registry(run), file_path=warning.file_path):
+            return "tutarlılık kontrolünde bu işlemde maskelenen bir değer dosyada açık kaldı"
+        if find_leaked_terms(self.db, content):
+            return "kurumsal terim son kontrolünde açık değer kaldı"
+
+        reverse_map = self._run_reverse_map(run)
+        unresolved = sorted({m.group(0) for m in PLACEHOLDER_RE.finditer(content)} - reverse_map.keys())
+        if unresolved:
+            return f"geri dönüş doğrulaması başarısız; {len(unresolved)} yer tutucu çözülemiyor"
+
+        # Export'taki gibi orijinalle karsilastirilir: kaynakta zaten bulunan
+        # bir sozdizimi hatasi (orn. yorumlu JSON) maskelemenin hatasi sayilmaz.
+        original_text = reverse_text(content, reverse_map)[0]
+        syntax_error = validate_masked_syntax(
+            warning.file_path, content, original_text=original_text,
+            sql_dialect=settings.validation.sql_dialect,
+        )
+        if syntax_error and settings.validation.syntax_failure_action == "warn":
+            # Gizlilik kontrolleri (tutarlilik, acik terim) gecti; denetim asagida
+            # yine calisir. Hata yalnizca uyari olarak kaydedilir.
+            self.db.add(AuditLog(
+                run_id=run.id, file_path=warning.file_path, action="skipped",
+                detail=f"validation_warning; syntax_failure_action=warn; {syntax_error}",
+            ))
+        elif syntax_error:
+            return f"sözdizimi doğrulaması başarısız: {syntax_error}"
+        return None
+
+    async def _ai_check(
+        self, content: str, warning: AuditWarning, run: MaskingRun, *, extra_suppressions: Sequence[str] = (),
+    ) -> str | None:
+        try:
+            with llm_file_context(warning.file_path):
+                verdict = await audit_masked_text(content, settings.vllm)
+        except LLMRecognitionError as exc:
+            return f"AI güvenlik doğrulaması tamamlanamadı: {exc}"
+        if verdict.risky and not verdict.findings:
+            return "final AI denetimi risk bildirdi ancak doğrulanabilir ifade belirtmedi"
+
+        policy = LearnedDecisionPolicy.load(self.db, run.context_id)
+        extra = list(extra_suppressions)
+        remaining = [
+            finding for finding in (verdict.findings if verdict.risky else [])
+            if policy.suppression_covering(finding.ilgili_bolum, warning.file_path, content) is None
+            and not covered_by_values(finding.ilgili_bolum, content, extra)
+        ]
+        if remaining:
+            return f"final AI denetimi {len(remaining)} bastırılmamış risk buldu"
+        return None
+
     def _run_mapping_rows(self, run: MaskingRun) -> list[ValueMapping]:
         return list(self.db.scalars(select(ValueMapping).where(
             ValueMapping.context_id == run.context_id,
             ValueMapping.run_id == mapping_scope_for_run(self.db, run.id),
         )).all())
+
+    def _run_reverse_map(self, run: MaskingRun) -> dict[str, str]:
+        return {
+            row.placeholder_value: row.original_value_plain or decrypt_value(row.original_value_encrypted)
+            for row in self._run_mapping_rows(run)
+        }
 
     def _run_registry(self, run: MaskingRun) -> SensitiveValueRegistry:
         """Export'un tutarlilik registry'sinin DB'deki eslemelerden kurulmus hali."""
@@ -275,28 +415,31 @@ class AuditWarningService:
         ])
         return registry
 
-    def _apply_run_consistency(self, warning: AuditWarning, run: MaskingRun) -> str | None:
+    def _with_run_consistency(
+        self, content: str, warning: AuditWarning, run: MaskingRun,
+    ) -> tuple[str, int, str | None]:
         """Bu islemde baska dosyalarda maskelenmis ama bu dosyada acik kalmis
         degerleri, export'taki tutarlilik gecisiyle ayni esleme sozlesmesiyle maskeler."""
-        occurrences = find_consistency_occurrences(
-            warning.masked_content, self._run_registry(run), file_path=warning.file_path
-        )
+        occurrences = find_consistency_occurrences(content, self._run_registry(run), file_path=warning.file_path)
         if not occurrences:
-            return None
+            return content, 0, None
         from app.services.review_masking import mask_review_values
         try:
-            warning.masked_content = mask_review_values(
-                self.db, run, warning.masked_content, warning.file_path,
+            content = mask_review_values(
+                self.db, run, content, warning.file_path,
                 [(item.original_value, item.entry.entity_type) for item in occurrences],
             )
         except ValueError as exc:
-            return f"tutarlılık maskelemesi uygulanamadı: {exc}"
-        self.db.add(AuditLog(
-            run_id=run.id, file_path=warning.file_path, action="replaced",
-            detail=f"source=consistency_on_release occurrences={len(occurrences)}",
-        ))
+            return content, 0, f"tutarlılık maskelemesi uygulanamadı: {exc}"
         self.db.flush()
-        return None
+        return content, len(occurrences), None
+
+    def _log_consistency(self, warning: AuditWarning, run: MaskingRun, count: int) -> None:
+        if count:
+            self.db.add(AuditLog(
+                run_id=run.id, file_path=warning.file_path, action="replaced",
+                detail=f"source=consistency_on_release occurrences={count}",
+            ))
 
     def _output_relative_path(self, warning: AuditWarning, run: MaskingRun) -> Path:
         """Serbest birakilan dosyanin ciktidaki MASKELI goreli yolu.
@@ -323,7 +466,7 @@ class AuditWarningService:
         return masked
 
     # Karantinadaki maskelenmis icerigi run'in hedef klasorune, MASKELI yola yazar
-    # ve imzali butunluk kaydina ekler.
+    # ve imzali butunluk kaydina ekler. Transaction commit edilmezse ikisi de geri alinir.
     def _release_to_target(self, warning: AuditWarning) -> None:
         if warning.encoding == "java-class-v1":
             raise ValueError("Java class dosyası orijinal projeden yeniden taranmalıdır")
@@ -337,19 +480,24 @@ class AuditWarningService:
             dest_path.relative_to(target)
         except ValueError as exc:
             raise ValueError("Karantina dosya yolu hedef klasörün dışına çıkıyor") from exc
+        previous = dest_path.read_bytes() if dest_path.is_file() else None
         dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def undo_file() -> None:
+            try:
+                if previous is None:
+                    dest_path.unlink(missing_ok=True)
+                else:
+                    dest_path.write_bytes(previous)
+            except OSError:
+                pass
+
+        _register_release_undo(self.db, undo_file)
         write_text_preserving_encoding(dest_path, warning.masked_content, warning.encoding)
         self._add_to_manifest(run, target, dest_path, warning)
 
     def _add_to_manifest(self, run: MaskingRun, target: Path, dest_path: Path, warning: AuditWarning) -> None:
-        manifest = read_manifest(target, run.context_id)
-        if manifest is None:
-            return  # Eski/manifestsiz cikti: unmask zaten "kanit yok" yolunu kullanir.
-        reverse_map = {
-            row.placeholder_value: row.original_value_plain or decrypt_value(row.original_value_encrypted)
-            for row in self._run_mapping_rows(run)
-        }
-        original_text, _resolved, _unresolved = reverse_text(warning.masked_content, reverse_map)
+        original_text, _resolved, _unresolved = reverse_text(warning.masked_content, self._run_reverse_map(run))
         mode = 0o644
         if run.source_path:
             source_file = Path(run.source_path) / warning.file_path
@@ -361,12 +509,45 @@ class AuditWarningService:
             dest_path.chmod(mode)
         except OSError:
             pass
-        files = dict(manifest["files"])
-        files[dest_path.relative_to(target).as_posix()] = {
+        key = dest_path.relative_to(target).as_posix()
+        entry = {
             "encoding": warning.encoding or "utf-8",
             "masked_sha256": file_digest(dest_path),
             "source_tag": source_tag(run.context_id, text_digest(original_text)),
             "mode": mode,
         }
-        complete = run.files_scanned is not None and len(files) >= run.files_scanned
-        write_manifest(target, run.context_id, files, complete=complete, job_id=manifest.get("job_id"))
+        # Oku-degistir-yaz kilit altinda: es zamanli iki serbest birakma
+        # birbirinin kaydini silmez.
+        with manifest_lock(target):
+            manifest = read_manifest(target, run.context_id)
+            if manifest is None:
+                return  # Eski/manifestsiz cikti: unmask zaten "kanit yok" yolunu kullanir.
+            previous_entry = manifest["files"].get(key)
+            files = dict(manifest["files"])
+            files[key] = entry
+            complete = run.files_scanned is not None and len(files) >= run.files_scanned
+            write_manifest(target, run.context_id, files, complete=complete, job_id=manifest.get("job_id"))
+
+        def undo_manifest() -> None:
+            # Anlik goruntu geri yuklenmez: arada baska bir serbest birakma
+            # eklenmis olabilir. Yalnizca bu kayit geri alinir.
+            try:
+                with manifest_lock(target):
+                    current = read_manifest(target, run.context_id)
+                    if current is None or current["files"].get(key) != entry:
+                        return
+                    files = dict(current["files"])
+                    if previous_entry is None:
+                        files.pop(key)
+                    else:
+                        files[key] = previous_entry
+                    complete = run.files_scanned is not None and len(files) >= run.files_scanned
+                    write_manifest(target, run.context_id, files, complete=complete, job_id=current.get("job_id"))
+            except (OSError, ValueError):
+                pass
+
+        _register_release_undo(self.db, undo_manifest)
+
+
+class _StaleCandidate(Exception):
+    """Asama C'de uretilen icerik, LLM'in denetledigi adayla ayni degil."""

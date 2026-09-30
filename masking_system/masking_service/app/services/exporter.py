@@ -1761,7 +1761,9 @@ def _finalize_file(
             and decision_policy is not None):
         remaining = [
             finding for finding in audit_result.findings
-            if decision_policy.suppression_for_value(finding.ilgili_bolum, prep.rel) is None
+            if decision_policy.suppression_covering(
+                finding.ilgili_bolum, prep.rel, masked_file.masked_text,
+            ) is None
         ]
         suppressed = len(audit_result.findings) - len(remaining)
         if suppressed:
@@ -1788,9 +1790,11 @@ def _finalize_file(
             return _RemediationRequest(leaked_terms=leaked_terms, findings=findings)
 
     if leaked_terms:
+        # Acik deger gerekceye yazilmaz (denetim_uyarilari sifrelenmez); inceleme
+        # ekrani degeri konumdan, maskelenmis icerik uzerinde canli cozer
+        # (bkz. audit_warning_details.describe_audit_warning).
         leaked_summary = "\n".join(
-            f"Satır {t.line_number}, sütun {t.column_number}: {t.category} ({t.rule_name}); "
-            f"açık değer={t.matched_value!r}"
+            f"Satır {t.line_number}, sütun {t.column_number}: {t.category} ({t.rule_name})"
             for t in leaked_terms[:20]
         )
         reason = (
@@ -1894,7 +1898,7 @@ def _finalize_file(
                                       masked_file.masked_text, prep.encoding)
             _warn(run_id=run_id, file_path=prep.rel,
                   masked_content=masked_file.masked_text, encoding=prep.encoding,
-                  reasoning=reason, audit_failed=True)
+                  output_path=prep.masked_rel, reasoning=reason, audit_failed=True)
             db.add(AuditLog(run_id=run_id, file_path=prep.rel, action="error",
                             detail=f"final_state=VALIDATION_FAILED final_output=blocked; {reason}"))
             return FileOutcome(prep.rel, failed_check="sozdizimi", status="failed_syntax_validation",

@@ -112,6 +112,54 @@ class LearnedDecisionPolicy:
         return next((entry for entry in self.suppressions if
             entry.scope_key == scope and normalize_value(entry.value) == normalized), None)
 
+    def suppression_covering(self, value: str, file_path: str, text: str) -> DecisionEntry | None:
+        """Exact match first; otherwise every occurrence of `value` in `text`
+        must lie inside an occurrence of a suppressed value (bkz. covered_by_values)."""
+        exact = self.suppression_for_value(value, file_path)
+        if exact is not None:
+            return exact
+        scope = security_scope(file_path)
+        candidates = [entry for entry in self.suppressions if entry.scope_key == scope]
+        if not covered_by_values(value, text, [entry.value for entry in candidates]):
+            return None
+        needle = normalize_value(value)
+        return next(entry for entry in candidates if needle in normalize_value(entry.value))
+
+
+def covered_by_values(value: str, text: str, suppressed_values: list[str]) -> bool:
+    """Is every occurrence of `value` in `text` inside an occurrence of a suppressed value?
+
+    LLM denetim alintilarinin sinirlari calismadan calismaya degisir (bir kez
+    "Hakan Yilmaz", sonra "Hakan"). Karar alinti metnine degil konuma gore
+    eslenir: "Hakan" yalnizca metindeki TUM gecisleri "hassas degil" denmis bir
+    "Hakan Yilmaz" gecisinin icinde kaliyorsa bastirilir. Baska bir yerde tek
+    basina gecen "Hakan" bulgu olarak kalir.
+    """
+    needle = normalize_value(value)
+    if not needle:
+        return False
+    folded = normalize_value(text)
+    covers: list[tuple[int, int]] = []
+    for suppressed in suppressed_values:
+        pattern = normalize_value(suppressed)
+        if not pattern or needle not in pattern:
+            continue
+        start = 0
+        while (index := folded.find(pattern, start)) >= 0:
+            covers.append((index, index + len(pattern)))
+            start = index + 1
+    if not covers:
+        return False
+    found = False
+    start = 0
+    while (index := folded.find(needle, start)) >= 0:
+        found = True
+        end = index + len(needle)
+        if not any(low <= index and end <= high for low, high in covers):
+            return False
+        start = index + 1
+    return found
+
 
 class LearnedSensitiveDetector:
     name = "dictionary"

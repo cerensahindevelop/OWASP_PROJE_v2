@@ -59,6 +59,19 @@ Onaydan sonra serbest bırakılan dosyalar çıktıdaki maskelenmiş yola yazıl
 aynı işlemin diğer dosyalarında maskelenen değerlere karşı tutarlılık
 kontrolünden geçer ve imzalı bütünlük kaydına eklenir.
 
+Karantinadaki bir dosya için "Yanlış Alarm" ya da "Maskele" seçildiğinde son
+LLM denetimi veritabanı yazma kilidi tutulmadan çalışır; bu sırada diğer
+export'lar beklemez. Dosya ve bütünlük kaydı ancak karar veritabanına
+kaydedilirse kalır; kayıt başarısız olursa geri alınır. Doğrulamadan geçemeyen
+bir karar kalıcı hale gelmez (yalnızca işlem kaydına yazılır). "Yanlış Alarm"
+denetimin gösterdiği tüm değerleri kapsar. Son denetim aynı değeri daha kısa
+alıntılasa da (ör. önce "Hakan Yılmaz", sonra "Hakan") bu değerin dosyadaki
+tüm geçişleri kararın kapsamındaysa bastırılır. Kaynakta zaten bulunan bir
+sözdizimi hatası (ör. yorumlu JSON) serbest bırakmayı engellemez. Kurumsal
+terim karantinasının gerekçesine açık değer yazılmaz. İnceleme kararlarından
+sonraki son denetim, karar işleminin içinde çalıştığı için yazma kilidini
+tutmaya devam eder.
+
 Export web arayüzünde arka plan işi olarak çalışır; ekran işlenen/toplam dosya
 ilerlemesini gösterir. Export sırasında veritabanı yazma kilidi LLM
 çağrıları boyunca tutulmaz; aynı anda başka projelerin export'ları ve onay

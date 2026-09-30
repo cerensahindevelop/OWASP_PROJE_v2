@@ -6,15 +6,35 @@ but unmask must report that source equivalence is no longer established.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
+import tempfile
+import threading
+import time
 
 from app.core.crypto import hash_value
 
 MANIFEST_NAME = ".masking-integrity.json"
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
+
+# Karantinadan serbest birakma manifest'i oku-degistir-yaz ile gunceller; ayni
+# hedefe es zamanli iki serbest birakma birbirinin kaydini silmesin diye hedef
+# kok dizini basina surec-ici kilit. (Backend tek surecte calisir, bkz. start.py.)
+_LOCKS_GUARD = threading.Lock()
+_LOCKS: dict[str, threading.Lock] = {}
+
+
+@contextmanager
+def manifest_lock(root: Path):
+    key = os.path.normcase(str(Path(root).resolve()))
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        yield
 
 
 def source_tag(context_id: int, digest: str) -> str:
@@ -33,7 +53,28 @@ def write_manifest(root: Path, context_id: int, files: dict, *, complete: bool, 
     data = json.dumps(document, sort_keys=True, ensure_ascii=True).encode("utf-8")
     if len(data) > MAX_MANIFEST_BYTES:
         raise ValueError("Dosya butunluk kaydi boyut sinirini asti.")
-    (root / MANIFEST_NAME).write_bytes(data)
+    # Gecici dosya + os.replace: yarim yazilmis (imzasi bozuk) manifest kalmaz.
+    fd, temp_name = tempfile.mkstemp(prefix=".masking-integrity-", suffix=".tmp", dir=root)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        _replace_with_retry(temp_name, root / MANIFEST_NAME)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+
+
+def _replace_with_retry(src: str, dst: Path) -> None:
+    # Windows: antivirus/OneDrive hedef dosyayi kisa sure acik tutabilir
+    # (bkz. output_publication._rename_with_retry); POSIX'te ilk deneme gecer.
+    for attempt in range(5):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2 * (attempt + 1))
 
 
 def read_manifest(root: Path, context_id: int) -> dict | None:
