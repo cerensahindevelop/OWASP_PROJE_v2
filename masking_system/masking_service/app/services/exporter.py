@@ -1790,11 +1790,11 @@ def _finalize_file(
             return _RemediationRequest(leaked_terms=leaked_terms, findings=findings)
 
     if leaked_terms:
-        # Acik deger gerekceye yazilmaz (denetim_uyarilari sifrelenmez); inceleme
-        # ekrani degeri konumdan, maskelenmis icerik uzerinde canli cozer
-        # (bkz. audit_warning_details.describe_audit_warning).
+        # Inceleyen kisi degeri acikca gormelidir; sozluk sonradan degisse de
+        # ekran degeri bu gerekceden okur (bkz. describe_audit_warning).
         leaked_summary = "\n".join(
-            f"Satır {t.line_number}, sütun {t.column_number}: {t.category} ({t.rule_name})"
+            f"Satır {t.line_number}, sütun {t.column_number}: {t.category} ({t.rule_name}); "
+            f"açık değer={t.matched_value!r}"
             for t in leaked_terms[:20]
         )
         reason = (

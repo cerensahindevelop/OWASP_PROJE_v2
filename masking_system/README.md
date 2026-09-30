@@ -68,7 +68,12 @@ denetimin gösterdiği tüm değerleri kapsar. Son denetim aynı değeri daha k�
 alıntılasa da (ör. önce "Hakan Yılmaz", sonra "Hakan") bu değerin dosyadaki
 tüm geçişleri kararın kapsamındaysa bastırılır. Kaynakta zaten bulunan bir
 sözdizimi hatası (ör. yorumlu JSON) serbest bırakmayı engellemez. Kurumsal
-terim karantinasının gerekçesine açık değer yazılmaz. İnceleme kararlarından
+terim karantinasında inceleyen kişi açık değeri görür; terim sözlükten sonradan
+silinse bile değer export anındaki gerekçeden gösterilir. Bütünlük kaydı
+(manifest) güncellemesi işletim sistemi dosya kilidiyle korunur; backend birden
+fazla worker/süreçle çalıştırılabilir. Kilit dosyası çıktı klasörünün yanında
+(`.<klasör>.masking-manifest.lock`) durur, indirilen çıktıya girmez; 30 saniyede
+alınamazsa işlem hata verir ve tekrar denenebilir. İnceleme kararlarından
 sonraki son denetim, karar işleminin içinde çalıştığı için yazma kilidini
 tutmaya devam eder.
 

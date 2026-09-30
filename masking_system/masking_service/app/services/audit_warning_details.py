@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 
 from sqlalchemy.orm import Session
@@ -20,6 +21,23 @@ def _line_excerpt(content: str, line_number: int, value: str = "") -> str:
     if len(line) > 240:
         line = line[:237] + "…"
     return line
+
+
+_RECORDED_TERM_RE = re.compile(
+    r"Satır (\d+), sütun (\d+): [^\n]*?; açık değer=('(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\")"
+)
+
+
+def _recorded_term_values(reason: str) -> dict[tuple[int, int], str]:
+    values: dict[tuple[int, int], str] = {}
+    for line, column, literal in _RECORDED_TERM_RE.findall(reason):
+        try:
+            value = ast.literal_eval(literal)
+        except (ValueError, SyntaxError):
+            continue
+        if isinstance(value, str):
+            values[(int(line), int(column))] = value
+    return values
 
 
 def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit: int | None = 6) -> dict[str, object]:
@@ -96,11 +114,14 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
             location += f"; +{len(unique) - 6} konum"
         categories = list(dict.fromkeys(category.split(" (")[0].replace("_", " ") for _, _, category in locations))
         live_by_location = {(t.line_number, t.column_number): t for t in live_terms}
+        recorded_values = _recorded_term_values(reason)
         evidence = []
         for line, column in unique[:evidence_limit]:
             line_no, column_no = int(line), int(column)
             term = live_by_location.get((line_no, column_no))
-            value = term.matched_value if term is not None else ""
+            # Canli sozluk degeri bulamazsa (terim sonradan silinmis/degismis)
+            # export anindaki gerekcede kayitli deger gosterilir.
+            value = term.matched_value if term is not None else recorded_values.get((line_no, column_no), "")
             evidence.append({
                 "line": line_no,
                 "column": column_no,

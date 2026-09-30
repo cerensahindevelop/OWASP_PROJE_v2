@@ -257,3 +257,86 @@ def test_failed_dismiss_persists_no_suppression_and_no_file(db_session, tmp_path
     assert warning.status == "pending"
     assert not db_session.scalars(select(LearnedDecision).where(LearnedDecision.context_id == context.id)).all()
     assert not (tmp_path / "output" / "src" / "config.py").exists()
+
+
+# 8 -------------------------------------------------------------------------
+
+_HOLD_LOCK_SCRIPT = """
+import sys, time
+from pathlib import Path
+from app.services.integrity_manifest import manifest_lock
+with manifest_lock(Path(sys.argv[1])):
+    Path(sys.argv[2]).write_text("held")
+    time.sleep(1.0)
+"""
+
+
+def test_manifest_lock_excludes_another_process(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    from app.services.integrity_manifest import manifest_lock, manifest_lock_path
+
+    target = tmp_path / "output"
+    target.mkdir()
+    held = tmp_path / "held.flag"
+    root = Path(__file__).resolve().parents[1]
+    worker = subprocess.Popen([sys.executable, "-c", _HOLD_LOCK_SCRIPT, str(target), str(held)], cwd=root)
+    try:
+        deadline = time.monotonic() + 30
+        while not held.exists():
+            assert worker.poll() is None, "kilit tutan surec erken kapandi"
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        started = time.monotonic()
+        with manifest_lock(target):
+            waited = time.monotonic() - started
+    finally:
+        worker.wait(timeout=30)
+    assert worker.returncode == 0
+    assert waited >= 0.5, waited
+    # Kilit dosyasi indirilen ciktiya girmez.
+    assert manifest_lock_path(target).parent == tmp_path
+    assert list(target.iterdir()) == []
+
+
+def test_manifest_lock_times_out_instead_of_hanging(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    from app.services.integrity_manifest import manifest_lock
+
+    target = tmp_path / "output"
+    target.mkdir()
+    held = tmp_path / "held.flag"
+    root = Path(__file__).resolve().parents[1]
+    worker = subprocess.Popen([sys.executable, "-c", _HOLD_LOCK_SCRIPT, str(target), str(held)], cwd=root)
+    try:
+        while not held.exists():
+            assert worker.poll() is None
+            time.sleep(0.02)
+        with pytest.raises(ValueError, match="kilitli"):
+            with manifest_lock(target, timeout=0.1):
+                pass
+    finally:
+        worker.wait(timeout=30)
+
+
+# 9 -------------------------------------------------------------------------
+
+def test_term_quarantine_shows_recorded_clear_value_when_dictionary_changed(db_session):
+    from app.services.audit_warning_details import describe_audit_warning
+
+    warning = AuditWarning(
+        run_id=1, file_path="app.py", masked_content="x = 1\nowner = 'Hakan Yilmaz'\n", encoding="utf-8",
+        reasoning=("Kurumsal terim kontrolü: 1 açık eşleşme kaldı. Dosya çıktı klasörüne alınmadı.\n"
+                   "Satır 2, sütun 10: kisi_adi (kurumsal_terim_hash); açık değer='Hakan Yilmaz'"),
+        audit_failed=False,
+    )
+    detail = describe_audit_warning(warning, db_session)
+    assert detail["evidence"][0]["found_value"] == "Hakan Yilmaz"
+    assert "⟦Hakan Yilmaz⟧" in detail["evidence"][0]["excerpt"]

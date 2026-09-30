@@ -23,18 +23,71 @@ MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 
 # Karantinadan serbest birakma manifest'i oku-degistir-yaz ile gunceller; ayni
 # hedefe es zamanli iki serbest birakma birbirinin kaydini silmesin diye hedef
-# kok dizini basina surec-ici kilit. (Backend tek surecte calisir, bkz. start.py.)
+# kok dizini basina kilit. Backend birden fazla worker/surecle calisabilir:
+# kilit isletim sistemi dosya kilididir (Windows: msvcrt, POSIX: fcntl) ve
+# surec-ici thread'ler icin ayrica threading.Lock ile korunur.
+MANIFEST_LOCK_TIMEOUT_SECONDS = 30.0
+_LOCK_POLL_SECONDS = 0.05
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[str, threading.Lock] = {}
 
+if os.name == "nt":
+    import msvcrt
+
+    def _try_lock(handle) -> bool:
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    def _unlock(handle) -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _try_lock(handle) -> bool:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+
+    def _unlock(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def manifest_lock_path(root: Path) -> Path:
+    """Kilit dosyasi hedefin ICINDE degil YANINDA durur: indirilen ciktiya
+    (zip) girmez. Silinmez - silinen kilit dosyasi yaris yaratir."""
+    root = Path(root).resolve()
+    return root.parent / f".{root.name}.masking-manifest.lock"
+
 
 @contextmanager
-def manifest_lock(root: Path):
-    key = os.path.normcase(str(Path(root).resolve()))
+def manifest_lock(root: Path, timeout: float = MANIFEST_LOCK_TIMEOUT_SECONDS):
+    path = manifest_lock_path(root)
+    key = os.path.normcase(str(path))
     with _LOCKS_GUARD:
-        lock = _LOCKS.setdefault(key, threading.Lock())
-    with lock:
-        yield
+        thread_lock = _LOCKS.setdefault(key, threading.Lock())
+    if not thread_lock.acquire(timeout=timeout):
+        raise ValueError("Dosya bütünlük kaydı kilidi alınamadı; işlemi tekrar deneyin.")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a+b") as handle:
+            deadline = time.monotonic() + timeout
+            while not _try_lock(handle):
+                if time.monotonic() >= deadline:
+                    raise ValueError("Dosya bütünlük kaydı başka bir işlem tarafından kilitli; işlemi tekrar deneyin.")
+                time.sleep(_LOCK_POLL_SECONDS)
+            try:
+                yield
+            finally:
+                _unlock(handle)
+    finally:
+        thread_lock.release()
 
 
 def source_tag(context_id: int, digest: str) -> str:
