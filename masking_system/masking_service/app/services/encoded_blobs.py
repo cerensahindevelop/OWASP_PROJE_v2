@@ -47,12 +47,24 @@ _LITERAL_ESCAPE_RE = re.compile(r"\\[nrt]")
 _TAIL_RE = re.compile(r"[ \t\"'`@(\[]*([A-Za-z0-9+/_-]{1,39}={1,2})")
 _HEX_RE = re.compile(r"[0-9A-Fa-f]+")
 _WHITESPACE_RE = re.compile(r"\s+")
-# Bayt dizisi literal'leri (en az 64 bayt).
-_HEX_LIST_RE = re.compile(r"(?:0[xX][0-9A-Fa-f]{1,2}\s*,\s*){63,}0[xX][0-9A-Fa-f]{1,2}")
-# Ondalik bayt dizisi yalnizca dizi literal'i icinde (`{`, `[`, `(` sonrasi)
-# aranir; CSV satirlari gibi sayisal veri bayt dizisi sayilmaz.
-_DECIMAL_LIST_RE = re.compile(r"[{\[(]\s*((?:-?\d{1,3}\s*,\s*){63,}-?\d{1,3})(?![\w.])")
-_ESCAPED_BYTES_RE = re.compile(r"(?:\\x[0-9A-Fa-f]{2}){64,}")
+# Bayt dizisi literal'leri: 0x.. listesi, ondalik dizi ve \x.. kacislari.
+# Ondalik dizi yalnizca dizi literal'i icinde (`{`, `[`, `(` sonrasi) aranir;
+# CSV satirlari gibi sayisal veri bayt dizisi sayilmaz.
+def _byte_list_patterns(min_items: int) -> tuple[re.Pattern, re.Pattern, re.Pattern]:
+    repeat = min_items - 1
+    return (
+        re.compile(rf"(?:0[xX][0-9A-Fa-f]{{1,2}}\s*,\s*){{{repeat},}}0[xX][0-9A-Fa-f]{{1,2}}"),
+        re.compile(rf"[{{\[(]\s*((?:-?\d{{1,3}}\s*,\s*){{{repeat},}}-?\d{{1,3}})(?![\w.])"),
+        re.compile(rf"(?:\\x[0-9A-Fa-f]{{2}}){{{min_items},}}"),
+    )
+
+
+# Ikili veri bloklari icin en az 64 bayt; kodlanmis metin (parola vb.) icin 8.
+_BLOB_BYTE_LIST_PATTERNS = _byte_list_patterns(64)
+_TEXT_BYTE_LIST_PATTERNS = _byte_list_patterns(8)
+# Kodlanmis metin adayi: tek basina duran kisa base64/hex kosusu (12-39 karakter,
+# orn. `c2E6UGFzc3cwcmQ=` = "sa:Passw0rd"; daha uzunlari satir gruplariyla ele alinir).
+_SHORT_RUN_RE = re.compile(r"(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_-]{12,39}={0,2}(?![A-Za-z0-9+/_=-])")
 _HEX_BYTE_RE = re.compile(r"0[xX]([0-9A-Fa-f]{1,2})")
 _DECIMAL_RE = re.compile(r"-?\d{1,3}")
 
@@ -97,10 +109,12 @@ def _looks_like_random_base64(compact: str) -> bool:
     )
 
 
-# Siniflandirma icin cozer; bastaki tam 4'lu gruplar yeterlidir.
+# Dolgusuz ya da kesik base64'u da cozer (tek artik karakter atilir).
 def _decode_base64(compact: str) -> bytes | None:
     body = compact.rstrip("=")
-    body = body[: len(body) // 4 * 4]
+    if len(body) % 4 == 1:
+        body = body[:-1]
+    body += "=" * (-len(body) % 4)
     try:
         if "-" in body or "_" in body:
             if "+" in body or "/" in body:
@@ -212,20 +226,26 @@ def _base64_blobs(text: str, min_chars: int) -> list[tuple[int, int]]:
 
 # --- Bayt dizisi literal'leri ------------------------------------------------
 
-def _byte_list_blobs(text: str, min_chars: int) -> list[tuple[int, int]]:
-    blobs = []
+# (baslangic, bitis, cozulmus baytlar) - cozulemeyen literal atlanir.
+def _byte_lists(text: str, patterns: tuple[re.Pattern, re.Pattern, re.Pattern]):
+    hex_list, decimal_list, escaped = patterns
     for pattern, parse in (
-        (_HEX_LIST_RE, lambda s: bytes(int(h, 16) for h in _HEX_BYTE_RE.findall(s))),
-        (_DECIMAL_LIST_RE, _decimal_bytes),
-        (_ESCAPED_BYTES_RE, lambda s: bytes.fromhex(s.replace("\\x", ""))),
+        (hex_list, lambda s: bytes(int(h, 16) for h in _HEX_BYTE_RE.findall(s))),
+        (decimal_list, _decimal_bytes),
+        (escaped, lambda s: bytes.fromhex(s.replace("\\x", ""))),
     ):
         for match in pattern.finditer(text):
             group = match.lastindex or 0
-            start, end = match.span(group)
             payload = parse(match.group(group))
-            if end - start >= min_chars and payload is not None and _is_binary_bytes(payload):
-                blobs.append((start, end))
-    return blobs
+            if payload is not None:
+                yield (*match.span(group), payload)
+
+
+def _byte_list_blobs(text: str, min_chars: int) -> list[tuple[int, int]]:
+    return [
+        (start, end) for start, end, payload in _byte_lists(text, _BLOB_BYTE_LIST_PATTERNS)
+        if end - start >= min_chars and _is_binary_bytes(payload)
+    ]
 
 
 # Ondalik liste yalnizca tum degerler bayt araligindaysa (-128..255) bayt dizisidir.
@@ -254,6 +274,67 @@ def find_encoded_blobs(text: str, min_chars: int) -> list[tuple[int, int]]:
     if min_chars <= 0 or len(text) < min_chars:
         return []
     return _merge(_base64_blobs(text, min_chars) + _byte_list_blobs(text, min_chars))
+
+
+# --- Kodlanmis metin (gizlenmis parola, connection string) ------------------
+
+_MIN_DECODED_TEXT_CHARS = 6
+_MIN_DECODED_LETTERS = 4
+_MIN_ASCII_RATIO = 0.8
+
+
+@dataclass(frozen=True)
+class EncodedTextBlock:
+    """Cozuldugunde okunabilir metin veren kodlanmis blok (base64/hex/bayt dizisi)."""
+
+    start: int
+    end: int
+    kind: str
+    decoded: str
+
+
+# Kodlanmis metin adayi: TAMAMI yazdirilabilir olmali (ikili veri olcutu
+# _is_readable_text'ten daha siki - kisa kosularda rastlantisal cozumleri eler).
+def _decoded_text(data: bytes | None) -> str | None:
+    if not data or not _is_readable_text(data):
+        return None
+    decoded = data.decode("utf-8")
+    if not all(char.isprintable() or char in "\t\r\n" for char in decoded):
+        return None
+    if len(decoded) < _MIN_DECODED_TEXT_CHARS or sum(char.isalpha() for char in decoded) < _MIN_DECODED_LETTERS:
+        return None
+    if sum(char.isascii() for char in decoded) < _MIN_ASCII_RATIO * len(decoded):
+        return None
+    return decoded
+
+
+def _decode_run(compact: str) -> tuple[str, bytes | None]:
+    if len(compact) % 2 == 0 and _HEX_RE.fullmatch(compact):
+        return "hex", bytes.fromhex(compact)
+    return "base64", _decode_base64(compact)
+
+
+def find_encoded_text_blocks(text: str) -> list[EncodedTextBlock]:
+    """Cozuldugunde okunabilir metin veren kodlanmis bloklar.
+
+    Bu bloklar find_encoded_blobs tarafindan bilerek gizlenmez; icerikleri
+    metin katmanlarinca gorulemez (`Password=` base64'te `UGFzc3dvcmQ9` olur).
+    Cagiran (EncodedTextDetector) cozulmus metni ayrica tarar. Cozulmus metin
+    asla loglanmamalidir.
+    """
+    blocks: list[EncodedTextBlock] = []
+    for group in _group_runs(text, _runs(text)):
+        kind, data = _decode_run(_WHITESPACE_RE.sub("", "".join(run.value for run in group)))
+        if (decoded := _decoded_text(data)) is not None:
+            blocks.append(EncodedTextBlock(group[0].start, group[-1].end, kind, decoded))
+    for match in _SHORT_RUN_RE.finditer(text):
+        kind, data = _decode_run(match.group())
+        if (decoded := _decoded_text(data)) is not None:
+            blocks.append(EncodedTextBlock(match.start(), match.end(), kind, decoded))
+    for start, end, payload in _byte_lists(text, _TEXT_BYTE_LIST_PATTERNS):
+        if (decoded := _decoded_text(payload)) is not None:
+            blocks.append(EncodedTextBlock(start, end, "bayt_dizisi", decoded))
+    return sorted(blocks, key=lambda block: block.start)
 
 
 # Bloklari bosluga cevirir (satir sonlari korunur): ofsetler degismeden

@@ -988,6 +988,9 @@ class _MaskedFile:
     # Katman 1/2'nin coktugu bir dosya guvenlik geregi karantinaya alinmali -
     # bu quarantine, LLM'in acik/kapali olma durumuna BAGLI DEGILDIR.
     detector_crashes: list[str] = field(default_factory=list)
+    # Kodlanmis (base64/hex/bayt dizisi) metnin icinde bulunan hassas veri -
+    # bkz. encoded_text_detector. Deger icermez; dosya karantinaya alinir.
+    encoded_leaks: list[str] = field(default_factory=list)
 
 
 # Degeri kesin bilinen sizintilar (acik kalan sozluk terimi, metinde birebir
@@ -1226,7 +1229,7 @@ def _apply_masking(
         return _MaskedFile(
             prep=prep, masked_text=masked_text, rule_breakdown={}, match_count=0,
             llm_errors=list(outcome.llm_errors), review_results=list(outcome.review_results),
-            detector_crashes=list(outcome.detector_crashes),
+            detector_crashes=list(outcome.detector_crashes), encoded_leaks=list(outcome.encoded_leaks),
         )
 
     rule_breakdown = _rule_breakdown(mappings, rule_names_by_id)
@@ -1276,7 +1279,7 @@ def _apply_masking(
     return _MaskedFile(
         prep=prep, masked_text=masked_text, rule_breakdown=rule_breakdown, match_count=len(mappings),
         llm_errors=list(outcome.llm_errors), review_results=list(outcome.review_results),
-        detector_crashes=list(outcome.detector_crashes),
+        detector_crashes=list(outcome.detector_crashes), encoded_leaks=list(outcome.encoded_leaks),
     )
 
 
@@ -1300,6 +1303,16 @@ def _scan_only_finding_summary(text: str, outcome: DetectionOutcome) -> str:
     if total > len(locations):
         summary += f"; ... ve {total - len(locations)} tane daha"
     return summary
+
+
+# Kodlanmis metin sizintisinin kullaniciya gosterilen gerekcesi (deger icermez).
+def _encoded_leak_reason(leaks: list[str]) -> str:
+    return (
+        "Kodlanmış (base64/hex/bayt dizisi) bir değerin içinde hassas veri bulundu; değer kodlanmış "
+        "blok içinde otomatik maskelenemediği için dosya çıktıya alınmadı. Değeri kaynakta kaldırıp "
+        "yeniden tarayın ya da gerçekten hassas değilse 'Yanlış Alarm' ile serbest bırakın: "
+        + "; ".join(leaks)
+    )
 
 
 # SCAN_ONLY (bagimlilik lock/integrity dosyalari, bkz. _prepare_file): Faz
@@ -1331,6 +1344,18 @@ def _finalize_scan_only(
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
         )
         return FileOutcome(prep.rel, status="failed_detection", error=reason, final_state="VALIDATION_FAILED")
+
+    if outcome.encoded_leaks:
+        reason = _encoded_leak_reason(outcome.encoded_leaks)
+        db.add(AuditLog(
+            run_id=run_id, file_path=prep.rel, action="skipped",
+            detail="final_state=SECURITY_QUARANTINE final_output=blocked; kodlanmis metinde hassas veri",
+        ))
+        _create_audit_warning(
+            db, run_id=run_id, file_path=prep.rel, masked_content=prep.text or "",
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+        )
+        return FileOutcome(prep.rel, status="scan_only_sensitive", error=reason, final_state="SECURITY_QUARANTINE")
 
     # Paket ozetleri ve public registry URL'leri izin listesindedir; sozluk
     # bulgulari haric (bkz. lockfile_policy). Kalan tum bulgular ic registry
@@ -1578,6 +1603,7 @@ def _audit_skippable(masked_file: _MaskedFile) -> bool:
         and masked_file.masked_text == masked_file.prep.text
         and not masked_file.llm_errors
         and not masked_file.detector_crashes
+        and not masked_file.encoded_leaks
     )
 
 
@@ -1652,6 +1678,26 @@ def _finalize_file(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
             failed_check="tespit_katmani",
+        )
+
+    # Base64/hex/bayt dizisiyle kodlanmis bir metnin icinde parola, connection
+    # string, IP ya da kurum terimi bulundu (bkz. encoded_text_detector). Deger
+    # kodlanmis blok icinde maskelenmez: yeniden kodlanan metin "geri alinca
+    # birebir ayni dosya" garantisini karmasiklastirir. Dosya disari verilmez.
+    if masked_file.encoded_leaks:
+        reason = _encoded_leak_reason(masked_file.encoded_leaks)
+        _warn(
+            run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+        )
+        db.add(AuditLog(
+            run_id=run_id, file_path=prep.rel, action="skipped",
+            detail="final_state=SECURITY_QUARANTINE final_output=blocked; kodlanmis metinde hassas veri",
+        ))
+        return FileOutcome(
+            prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
+            rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="SECURITY_QUARANTINE",
+            failed_check="kodlanmis_veri",
         )
 
     # Katman 3 (LLM) tespiti bu dosya icin basarisiz oldu mu? (bkz.

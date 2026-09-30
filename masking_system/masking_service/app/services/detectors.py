@@ -57,6 +57,9 @@ class DetectorOutput:
     # durumundan BAGIMSIZ olarak tetikler - bir Katman 1/2 cokmesi LLM'in
     # acik/kapali olmasiyla ilgisizdir.
     crashes: list[str] = field(default_factory=list)
+    # Kodlanmis (base64/hex/bayt dizisi) metnin icinde bulunan hassas veri
+    # (bkz. encoded_text_detector). Deger icermez; dosya karantinaya alinir.
+    encoded_leaks: list[str] = field(default_factory=list)
     # Dosyayi bloklamayan, denetim kaydina yazilacak bilgi notlari (orn.
     # semasi bozuk LLM bulgusu onarildi/atildi sayilari). Acik deger icermez.
     notices: list[str] = field(default_factory=list)
@@ -118,6 +121,7 @@ class DetectionOrchestrator:
         errors: list[str] = []
         crashes: list[str] = []
         notices: list[str] = []
+        encoded_leaks: list[str] = []
 
         for detector in self.registry.enabled_detectors():
             metadata["consumed_spans"] = list(base_consumed) + list(already_masked)
@@ -156,10 +160,12 @@ class DetectionOrchestrator:
             errors.extend(output.errors)
             crashes.extend(output.crashes)
             notices.extend(output.notices)
+            encoded_leaks.extend(output.encoded_leaks)
 
         results.sort(key=lambda r: (r.start is None, r.start or 0, r.end or 0))
         return DetectorOutput(
             results=results, already_masked_spans=already_masked, errors=errors, crashes=crashes, notices=notices,
+            encoded_leaks=encoded_leaks,
         )
 
 

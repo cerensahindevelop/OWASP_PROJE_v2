@@ -49,6 +49,7 @@ from app.services.detectors import (
 # Katman 3 (LLM) detector'i, cakisma cozucu, Katman 2 (Presidio) detector'i,
 # Katman 1 (regex/sozluk) kural motoru ve span sinir dogrulayicisi -
 # mask_text()'in cagirdigi butun tespit/dogrulama zincirinin parcalari.
+from app.services.encoded_text_detector import EncodedTextDetector
 from app.services.llm_detector import LLMDetector
 from app.services.learned_decisions import LearnedDecisionPolicy, LearnedSensitiveDetector
 from app.services.overlap_resolver import OverlapConflict, OverlapResolver
@@ -443,11 +444,13 @@ def build_orchestrator(
     category_restrictions: dict[str, list[str]] | None = None,
     decision_policy: LearnedDecisionPolicy | None = None,
 ) -> DetectionOrchestrator:
-    registry = DetectorRegistry()
-    registry.register(RuleBasedDetector(rules, runtime_params))
+    # Yerel katmanlar (sozluk + ogrenilmis karar + Presidio): hem ana taramada
+    # hem de kodlanmis metnin cozulmus hali icin (EncodedTextDetector) ayni
+    # ornekler kullanilir - Presidio/spaCy kurulumu pahalidir.
+    local_detectors = [RuleBasedDetector(rules, runtime_params)]
     if decision_policy is not None and decision_policy.sensitive:
-        registry.register(LearnedSensitiveDetector(decision_policy.sensitive))
-    registry.register(
+        local_detectors.append(LearnedSensitiveDetector(decision_policy.sensitive))
+    local_detectors.append(
         PresidioDetector(
             presidio_rules or [],
             language=settings.presidio.language,
@@ -459,6 +462,12 @@ def build_orchestrator(
             chunk_overlap_chars=settings.presidio.chunk_overlap_chars,
         )
     )
+    local_registry = DetectorRegistry()
+    registry = DetectorRegistry()
+    for detector in local_detectors:
+        local_registry.register(detector)
+        registry.register(detector)
+    registry.register(EncodedTextDetector(DetectionOrchestrator(local_registry)))
     # pattern_type='llm' kurallarinin aciklamalarini (kural-ekle --aciklama ile
     # eklenen tarama talimatlari) vLLM promptuna gercekten dahil et - bkz.
     # llm_recognizer._augment_prompt. Eskiden bu kurallar sadece DB'de
@@ -498,6 +507,9 @@ class DetectionOutcome:
     ignored_llm_results: list[DetectionResult] = field(default_factory=list)
     # bkz. detectors.DetectorOutput.notices dokstringi.
     detector_notices: list[str] = field(default_factory=list)
+    # Kodlanmis metnin icinde bulunan hassas veri (bkz. encoded_text_detector) -
+    # dosya karantinaya alinir, deger kodlanmis blok icinde maskelenmez.
+    encoded_leaks: list[str] = field(default_factory=list)
 
 
 _CONFIDENCE_RANK = {"dusuk": 0, "orta": 1, "yuksek": 2}
@@ -602,6 +614,7 @@ async def detect_matches(
         detector_crashes=list(detector_output.crashes),
         ignored_llm_results=ignored_llm_results,
         detector_notices=list(detector_output.notices),
+        encoded_leaks=list(detector_output.encoded_leaks),
     )
 
 

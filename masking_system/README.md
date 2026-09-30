@@ -73,6 +73,16 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
   ile gizlenmiş bir config) ve identifier/yol listeleri gönderilmeye devam eder.
   Katman 1 (sözlük/regex) blokları yine tarar, çıktı metni değişmez. Log satırı:
   `llm_input_encoded_blobs ... blobs=N hidden_chars=M`. Kapatmak için `0`.
+- **Kodlanmış metindeki sırlar karantinaya alınır.** Base64/base64url/hex ya da
+  bayt dizisiyle kodlanmış ve çözüldüğünde okunabilir metin veren değerler
+  (ör. `appsettings.json` içinde base64 connection string, `c2E6UGFzc3cwcmQ=`
+  = `sa:Passw0rd`) çözülüp sözlük/regex ve Presidio ile ayrıca taranır; parola
+  ataması ve `kullanıcı:parola` biçimi ayrıca aranır. Bulgu varsa dosya
+  **Güvenlik Karantinası**'na alınır, çıktıya yazılmaz; değer kodlanmış blok
+  içinde maskelenmez (geri alma birebir aynı dosyayı üretmeye devam eder).
+  Gerekçede yalnızca satır, kodlama türü ve genel bulgu türü görünür.
+  İnceleme ekranında değeri kaynakta kaldırıp yeniden tarayın ya da gerçekten
+  hassas değilse "Yanlış Alarm" ile serbest bırakın.
 - **Erken uyarı.** Bir dosya `VLLM_WARN_CHUNKS_PER_FILE` (varsayılan 10) ya da
   daha fazla LLM parçasına bölünüyorsa veya gizlenemeyen kodlanmış-veri benzeri
   satırlar içeriyorsa işlem kaydına ve loga `llm_is_yuku_yuksek parca=…
