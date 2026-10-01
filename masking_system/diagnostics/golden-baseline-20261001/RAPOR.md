@@ -23,27 +23,32 @@ Ayrıntılı çıktılar: `<ad>.json` (dosya başına sonuç, LLM kullanımı, s
 
 ## 2. Baseline
 
-Altın küme 10 metin dosyasından oluşur: 6 Java, 1 properties, 1 JSON, 1 SQL, 1 README.
+Altın küme 11 metin dosyasından oluşur: 6 Java (`musteri` ve `poseidon` paketlerinde), 1 `pom.xml`,
+1 properties, 1 JSON, 1 SQL, 1 README.
 
 | Metrik | off | stub %0 | stub %2 | stub %10 (ek) |
 |---|---|---|---|---|
-| Onay kuyruğu oranı | 0% (0/10) | 10% (1/10) | 10% (1/10) | 30% (3/10) |
-| Çıktı dışında kalan oran | 0% | 10% | 10% | 30% |
-| Nedene göre | – | llm_denetimi=1 | llm_denetimi=1 | llm_denetimi=2, llm_denetimi_tamamlanamadi=1 |
-| LLM isteği (dosya başına) | – | 24 (2,4) | 24 (2,4) | 25 (2,5) |
-| Dosya başına tarama (tespit+denetim) | – | 2,4 | 2,4 | 2,3 |
-| Dosya başına LLM sn p50 / p95 (stub) | – | 0,55 / 0,90 | 0,51 / 0,84 | 0,49 / 1,88 |
+| Onay kuyruğu oranı | 0% (0/11) | 9% (1/11) | 18% (2/11) | 27% (3/11) |
+| Çıktı dışında kalan oran | 0% | 9% | 18% | 27% |
+| Nedene göre | – | llm_denetimi=1 | llm_denetimi=2 | llm_denetimi=2, llm_denetimi_tamamlanamadi=1 |
+| LLM isteği (koşu toplamı) | – | 28 | 29 | 29 |
+| Dosya başına tarama (tespit+denetim) | – | 2,55 | 2,55 | 2,45 |
+| Dosya başına LLM sn p50 / p95 (stub) | – | 0,62 / 0,98 | 0,58 / 2,01 | 0,70 / 3,09 |
+| Stub enjekte hata / istek (3 koşu) | – | 0 / 84 | 6 / 87 | 12 / 87 |
 | Canary sızıntısı | **3 kısmi** (`cnry-db01`, `cnry-gw01`, `hakan.yilmaz`) | 0 | 0 | 0 |
-| Terim sızıntısı (yayınlanan dosyalarda) | tckimlik 5, Poseidon 21, Ayşe 2, adres 1 | tckimlik 5 (`TC_KIMLIK_NO` 4, `tc-kimlik` 1) | aynı | aynı |
+| Terim sızıntısı (yayınlanan dosyalarda) | tckimlik 5, Poseidon 25, Ayşe 2, adres 1 | tckimlik 5 (`TC_KIMLIK_NO` 4, `tc-kimlik` 1) | aynı | aynı |
 | Maskelenmemesi gerekenin maskelenmesi | `Teknik sorumlu`, `Veri merkezi` (Presidio PERSON) | `UserService` | `UserService` | `UserService` |
-| Geri alma bayt farkı | 0/10 | 0/9 | 0/9 | 0/7 |
-| javac (maskeli çıktı) | başarılı | **başarısız (2 hata)** | başarısız (2) | başarısız (4, 1 Java dosyası karantinada) |
-| Determinizm (Jaccard min / aynı çıktı) | 1,0 / 10/10 | 1,0 / 9/9 | 1,0 / 9/9 | 1,0 / 7/7 |
+| Geri alma bayt farkı (ad + içerik) | 0/11 | 0/10 | 0/9 | 0/8 |
+| javac (maskeli çıktı) | başarılı | **başarısız (2 hata)** | başarısız (4, 1 Java dosyası karantinada) | başarısız (4, 1 eksik) |
+| Determinizm (Jaccard min / aynı çıktı) | 1,0 / 11/11 | 1,0 / 10/10 | 1,0 / 9/9 | 1,0 / 8/8 |
 
-Not: stub'da hata, parça metninin hash'ine bağlı ve deterministik. %2 koşusunda 72 isteğin hiçbiri
-hataya denk gelmedi (beklenen ≈1,4; olasılık ≈%24). Sonuç %0 ile aynı çıktı. Kök neden 3'ün
-mekanizmasını görmek için %10'luk ek koşu yapıldı. Stub süreleri gerçek model gecikmesini
-yansıtmaz.
+Not: stub'da hata, parça metninin hash'ine bağlı ve deterministik; aynı girdide hep aynı parçalar
+hata verir. Stub süreleri gerçek model gecikmesini yansıtmaz.
+
+Fixture revizyonu: ilk baseline 10 dosyalık kümeyle alındı. Yol maskelemesi kararından sonra
+(bkz. `docs/faz3-tasarim-notu.md`, K1) `PoseidonGatewayClient` ayrı bir `poseidon` paketine
+taşındı ve `pom.xml` eklendi. Bu tablo yeni kümeyle yeniden üretildi. O sürümde %2 koşusu hiçbir
+hataya denk gelmemişti; yeni kümede 6 hataya denk geliyor.
 
 ## 3. Gözlemler (sonraki fazlara girdi)
 
@@ -73,12 +78,20 @@ yansıtmaz.
    - LLM tarafı (stub senaryosu): `UserService` maskeleniyor, sınıf adı değiştiği için javac kırılıyor.
    - Presidio tarafı (LLM kapalıyken de): `Teknik`, `Veri merkezi` gibi düz metin kelimelerini
      PERSON sayıyor. → Faz 4.2 (`PRESIDIO_MIN_SCORE`)
-7. **Faz E'deki hata, kalıcı kodu yanıltıyor.** %10 koşusunda `MusteriService.java` için
+7. **Faz E'deki hata, kalıcı kodu yanıltıyor.** %2 koşusunda `PoseidonGatewayClient.java` için
    yeniden denetim hata verdi. Dosya `llm_denetimi_tamamlanamadi` değil `llm_denetimi` koduyla
    kaydedildi; gerçek neden yalnızca `auto_remediation=failed check=llm_denetimi_tamamlanamadi`
    AuditLog kaydında görünüyor. `scripts/failed_check_summary.py` bu kayıtları ayrıca sayar.
-8. **Geri alma %100 ve determinizm 3/3** bütün modlarda sağlanıyor: yayınlanan her dosya bayt
-   bayt geri alındı, çıktılar koşular arasında birebir aynı.
+8. **Geri alma %100 ve determinizm 3/3** bütün modlarda sağlanıyor: yayınlanan her dosya, dosya ve
+   dizin adlarıyla birlikte bayt bayt geri alındı; çıktılar koşular arasında birebir aynı.
+9. **Yol, içerikle tutarsız ve orijinal yollar loglara yazılıyor.**
+   - Sözlük terimi `karayel` yolda maskeleniyor (`mask_kurumsal_ifade_1`, package satırıyla
+     tutarlı). LLM kaynaklı `poseidon` ise yolda hiç maskelenmiyor: `poseidon/` dizini ve
+     `PoseidonGatewayClient.java` dosya adı açık kalıyor, içerikte ise maskeleniyor.
+   - Uygulama logları (`llm_request`/`llm_file ... file=...`) ve rapordaki sözdizimi doğrulama
+     uyarıları kaynak yolu yazıyor.
+   - Kabul testleri: `tests/test_golden_path_acceptance.py` (6 test Faz 3 için xfail, 5 test
+     bugün geçen regresyon koruması). → Faz 2 (uyuşmazlığı ölç), Faz 3 (düzelt)
 
 ## 4. Intranette yapılacaklar
 

@@ -1,28 +1,28 @@
 {
   "llm_modu": "stub",
   "stub_hata_orani": 0.1,
-  "stub_istek": 75,
+  "stub_istek": 87,
   "stub_enjekte_hata": 12,
   "kosu_sayisi": 3,
   "determinizm": {
     "jaccard_min": 1.0,
     "maskelenen_deger_sayisi": [
-      25,
-      25,
-      25
+      26,
+      26,
+      26
     ],
-    "birebir_ayni_cikti_dosyasi": "7/7"
+    "birebir_ayni_cikti_dosyasi": "8/8"
   },
   "kosular": [
     {
       "run_id": 1,
       "durum": "completed_with_warnings",
-      "taranan_dosya": 10,
-      "hazir_dosya": 7,
+      "taranan_dosya": 11,
+      "hazir_dosya": 8,
       "onay_kuyrugu_dosya": 3,
-      "onay_kuyrugu_orani": 0.3,
+      "onay_kuyrugu_orani": 0.273,
       "disarida_kalan_dosya": 3,
-      "disarida_kalan_orani": 0.3,
+      "disarida_kalan_orani": 0.273,
       "nedene_gore": {
         "llm_denetimi": 2,
         "llm_denetimi_tamamlanamadi": 1
@@ -30,25 +30,26 @@
       "dosya_durumlari": {
         "README.md": "llm_denetimi",
         "db/schema.sql": "READY",
+        "pom.xml": "READY",
         "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
         "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
         "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
-        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "llm_denetimi",
-        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "READY",
         "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/java/com/acme/karayel/poseidon/PoseidonGatewayClient.java": "llm_denetimi",
         "src/main/resources/application.properties": "llm_denetimi_tamamlanamadi",
         "src/main/resources/musteri.json": "READY"
       },
       "llm": {
-        "files": 10,
-        "requests": 25,
-        "prompt_tokens": 18766,
-        "completion_tokens": 530,
+        "files": 11,
+        "requests": 29,
+        "prompt_tokens": 22386,
+        "completion_tokens": 618,
         "failed_scans": 2,
-        "scans_per_file": 2.3,
-        "requests_per_file": 2.5,
-        "llm_seconds_p50": 0.491,
-        "llm_seconds_p95": 1.88
+        "scans_per_file": 2.45,
+        "requests_per_file": 2.64,
+        "llm_seconds_p50": 0.696,
+        "llm_seconds_p95": 3.092
       },
       "llm_dosya_basina": {
         "README.md": {
@@ -58,8 +59,8 @@
           "requests": 2,
           "prompt_tokens": 1624,
           "completion_tokens": 93,
-          "llm_seconds": 0.2797067089995835,
-          "queue_seconds": 3.2904000363487285e-05
+          "llm_seconds": 0.2737141730000303,
+          "queue_seconds": 3.784500000847402e-05
         },
         "db/schema.sql": {
           "detection_scans": 1,
@@ -68,8 +69,18 @@
           "requests": 2,
           "prompt_tokens": 1680,
           "completion_tokens": 12,
-          "llm_seconds": 0.28941086599979826,
-          "queue_seconds": 0.011480255999686051
+          "llm_seconds": 0.4454890669999827,
+          "queue_seconds": 0.14282536500002152
+        },
+        "pom.xml": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1719,
+          "completion_tokens": 12,
+          "llm_seconds": 0.32898768800004063,
+          "queue_seconds": 0.01366854399998374
         },
         "src/main/java/com/acme/karayel/musteri/Musteri.java": {
           "detection_scans": 1,
@@ -78,8 +89,8 @@
           "requests": 3,
           "prompt_tokens": 3120,
           "completion_tokens": 65,
-          "llm_seconds": 0.4906087749996004,
-          "queue_seconds": 0.12441730400041706
+          "llm_seconds": 0.6955165179999199,
+          "queue_seconds": 0.32423820599996134
         },
         "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
           "detection_scans": 1,
@@ -88,8 +99,8 @@
           "requests": 2,
           "prompt_tokens": 1901,
           "completion_tokens": 12,
-          "llm_seconds": 0.381191014000251,
-          "queue_seconds": 0.11921625400009361
+          "llm_seconds": 0.493978047999974,
+          "queue_seconds": 0.23134415399999853
         },
         "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
           "detection_scans": 1,
@@ -98,28 +109,18 @@
           "requests": 2,
           "prompt_tokens": 1658,
           "completion_tokens": 12,
-          "llm_seconds": 0.4911386170001606,
-          "queue_seconds": 0.228385709000122
+          "llm_seconds": 0.6000755869999921,
+          "queue_seconds": 0.3371382180000069
         },
         "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
           "detection_scans": 1,
-          "audit_scans": 2,
-          "failed_scans": 1,
-          "requests": 4,
-          "prompt_tokens": 2063,
-          "completion_tokens": 135,
-          "llm_seconds": 1.7631173469994792,
-          "queue_seconds": 0.3930953819995011
-        },
-        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
-          "detection_scans": 1,
-          "audit_scans": 1,
+          "audit_scans": 3,
           "failed_scans": 0,
-          "requests": 2,
-          "prompt_tokens": 1792,
-          "completion_tokens": 39,
-          "llm_seconds": 0.654451348999828,
-          "queue_seconds": 0.39028220599948327
+          "requests": 4,
+          "prompt_tokens": 3964,
+          "completion_tokens": 192,
+          "llm_seconds": 0.9856815140000208,
+          "queue_seconds": 0.6089293340000381
         },
         "src/main/java/com/acme/karayel/musteri/UserService.java": {
           "detection_scans": 1,
@@ -128,8 +129,18 @@
           "requests": 2,
           "prompt_tokens": 1674,
           "completion_tokens": 40,
-          "llm_seconds": 0.7157092729999022,
-          "queue_seconds": 0.4987677999997686
+          "llm_seconds": 0.7045188370000233,
+          "queue_seconds": 0.48734244000002036
+        },
+        "src/main/java/com/acme/karayel/poseidon/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 1,
+          "requests": 4,
+          "prompt_tokens": 1792,
+          "completion_tokens": 58,
+          "llm_seconds": 1.8574278560000153,
+          "queue_seconds": 0.3740711529999885
         },
         "src/main/resources/application.properties": {
           "detection_scans": 1,
@@ -138,8 +149,8 @@
           "requests": 3,
           "prompt_tokens": 968,
           "completion_tokens": 4,
-          "llm_seconds": 1.762172080000255,
-          "queue_seconds": 0.385892323999542
+          "llm_seconds": 1.8520821239999918,
+          "queue_seconds": 0.5263149749999343
         },
         "src/main/resources/musteri.json": {
           "detection_scans": 1,
@@ -148,8 +159,8 @@
           "requests": 3,
           "prompt_tokens": 2286,
           "completion_tokens": 118,
-          "llm_seconds": 1.8804401009992944,
-          "queue_seconds": 1.600840160000189
+          "llm_seconds": 3.092487483999946,
+          "queue_seconds": 2.7727260359999946
         }
       },
       "canary_sizintisi": {},
@@ -161,12 +172,12 @@
       },
       "maskelenmemesi_gereken_ihlal": {
         "UserService": {
-          "kaynakta": 1,
+          "kaynakta": 3,
           "ciktida": 0
         }
       },
       "geri_alma": {
-        "karsilastirilan": 7,
+        "karsilastirilan": 8,
         "farkli": [],
         "cozulemeyen_placeholder": 0
       },
@@ -177,22 +188,23 @@
         "eksik_java_dosyasi": 1,
         "hata_sayisi": 4,
         "ilk_hatalar": [
-          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
           "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java",
-          "MusteriController.java:12: error: cannot find symbol",
-          "MusteriController.java:14: error: cannot find symbol"
+          "MusteriService.java:3: error: package com.acme.mask_kurumsal_ifade_1.mask_denetim_bulgusu_4 does not exist",
+          "MusteriService.java:10: error: cannot find symbol",
+          "MusteriService.java:13: error: cannot find symbol"
         ]
-      }
+      },
+      "rapor_metni": "Export raporu - run_id=1 durum=Uyarili tamamlandi\n  Proje: golden-olcum | sicil: P-GOLDEN-0001 | Branch: golden-branch\n  Kaynak: /home/user/OWASP_PROJE_v2/masking_system/masking_service/tests/fixtures/golden/project\n  Hedef:  /tmp/golden-olcum-r1dl69yr/cikti_1\n\n  11 dosya tarandi -> 8 dosyada hassas veri bulunup maskelendi, 3 dosya ikincil risk denetiminden gecemedigi icin DISA AKTARILMADI.\n  Durumlar: ✓ Hazır 8 | ⚠ İnceleme Gerekli 0 | ⛔ Güvenlik Karantinası 2 | ✕ Doğrulama Başarısız 1\n  Ciktiya alinmama nedenleri (dosyayi alikoyan kontrol):\n    - LLM denetimi (llm_denetimi): 2\n    - LLM denetimi tamamlanamadı (llm_denetimi_tamamlanamadi): 1\n\n  LLM kullanimi: 11 dosya, 29 istek (dosya basina 2.64 istek, 2.45 tarama), 22386 girdi / 618 cikti token, dosya basina LLM suresi p50 0.696 sn / p95 3.092 sn, basarisiz tarama 2\n\n  SOZDIZIMI DOGRULAMA UYARILARI:\n    src/main/java/com/acme/karayel/musteri/MusteriController.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/MusteriRepository.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/UserService.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/Musteri.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/MusteriService.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n\n  Bulunan hassas veri turleri (toplam 76 eslesme):\n    - kurumsal_terim_altin_kume_1ec062134286: 26\n    - llm_dynamic: 25\n    - kurumsal_terim_altin_kume_7f73a9893c23: 22\n    - Genel gizli bilgi (API anahtari/parola/token): 2\n    - tc_kimlik_no: 1\n\n  !!! IKINCIL RISK: 3 dosya, maskeleme sonrasi bagimsiz denetimden gecemedigi icin hedef klasore YAZILMADI - insan onayi bekliyor (bkz. denetim_uyarilari) !!!\n"
     },
     {
       "run_id": 3,
       "durum": "completed_with_warnings",
-      "taranan_dosya": 10,
-      "hazir_dosya": 7,
+      "taranan_dosya": 11,
+      "hazir_dosya": 8,
       "onay_kuyrugu_dosya": 3,
-      "onay_kuyrugu_orani": 0.3,
+      "onay_kuyrugu_orani": 0.273,
       "disarida_kalan_dosya": 3,
-      "disarida_kalan_orani": 0.3,
+      "disarida_kalan_orani": 0.273,
       "nedene_gore": {
         "llm_denetimi": 2,
         "llm_denetimi_tamamlanamadi": 1
@@ -200,25 +212,26 @@
       "dosya_durumlari": {
         "README.md": "llm_denetimi",
         "db/schema.sql": "READY",
+        "pom.xml": "READY",
         "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
         "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
         "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
-        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "llm_denetimi",
-        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "READY",
         "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/java/com/acme/karayel/poseidon/PoseidonGatewayClient.java": "llm_denetimi",
         "src/main/resources/application.properties": "llm_denetimi_tamamlanamadi",
         "src/main/resources/musteri.json": "READY"
       },
       "llm": {
-        "files": 10,
-        "requests": 25,
-        "prompt_tokens": 18766,
-        "completion_tokens": 530,
+        "files": 11,
+        "requests": 29,
+        "prompt_tokens": 22386,
+        "completion_tokens": 618,
         "failed_scans": 2,
-        "scans_per_file": 2.3,
-        "requests_per_file": 2.5,
-        "llm_seconds_p50": 0.505,
-        "llm_seconds_p95": 1.819
+        "scans_per_file": 2.45,
+        "requests_per_file": 2.64,
+        "llm_seconds_p50": 0.669,
+        "llm_seconds_p95": 2.979
       },
       "llm_dosya_basina": {
         "README.md": {
@@ -228,8 +241,8 @@
           "requests": 2,
           "prompt_tokens": 1624,
           "completion_tokens": 93,
-          "llm_seconds": 0.2318827459998829,
-          "queue_seconds": 2.870700018320349e-05
+          "llm_seconds": 0.26883167100004357,
+          "queue_seconds": 3.690800008371298e-05
         },
         "db/schema.sql": {
           "detection_scans": 1,
@@ -238,8 +251,18 @@
           "requests": 2,
           "prompt_tokens": 1680,
           "completion_tokens": 12,
-          "llm_seconds": 0.28992495400052576,
-          "queue_seconds": 0.011079870000230585
+          "llm_seconds": 0.41696794599999976,
+          "queue_seconds": 0.14036384799993584
+        },
+        "pom.xml": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1719,
+          "completion_tokens": 12,
+          "llm_seconds": 0.2997113860000127,
+          "queue_seconds": 0.012481562999937523
         },
         "src/main/java/com/acme/karayel/musteri/Musteri.java": {
           "detection_scans": 1,
@@ -248,8 +271,8 @@
           "requests": 3,
           "prompt_tokens": 3120,
           "completion_tokens": 65,
-          "llm_seconds": 0.5046653190001962,
-          "queue_seconds": 0.12461705999976402
+          "llm_seconds": 0.6692567990000384,
+          "queue_seconds": 0.2958203780000872
         },
         "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
           "detection_scans": 1,
@@ -258,8 +281,8 @@
           "requests": 2,
           "prompt_tokens": 1901,
           "completion_tokens": 12,
-          "llm_seconds": 0.38503828300008536,
-          "queue_seconds": 0.1213982260001103
+          "llm_seconds": 0.5144886260000021,
+          "queue_seconds": 0.23818168899998682
         },
         "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
           "detection_scans": 1,
@@ -268,28 +291,18 @@
           "requests": 2,
           "prompt_tokens": 1658,
           "completion_tokens": 12,
-          "llm_seconds": 0.49299001899998984,
-          "queue_seconds": 0.2339816610001435
+          "llm_seconds": 0.6221930450000173,
+          "queue_seconds": 0.35061985900000536
         },
         "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
           "detection_scans": 1,
-          "audit_scans": 2,
-          "failed_scans": 1,
-          "requests": 4,
-          "prompt_tokens": 2063,
-          "completion_tokens": 135,
-          "llm_seconds": 1.8191410089998499,
-          "queue_seconds": 0.45209795299979305
-        },
-        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
-          "detection_scans": 1,
-          "audit_scans": 1,
+          "audit_scans": 3,
           "failed_scans": 0,
-          "requests": 2,
-          "prompt_tokens": 1792,
-          "completion_tokens": 39,
-          "llm_seconds": 0.6487853070002529,
-          "queue_seconds": 0.38698874399960914
+          "requests": 4,
+          "prompt_tokens": 3964,
+          "completion_tokens": 192,
+          "llm_seconds": 1.0138304990000506,
+          "queue_seconds": 0.6304959970000255
         },
         "src/main/java/com/acme/karayel/musteri/UserService.java": {
           "detection_scans": 1,
@@ -298,8 +311,18 @@
           "requests": 2,
           "prompt_tokens": 1674,
           "completion_tokens": 40,
-          "llm_seconds": 0.7093562270001712,
-          "queue_seconds": 0.49713031900000715
+          "llm_seconds": 0.7280093269999952,
+          "queue_seconds": 0.5114642179999578
+        },
+        "src/main/java/com/acme/karayel/poseidon/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 1,
+          "requests": 4,
+          "prompt_tokens": 1792,
+          "completion_tokens": 58,
+          "llm_seconds": 1.8048425060000568,
+          "queue_seconds": 0.38050170200000366
         },
         "src/main/resources/application.properties": {
           "detection_scans": 1,
@@ -308,8 +331,8 @@
           "requests": 3,
           "prompt_tokens": 968,
           "completion_tokens": 4,
-          "llm_seconds": 1.6976759059998585,
-          "queue_seconds": 0.38246200900039184
+          "llm_seconds": 1.8084630909999646,
+          "queue_seconds": 0.4912850849999586
         },
         "src/main/resources/musteri.json": {
           "detection_scans": 1,
@@ -318,8 +341,8 @@
           "requests": 3,
           "prompt_tokens": 2286,
           "completion_tokens": 118,
-          "llm_seconds": 1.811666072999742,
-          "queue_seconds": 1.5429189990004488
+          "llm_seconds": 2.97878517099997,
+          "queue_seconds": 2.666387756000006
         }
       },
       "canary_sizintisi": {},
@@ -331,12 +354,12 @@
       },
       "maskelenmemesi_gereken_ihlal": {
         "UserService": {
-          "kaynakta": 1,
+          "kaynakta": 3,
           "ciktida": 0
         }
       },
       "geri_alma": {
-        "karsilastirilan": 7,
+        "karsilastirilan": 8,
         "farkli": [],
         "cozulemeyen_placeholder": 0
       },
@@ -347,22 +370,23 @@
         "eksik_java_dosyasi": 1,
         "hata_sayisi": 4,
         "ilk_hatalar": [
-          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
           "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java",
-          "MusteriController.java:12: error: cannot find symbol",
-          "MusteriController.java:14: error: cannot find symbol"
+          "MusteriService.java:3: error: package com.acme.mask_kurumsal_ifade_1.mask_denetim_bulgusu_4 does not exist",
+          "MusteriService.java:10: error: cannot find symbol",
+          "MusteriService.java:13: error: cannot find symbol"
         ]
-      }
+      },
+      "rapor_metni": "Export raporu - run_id=3 durum=Uyarili tamamlandi\n  Proje: golden-olcum | sicil: P-GOLDEN-0001 | Branch: golden-branch\n  Kaynak: /home/user/OWASP_PROJE_v2/masking_system/masking_service/tests/fixtures/golden/project\n  Hedef:  /tmp/golden-olcum-r1dl69yr/cikti_2\n\n  11 dosya tarandi -> 8 dosyada hassas veri bulunup maskelendi, 3 dosya ikincil risk denetiminden gecemedigi icin DISA AKTARILMADI.\n  Durumlar: ✓ Hazır 8 | ⚠ İnceleme Gerekli 0 | ⛔ Güvenlik Karantinası 2 | ✕ Doğrulama Başarısız 1\n  Ciktiya alinmama nedenleri (dosyayi alikoyan kontrol):\n    - LLM denetimi (llm_denetimi): 2\n    - LLM denetimi tamamlanamadı (llm_denetimi_tamamlanamadi): 1\n\n  LLM kullanimi: 11 dosya, 29 istek (dosya basina 2.64 istek, 2.45 tarama), 22386 girdi / 618 cikti token, dosya basina LLM suresi p50 0.669 sn / p95 2.979 sn, basarisiz tarama 2\n\n  SOZDIZIMI DOGRULAMA UYARILARI:\n    src/main/java/com/acme/karayel/musteri/MusteriController.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/MusteriRepository.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/UserService.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/Musteri.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/MusteriService.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n\n  Bulunan hassas veri turleri (toplam 76 eslesme):\n    - kurumsal_terim_altin_kume_1ec062134286: 26\n    - llm_dynamic: 25\n    - kurumsal_terim_altin_kume_7f73a9893c23: 22\n    - Genel gizli bilgi (API anahtari/parola/token): 2\n    - tc_kimlik_no: 1\n\n  !!! IKINCIL RISK: 3 dosya, maskeleme sonrasi bagimsiz denetimden gecemedigi icin hedef klasore YAZILMADI - insan onayi bekliyor (bkz. denetim_uyarilari) !!!\n"
     },
     {
       "run_id": 5,
       "durum": "completed_with_warnings",
-      "taranan_dosya": 10,
-      "hazir_dosya": 7,
+      "taranan_dosya": 11,
+      "hazir_dosya": 8,
       "onay_kuyrugu_dosya": 3,
-      "onay_kuyrugu_orani": 0.3,
+      "onay_kuyrugu_orani": 0.273,
       "disarida_kalan_dosya": 3,
-      "disarida_kalan_orani": 0.3,
+      "disarida_kalan_orani": 0.273,
       "nedene_gore": {
         "llm_denetimi": 2,
         "llm_denetimi_tamamlanamadi": 1
@@ -370,25 +394,26 @@
       "dosya_durumlari": {
         "README.md": "llm_denetimi",
         "db/schema.sql": "READY",
+        "pom.xml": "READY",
         "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
         "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
         "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
-        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "llm_denetimi",
-        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "READY",
         "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/java/com/acme/karayel/poseidon/PoseidonGatewayClient.java": "llm_denetimi",
         "src/main/resources/application.properties": "llm_denetimi_tamamlanamadi",
         "src/main/resources/musteri.json": "READY"
       },
       "llm": {
-        "files": 10,
-        "requests": 25,
-        "prompt_tokens": 18766,
-        "completion_tokens": 530,
+        "files": 11,
+        "requests": 29,
+        "prompt_tokens": 22386,
+        "completion_tokens": 618,
         "failed_scans": 2,
-        "scans_per_file": 2.3,
-        "requests_per_file": 2.5,
-        "llm_seconds_p50": 0.5,
-        "llm_seconds_p95": 1.798
+        "scans_per_file": 2.45,
+        "requests_per_file": 2.64,
+        "llm_seconds_p50": 0.663,
+        "llm_seconds_p95": 3.025
       },
       "llm_dosya_basina": {
         "README.md": {
@@ -398,8 +423,8 @@
           "requests": 2,
           "prompt_tokens": 1624,
           "completion_tokens": 93,
-          "llm_seconds": 0.3557133769995744,
-          "queue_seconds": 3.130000004603062e-05
+          "llm_seconds": 0.3734458419999669,
+          "queue_seconds": 2.0320999965406372e-05
         },
         "db/schema.sql": {
           "detection_scans": 1,
@@ -408,8 +433,18 @@
           "requests": 2,
           "prompt_tokens": 1680,
           "completion_tokens": 12,
-          "llm_seconds": 0.41372611599990705,
-          "queue_seconds": 0.01117793600042205
+          "llm_seconds": 0.5507957010000268,
+          "queue_seconds": 0.2690091279999933
+        },
+        "pom.xml": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1719,
+          "completion_tokens": 12,
+          "llm_seconds": 0.4415491139999972,
+          "queue_seconds": 0.013187865999952919
         },
         "src/main/java/com/acme/karayel/musteri/Musteri.java": {
           "detection_scans": 1,
@@ -418,8 +453,8 @@
           "requests": 3,
           "prompt_tokens": 3120,
           "completion_tokens": 65,
-          "llm_seconds": 0.49560555900006875,
-          "queue_seconds": 0.12121760099944368
+          "llm_seconds": 0.662775416000045,
+          "queue_seconds": 0.295380744000056
         },
         "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
           "detection_scans": 1,
@@ -428,8 +463,8 @@
           "requests": 2,
           "prompt_tokens": 1901,
           "completion_tokens": 12,
-          "llm_seconds": 0.39134887700038234,
-          "queue_seconds": 0.1181439329998284
+          "llm_seconds": 0.48893225900002335,
+          "queue_seconds": 0.2242740689999323
         },
         "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
           "detection_scans": 1,
@@ -438,28 +473,18 @@
           "requests": 2,
           "prompt_tokens": 1658,
           "completion_tokens": 12,
-          "llm_seconds": 0.5001365729999634,
-          "queue_seconds": 0.22788246800018896
+          "llm_seconds": 0.6021151030000169,
+          "queue_seconds": 0.3295433750000143
         },
         "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
           "detection_scans": 1,
-          "audit_scans": 2,
-          "failed_scans": 1,
-          "requests": 4,
-          "prompt_tokens": 2063,
-          "completion_tokens": 135,
-          "llm_seconds": 1.7739092439996966,
-          "queue_seconds": 0.39905275799992523
-        },
-        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
-          "detection_scans": 1,
-          "audit_scans": 1,
+          "audit_scans": 3,
           "failed_scans": 0,
-          "requests": 2,
-          "prompt_tokens": 1792,
-          "completion_tokens": 39,
-          "llm_seconds": 0.5932254240001384,
-          "queue_seconds": 0.3311741869997604
+          "requests": 4,
+          "prompt_tokens": 3964,
+          "completion_tokens": 192,
+          "llm_seconds": 0.9215226239999197,
+          "queue_seconds": 0.5436996859999681
         },
         "src/main/java/com/acme/karayel/musteri/UserService.java": {
           "detection_scans": 1,
@@ -468,8 +493,18 @@
           "requests": 2,
           "prompt_tokens": 1674,
           "completion_tokens": 40,
-          "llm_seconds": 0.6520080350001081,
-          "queue_seconds": 0.4373025320001034
+          "llm_seconds": 0.7101790820000247,
+          "queue_seconds": 0.4927860240000541
+        },
+        "src/main/java/com/acme/karayel/poseidon/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 1,
+          "requests": 4,
+          "prompt_tokens": 1792,
+          "completion_tokens": 58,
+          "llm_seconds": 1.7867021519999753,
+          "queue_seconds": 0.36816598500001874
         },
         "src/main/resources/application.properties": {
           "detection_scans": 1,
@@ -478,8 +513,8 @@
           "requests": 3,
           "prompt_tokens": 968,
           "completion_tokens": 4,
-          "llm_seconds": 1.6849287099998946,
-          "queue_seconds": 0.37605184400035796
+          "llm_seconds": 1.8478232640000556,
+          "queue_seconds": 0.4704178039999647
         },
         "src/main/resources/musteri.json": {
           "detection_scans": 1,
@@ -488,8 +523,8 @@
           "requests": 3,
           "prompt_tokens": 2286,
           "completion_tokens": 118,
-          "llm_seconds": 1.7980616519998875,
-          "queue_seconds": 1.533883909999986
+          "llm_seconds": 3.025103564999995,
+          "queue_seconds": 2.6878456670000332
         }
       },
       "canary_sizintisi": {},
@@ -501,12 +536,12 @@
       },
       "maskelenmemesi_gereken_ihlal": {
         "UserService": {
-          "kaynakta": 1,
+          "kaynakta": 3,
           "ciktida": 0
         }
       },
       "geri_alma": {
-        "karsilastirilan": 7,
+        "karsilastirilan": 8,
         "farkli": [],
         "cozulemeyen_placeholder": 0
       },
@@ -517,12 +552,13 @@
         "eksik_java_dosyasi": 1,
         "hata_sayisi": 4,
         "ilk_hatalar": [
-          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
           "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java",
-          "MusteriController.java:12: error: cannot find symbol",
-          "MusteriController.java:14: error: cannot find symbol"
+          "MusteriService.java:3: error: package com.acme.mask_kurumsal_ifade_1.mask_denetim_bulgusu_4 does not exist",
+          "MusteriService.java:10: error: cannot find symbol",
+          "MusteriService.java:13: error: cannot find symbol"
         ]
-      }
+      },
+      "rapor_metni": "Export raporu - run_id=5 durum=Uyarili tamamlandi\n  Proje: golden-olcum | sicil: P-GOLDEN-0001 | Branch: golden-branch\n  Kaynak: /home/user/OWASP_PROJE_v2/masking_system/masking_service/tests/fixtures/golden/project\n  Hedef:  /tmp/golden-olcum-r1dl69yr/cikti_3\n\n  11 dosya tarandi -> 8 dosyada hassas veri bulunup maskelendi, 3 dosya ikincil risk denetiminden gecemedigi icin DISA AKTARILMADI.\n  Durumlar: ✓ Hazır 8 | ⚠ İnceleme Gerekli 0 | ⛔ Güvenlik Karantinası 2 | ✕ Doğrulama Başarısız 1\n  Ciktiya alinmama nedenleri (dosyayi alikoyan kontrol):\n    - LLM denetimi (llm_denetimi): 2\n    - LLM denetimi tamamlanamadı (llm_denetimi_tamamlanamadi): 1\n\n  LLM kullanimi: 11 dosya, 29 istek (dosya basina 2.64 istek, 2.45 tarama), 22386 girdi / 618 cikti token, dosya basina LLM suresi p50 0.663 sn / p95 3.025 sn, basarisiz tarama 2\n\n  SOZDIZIMI DOGRULAMA UYARILARI:\n    src/main/java/com/acme/karayel/musteri/MusteriController.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/MusteriRepository.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/UserService.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/Musteri.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/karayel/musteri/MusteriService.java: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n\n  Bulunan hassas veri turleri (toplam 76 eslesme):\n    - kurumsal_terim_altin_kume_1ec062134286: 26\n    - llm_dynamic: 25\n    - kurumsal_terim_altin_kume_7f73a9893c23: 22\n    - Genel gizli bilgi (API anahtari/parola/token): 2\n    - tc_kimlik_no: 1\n\n  !!! IKINCIL RISK: 3 dosya, maskeleme sonrasi bagimsiz denetimden gecemedigi icin hedef klasore YAZILMADI - insan onayi bekliyor (bkz. denetim_uyarilari) !!!\n"
     }
   ]
 }
