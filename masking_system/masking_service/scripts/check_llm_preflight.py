@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 SAMPLE = 'SERVICE_NAME = "synthetic-preflight-service"\n'
 
 
@@ -94,12 +95,54 @@ async def check_paths(settings, instructions):
     return failures
 
 
+def check_version_consistency():
+    """app/ modullerini import etmeden: surum damgasi + moduller arasi imza uyumu.
+
+    Karisik surumde import'un kendisi patlayabilecegi icin importlardan ONCE
+    calisir. Donus: basarisiz asama sayisi.
+    """
+    from signature_consistency import check as check_signatures
+    from write_build_stamp import load_build_info
+
+    failures = 0
+    try:
+        status = load_build_info().check_build(ROOT / "app")
+        print(status.line())
+        if status.state == "no_stamp":
+            print("WARN stage=build_stamp reason=BUILD_STAMP.json_yok (gelistirme kopyasi; intranet paketinde olmali)")
+        elif status.blocks_export:
+            failures += 1
+            for name in status.mismatched:
+                print(f"FAIL stage=build_stamp file=app/{name} reason=damga_ile_uyusmuyor")
+            for name in status.missing:
+                print(f"FAIL stage=build_stamp file=app/{name} reason=eksik")
+        else:
+            print("PASS stage=build_stamp")
+        for name in status.extra:
+            print(f"WARN stage=build_stamp file=app/{name} reason=damgada_yok")
+    except Exception as exc:
+        failures += 1
+        failure("build_stamp", exc)
+    try:
+        stats = {}
+        findings = check_signatures(ROOT / "app", stats)
+        for finding in findings:
+            print(finding.line())
+        print(("FAIL" if findings else "PASS") + f" stage=signature_consistency checked_calls={stats.get('checked', 0)}")
+        failures += bool(findings)
+    except Exception as exc:
+        failures += 1
+        failure("signature_consistency", exc)
+    return failures
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-db", action="store_true", help="Only check code/settings, not DB instructions")
     args = parser.parse_args(argv)
     print(f"python={sys.version.split()[0]} executable={sys.executable}")
     print("mode=offline network=blocked scanned_text=synthetic")
+    version_failures = check_version_consistency()
     try:
         from app.core import config
         from app.services import audit_reviewer, llm_recognizer, llm_runtime
@@ -122,7 +165,7 @@ def main(argv=None):
         return 1
 
     instructions = None
-    failures = 0
+    failures = version_failures
     if args.skip_db:
         print("SKIP stage=db_rules scope=code_and_settings_only")
     else:
