@@ -11,7 +11,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditLog, MaskingContext, MaskingRun
+from app.db.models import AuditLog, AuditWarning, MaskingContext, MaskingRun
+from app.services.log_refs import file_ref
 
 
 # Bir masking_run kaydini, ait oldugu context bilgileriyle (proje/sicil/
@@ -130,3 +131,16 @@ def get_run_audit_entries(db: Session, run_id: int) -> list[AuditLog]:
     return list(
         db.scalars(select(AuditLog).where(AuditLog.run_id == run_id).order_by(AuditLog.id)).all()
     )
+
+
+# Log/rapordaki "maskeli yol#kimlik" etiketinin kimlik kismini, o calismanin
+# DB kayitlarindaki (AuditLog/AuditWarning) kaynak yola esler. Kimlik job
+# anahtarli HMAC oldugu icin yalnizca sunucuda, ayni anahtarla cozulebilir.
+def find_file_by_ref(db: Session, run_id: int, ref: str) -> list[str]:
+    run = db.get(MaskingRun, run_id)
+    if run is None:
+        return []
+    ref = ref.strip().lstrip("#").lower()
+    paths = set(db.scalars(select(AuditLog.file_path).where(AuditLog.run_id == run_id)).all())
+    paths |= set(db.scalars(select(AuditWarning.file_path).where(AuditWarning.run_id == run_id)).all())
+    return sorted(path for path in paths if path and file_ref(run.context_id, run_id, path) == ref)

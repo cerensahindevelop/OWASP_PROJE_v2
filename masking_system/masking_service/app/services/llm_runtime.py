@@ -20,6 +20,8 @@ import threading
 from time import monotonic
 from uuid import uuid4
 
+from app.services.log_refs import current_file_label
+
 # Inherits Uvicorn's configured INFO handler; CLI can configure this logger too.
 logger = logging.getLogger("uvicorn.error.llm")
 _file_path = ContextVar("llm_file_path", default="<unknown>")
@@ -158,6 +160,8 @@ class LLMScanMetrics:
         self.phase = phase
         self.chunk_count = chunk_count
         self.file_path = file_path or _file_path.get()
+        # Loglara kaynak yol degil maskeli yol + kisa kimlik yazilir (kural 7).
+        self.log_label = current_file_label()
         self.scan_id = uuid4().hex
         self.requests = 0
         self.completed = 0
@@ -179,7 +183,7 @@ class LLMScanMetrics:
             "llm_file scan_id=%s file=%r phase=%s chunks=%d completed=%d "
             "requests=%d elapsed_seconds=%.3f queue_seconds=%.3f status=%s "
             "error_type=%s prompt_tokens=%d completion_tokens=%d usage_responses=%d",
-            self.scan_id, self.file_path, self.phase, self.chunk_count, self.completed,
+            self.scan_id, self.log_label, self.phase, self.chunk_count, self.completed,
             self.requests, elapsed, self.queue_seconds,
             "ok" if kind is None else "error", kind.__name__ if kind else "none",
             self.prompt_tokens, self.completion_tokens, self.usage_responses,
@@ -212,7 +216,7 @@ class LLMScanMetrics:
                         self.requests += 1
                         logger.info(
                             "llm_retry scan_id=%s file=%r phase=%s chunk=%d attempt=%d error_type=%s",
-                            self.scan_id, self.file_path, self.phase, chunk_index, attempt,
+                            self.scan_id, self.log_label, self.phase, chunk_index, attempt,
                             type(exc.__cause__ or exc).__name__,
                         )
                         await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * attempt)
@@ -250,7 +254,7 @@ class LLMScanMetrics:
                     "llm_request scan_id=%s file=%r phase=%s chunk=%d chunks=%d "
                     "request=%d queue_seconds=%.3f elapsed_seconds=%.3f status=%s "
                     "error_type=%s error_stage=%s finish_reason=%r prompt_tokens=%s completion_tokens=%s",
-                    self.scan_id, self.file_path, self.phase, chunk_index, self.chunk_count,
+                    self.scan_id, self.log_label, self.phase, chunk_index, self.chunk_count,
                     self.requests, queue_seconds, monotonic() - started, status, error,
                     stage if status != "ok" else "none", finish, input_tokens, output_tokens,
                 )

@@ -60,7 +60,7 @@ injection ile keyfi yol yazdırma riski yok.
 | `test_java_public_class_matches_file_name` | 5 | xfail |
 | `test_java_package_matches_directory` | 4, 5 | xfail |
 | `test_masked_java_project_compiles` | 5 | xfail |
-| `test_report_and_logs_do_not_contain_original_paths` | 7 | xfail (Faz 2'de kalkacak) |
+| `test_report_and_logs_do_not_contain_original_paths` | 7 | geçiyor (Faz 2a; kaynak yol kontrolü) |
 | `test_restore_recreates_file_and_directory_names_byte_for_byte` | 6 | geçiyor (regresyon) |
 | `test_output_paths_do_not_collide_even_case_insensitively` | 5 | geçiyor (regresyon) |
 | `test_output_paths_are_portable` | 5 | geçiyor (regresyon) |
@@ -68,7 +68,9 @@ injection ile keyfi yol yazdırma riski yok.
 | `test_pom_group_id_points_to_existing_package_directory` | 5 | geçiyor (regresyon) |
 
 xfail testleri `strict=True`: Faz 3 bir testi geçirdiğinde test takımı kırılır ve işaret
-kaldırılır. Beklenen stil `expected.json` → `yol_beklentileri.stil` içindedir. Kesin placeholder
+kaldırılır. Yol testleri bir ön koşul taşır: yolunda maskelenmesi gereken terim geçen kaynak
+dosyaların hepsi çıktıda (READY) olmalı. Aksi halde dosya karantinadayken yolu çıktıda hiç
+olmaz ve test boş kümeye karşı geçer (Faz 2a'da LLM09 düzeltmesinden sonra görüldü). Beklenen stil `expected.json` → `yol_beklentileri.stil` içindedir. Kesin placeholder
 biçimi Faz 3 notunda belirlenecek; desenler buna göre güncellenebilir.
 
 **Bilinen engeller (bugünkü kod):**

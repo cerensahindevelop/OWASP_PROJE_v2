@@ -13,6 +13,7 @@ from app.services.file_classifier import should_ignore_path, is_archive_filename
 # dogrulamayi yapan katman - bu dosya sadece detector arayuzune uydurur.
 from app.services.detectors import DetectorOutput
 from app.services.llm_input_view import LLMInputStats
+from app.services.log_refs import current_file_label
 from app.services.llm_recognizer import FindingRepairStats, LLMRecognitionError, find_llm_detections
 from app.services.token_boundary_validator import is_authoritative_result
 
@@ -72,14 +73,15 @@ class LLMDetector:
         except LLMRecognitionError as exc:
             detail = "LLM taramasi tamamlanamadi; dosya VALIDATION_FAILED"
             if file_path:
-                detail += f" (dosya={file_path})"
+                # Hata metni rapora gider: kaynak yol degil, maskeli yol + kimlik.
+                detail += f" (dosya={current_file_label()})"
             return DetectorOutput(errors=[f"{detail}: {exc}"])
         notices = []
         workload = input_stats.workload_notice(getattr(self.vllm_settings, "warn_chunks_per_file", 0))
         if workload:
             # Yeni bir dosya bicimi LLM'i yavaslatiyorsa saatler sonra degil,
             # ilk dosyada gorunsun (bkz. `python -m app.cli llm-is-yuku` on-tahmini).
-            logger.warning("%s file=%r", workload, file_path)
+            logger.warning("%s file=%r", workload, current_file_label())
             notices.append(workload)
         if repair_stats.repaired or repair_stats.dropped:
             notices.append(

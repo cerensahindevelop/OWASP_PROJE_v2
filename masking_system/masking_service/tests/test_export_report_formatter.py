@@ -50,6 +50,9 @@ def test_summary_text_delegates_to_formatter_with_identical_output():
 
 def test_quarantined_and_syntax_and_round_trip_failures_are_all_reported():
     report = _base_report(status="completed_with_warnings", target_overwritten=True)
+    # Faz 2a (kural 7): rapor dosyalari kaynak yolla degil "maskeli yol#kimlik"
+    # etiketiyle yazar; etiket export'ta yol planlamasinda uretilir.
+    report.file_labels.update({"broken.py": "broken.py#0123456789ab", "mismatch.py": "mismatch.py#ba9876543210"})
     report.record(
         FileOutcome("secret.py", status="quarantined_pending_audit", match_count=1, error="ikincil risk")
     )
@@ -66,9 +69,9 @@ def test_quarantined_and_syntax_and_round_trip_failures_are_all_reported():
     assert "onceki export uzerine yazildi" in text
     assert "IKINCIL RISK" in text
     assert "SOZDIZIMI HATASI" in text
-    assert "broken.py dosyasinda maskeleme sozdizimini bozdu" in text
+    assert "broken.py#0123456789ab dosyasinda maskeleme sozdizimini bozdu" in text
     assert "ROUND-TRIP HATASI" in text
-    assert "mismatch.py: ilk fark 10" in text
+    assert "mismatch.py#ba9876543210: ilk fark 10" in text
     assert "1 dosya symlink oldugu icin atlandi" in text
     assert "Dikkat edilmesi gerekenler" in text
 
@@ -103,3 +106,25 @@ def test_four_security_states_are_counted_separately():
         "✓ Hazır 1 | ⚠ İnceleme Gerekli 1 | ⛔ Güvenlik Karantinası 1 | "
         "✕ Doğrulama Başarısız 1"
     ) in report.summary_text()
+
+
+def test_report_never_falls_back_to_source_paths():
+    report = _base_report(source_path="/home/u/karayel-kaynak", target_path="/out/karayel-cikti")
+    report.record(FileOutcome("src/karayel/X.java", status="failed_round_trip_validation", error="ilk fark 1"))
+
+    text = format_export_report(report)
+
+    assert "karayel" not in text.casefold()
+    assert "Kaynak: <gizlendi>" in text and "<dosya?>: ilk fark 1" in text
+
+
+def test_report_uses_masked_roots_and_labels():
+    report = _base_report(display_source_path="/home/u/mask_kurumsal_terim_1", display_target_path="/out/x")
+    report.file_labels["src/a.py"] = "src/a.py#00aa11bb22cc"
+    report.record(FileOutcome("src/a.py", status="failed_round_trip_validation", error="ilk fark 1"))
+
+    text = format_export_report(report)
+
+    assert "Kaynak: /home/u/mask_kurumsal_terim_1" in text
+    assert "Hedef:  /out/x" in text
+    assert "src/a.py#00aa11bb22cc: ilk fark 1" in text

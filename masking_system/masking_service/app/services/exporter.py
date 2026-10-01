@@ -78,6 +78,7 @@ from app.services.mapping_service import (
     mask_relative_path,
 )
 from app.services.review_masking import NarrowedValueError, mask_known_values
+from app.services.log_refs import UNKNOWN_FILE_LABEL, file_label, file_ref, log_file_label
 from app.services.scanner import iter_project_files
 from app.services.syntax_validator import validate_masked_syntax
 
@@ -221,6 +222,17 @@ class ExportReport:
     # sure (bkz. llm_runtime.LLMUsageCollector). Rapor metni yalnizca toplu
     # ozeti gosterir; yollar gosterilmez.
     llm_usage_by_file: dict[str, LLMFileUsage] = field(default_factory=dict)
+    # Kaynak goreli yol -> "maskeli yol#kisa kimlik" (bkz. log_refs). Rapor
+    # metni ve dogrulama uyarilari kaynak yol yerine bunu yazar (kural 7).
+    file_labels: dict[str, str] = field(default_factory=dict)
+    # Kok klasorlerin yol maskelemesinden gecmis hali; rapor metni bunlari
+    # yazar (kok klasor adi siklikla proje/kod adi icerir).
+    display_source_path: str | None = None
+    display_target_path: str | None = None
+
+    # Rapora/loga yazilacak dosya etiketi; bilinmiyorsa kaynak yol degil sabit metin.
+    def file_label(self, relative_path: str) -> str:
+        return self.file_labels.get(relative_path, UNKNOWN_FILE_LABEL)
 
     # Toplam istek/token, dosya basina tarama ve LLM suresi p50/p95.
     @property
@@ -609,7 +621,7 @@ def _mark_consistency_failure(
 
 def _validate_and_log_syntax(
     db: Session, run_id: int, relative_path: str, masked_text: str,
-    original_text: str, validation_warnings: list[str] | None = None,
+    original_text: str, validation_warnings: list[str] | None = None, *, display_path: str,
 ) -> str | None:
     if Path(relative_path).suffix.lower() == ".class":
         # Binary reconstruction separately validates the class structure.
@@ -623,7 +635,7 @@ def _validate_and_log_syntax(
     for notice in diagnostics:
         db.add(AuditLog(run_id=run_id, file_path=relative_path, action="skipped", detail=f"validation_warning; {notice}"))
         if validation_warnings is not None:
-            entry = f"{relative_path}: {notice}"
+            entry = f"{display_path}: {notice}"
             if entry not in validation_warnings:
                 validation_warnings.append(entry)
     return error
@@ -633,13 +645,14 @@ def _validate_and_log_syntax(
 # AuditLog'a uyari olarak duser. Hata metni yalnizca tur + satir/sutun icerir.
 def _record_syntax_warning(
     db: Session, run_id: int, relative_path: str, syntax_error: str, validation_warnings: list[str] | None,
+    *, display_path: str,
 ) -> None:
     db.add(AuditLog(
         run_id=run_id, file_path=relative_path, action="skipped",
         detail=f"validation_warning; syntax_failure_action=warn; {syntax_error}",
     ))
     if validation_warnings is not None:
-        entry = f"{relative_path}: sozdizimi hatasi uyariyla ciktiya alindi: {syntax_error}"
+        entry = f"{display_path}: sozdizimi hatasi uyariyla ciktiya alindi: {syntax_error}"
         if entry not in validation_warnings:
             validation_warnings.append(entry)
 
@@ -822,12 +835,14 @@ def _run_consistency_pass(
                 syntax_error = _validate_and_log_syntax(
                     db, run_ctx.run_id, output_file.outcome.relative_path,
                     masked_text, text, report.validation_warnings,
+                    display_path=report.file_label(output_file.outcome.relative_path),
                 )
                 if (syntax_error is not None and settings.validation.syntax_failure_action == "warn"
                         and output_file.original_binary_digest is None):
                     _record_syntax_warning(
                         db, run_ctx.run_id, output_file.outcome.relative_path, syntax_error,
                         report.validation_warnings,
+                        display_path=report.file_label(output_file.outcome.relative_path),
                     )
                     syntax_error = None
                 if syntax_error is not None:
@@ -946,12 +961,14 @@ class _PreparedBatch:
 # Yol maskeleme + Faz A hazirligi (okuma/siniflandirma) - hizli I/O, sirali.
 def _prepare_batch(
     db: Session, run_id: int, files: list, path_plans: dict, output_target: Path, max_inline_size: int,
+    file_labels: dict[str, str],
 ) -> _PreparedBatch:
     batch = _PreparedBatch(files=files, preps=[], masked_paths=[], path_mappings=[])
     for scanned in files:
         masked_relative_path, path_mappings = path_plans[scanned.relative_path]
         prep = _prepare_file(db, run_id, scanned, output_target / masked_relative_path, max_inline_size)
         prep.masked_rel = masked_relative_path.as_posix()
+        prep.log_label = file_labels.get(scanned.relative_path.as_posix(), UNKNOWN_FILE_LABEL)
         batch.preps.append(prep)
         batch.masked_paths.append(masked_relative_path)
         batch.path_mappings.append(path_mappings)
@@ -1003,6 +1020,8 @@ class _FilePrep:
     # Ciktidaki MASKELENMIS goreli yol (posix). Karantinadan serbest birakma
     # bu yola yazar - `rel` kaynak yoludur ve proje/kurum adini acik icerebilir.
     masked_rel: str | None = None
+    # Log/rapor etiketi: maskeli yol + kisa kimlik (bkz. log_refs).
+    log_label: str | None = None
 
 
 # A supported text file prepared for post-mask LLM audit and final validation.
@@ -1238,7 +1257,8 @@ async def _detect_for_prep(orchestrator: DetectionOrchestrator, prep: _FilePrep)
         "file_path": str(Path(prep.rel).with_suffix(".json")) if prep.class_document else prep.rel,
     }
     try:
-        return await detect_matches(orchestrator, prep.text, metadata)
+        with log_file_label(prep.log_label):
+            return await detect_matches(orchestrator, prep.text, metadata)
     except Exception as exc:
         # Defense in depth: DetectionOrchestrator.scan already isolates a
         # single detector's crash from the others, but the post-processing
@@ -1661,7 +1681,13 @@ def _audit_skippable(masked_file: _MaskedFile) -> bool:
 async def _audit_masked_file(masked_file: _MaskedFile) -> "AuditVerdict | LLMRecognitionError":
     if _audit_skippable(masked_file):
         return AuditVerdict(risky=False, audited=False)
-    return await _audit_one(masked_file.masked_text, masked_file.prep.rel)
+    return await _labeled(masked_file.prep.log_label, _audit_one(masked_file.masked_text, masked_file.prep.rel))
+
+
+# Bir LLM cagrisini dosyanin log etiketiyle calistirir (loglarda kaynak yol yok).
+async def _labeled(label: str | None, awaitable):
+    with log_file_label(label):
+        return await awaitable
 
 
 # Maskelenmis bir metni post-mask LLM denetiminden gecirir; LLM hatasini deger olarak dondurur (raise etmez).
@@ -1930,13 +1956,15 @@ def _finalize_file(
     # Son guvenlik agi: maskeleme sozdizimini BOZDU mu? (kaynak zaten bozuksa buradan gecer)
     syntax_error = _validate_and_log_syntax(
         db, run_id, prep.rel, masked_file.masked_text, prep.text, validation_warnings,
+        display_path=prep.log_label or UNKNOWN_FILE_LABEL,
     )
     # warn modu: bu noktaya gelen dosya tum gizlilik kontrollerinden (acik terim,
     # LLM denetimi) gecti; sozdizimi hatasi uyariyla kaydedilip dosya yazilir.
     # Java .class her modda bloklar (bozuk sabit havuzu yeniden kurulamaz).
     if (syntax_error is not None and prep.class_document is None
             and (syntax_failure_action or settings.validation.syntax_failure_action) == "warn"):
-        _record_syntax_warning(db, run_id, prep.rel, syntax_error, validation_warnings)
+        _record_syntax_warning(db, run_id, prep.rel, syntax_error, validation_warnings,
+                               display_path=prep.log_label or UNKNOWN_FILE_LABEL)
         syntax_error = None
     if syntax_error is not None:
         _write_to_failed_files_dir(failed_dir, _failed_rel(prep), masked_file.masked_text, prep.encoding)
@@ -1973,7 +2001,7 @@ def _finalize_file(
             return FileOutcome(prep.rel, failed_check=FailedCheck.SOZDIZIMI, status="failed_syntax_validation",
                                match_count=masked_file.match_count,
                                rule_breakdown=masked_file.rule_breakdown, error=reason)
-        notice = f"{prep.rel}: {CLASS_COVERAGE}"
+        notice = f"{prep.log_label or UNKNOWN_FILE_LABEL}: {CLASS_COVERAGE}"
         if validation_warnings is not None and notice not in validation_warnings:
             validation_warnings.append(notice)
         db.add(AuditLog(run_id=run_id, file_path=prep.rel, action="skipped",
@@ -2007,6 +2035,31 @@ def _finalize_file(
     return FileOutcome(
         prep.rel, status=status, match_count=masked_file.match_count, rule_breakdown=masked_file.rule_breakdown
     )
+
+
+# Rapor metnindeki kok klasor (kaynak/hedef): dosya yollariyla AYNI yol
+# maskelemesinden gecer; kok klasor adi siklikla proje/kod adi icerir
+# (kural 7). Maskeleme basarisiz olur ya da maskeli kokte aktif terim kalirsa
+# yalnizca surucu/kok gosterilir - orijinal ad asla yazilmaz.
+def _masked_root(
+    db: Session, context, root: Path, runtime_params: dict[str, str], rules, mapping_cache, run_id: int,
+) -> str:
+    hidden = f"{root.anchor}<gizlendi>"
+    relative = Path(*root.parts[1:]) if root.anchor else root
+    if not relative.parts:
+        return str(root)
+    try:
+        masked, mappings = mask_relative_path(
+            db, context, relative, runtime_params, rules, mapping_cache=mapping_cache, run_id=run_id,
+        )
+        if find_leaked_terms(
+            db, masked.as_posix(), exclude_path_spanning=True,
+            path_placeholders=(mapping.placeholder_value for mapping in mappings),
+        ):
+            return hidden
+    except Exception:
+        return hidden
+    return str(Path(root.anchor) / masked) if root.anchor else str(masked)
 
 
 # Otomatik duzeltme sinirlari: denetim alintisi bu tiple maskelenir; en fazla
@@ -2510,6 +2563,9 @@ async def export_project(
                 masked_relative_path, path_mappings = scanned.relative_path, []
 
             path_plans[scanned.relative_path] = (masked_relative_path, path_mappings)
+            report.file_labels[scanned.relative_path.as_posix()] = file_label(
+                masked_relative_path, file_ref(context.id, run.id, scanned.relative_path),
+            )
             if scanned.excluded_by is not None or scanned.is_symlink:
                 continue
             leaked_path_terms = find_leaked_terms(
@@ -2536,6 +2592,13 @@ async def export_project(
                     f"hedefe ('{masked_relative_path}') donusuyor"
                 )
             claimed_masked_paths[collision_key] = scanned.relative_path
+
+        report.display_source_path = _masked_root(
+            db, context, source, runtime_params, active_rules, mapping_cache, run.id,
+        )
+        report.display_target_path = _masked_root(
+            db, context, target, runtime_params, active_rules, mapping_cache, run.id,
+        )
 
         # Use the same path decoder as unmask, including compound names.
         # Validate before overwriting any existing output directory.
@@ -2590,7 +2653,8 @@ async def export_project(
         # Faz B'de verildigi icin cikti bu es zamanliliktan etkilenmez.
         batches = [all_files[start : start + batch_size] for start in range(0, total_files, batch_size)]
         prepared_next = (
-            _prepare_batch(db, run.id, batches[0], path_plans, output_target, max_inline_size) if batches else None
+            _prepare_batch(db, run.id, batches[0], path_plans, output_target, max_inline_size, report.file_labels)
+            if batches else None
         )
         if prepared_next is not None:
             next_detection = _start_detection(orchestrator, prepared_next, detection_slots)
@@ -2706,6 +2770,7 @@ async def export_project(
             if batch_number + 1 < len(batches):
                 prepared_next = _prepare_batch(
                     db, run.id, batches[batch_number + 1], path_plans, output_target, max_inline_size,
+                    report.file_labels,
                 )
 
             # Faz C (LLM denetimi) yazma kilidi tutulmadan calissin.
@@ -2773,7 +2838,8 @@ async def export_project(
             while pending:
                 db.commit()
                 reaudits = await asyncio.gather(
-                    *(_bounded(_audit_one(item.current.masked_text, preps[i].rel), audit_slots) for i, item in pending)
+                    *(_bounded(_labeled(preps[i].log_label, _audit_one(item.current.masked_text, preps[i].rel)), audit_slots)
+                      for i, item in pending)
                 )
                 _acquire_write_lock(db, run.id)
                 next_pending: list[tuple[int, _PendingRemediation]] = []

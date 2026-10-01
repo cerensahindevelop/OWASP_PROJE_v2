@@ -18,6 +18,7 @@ from typing import Protocol
 # Katman 1 (sozluk/regex) kural motoru: RuleSpec/Match veri tipleri ve
 # kurallari derleyip eslestiren fonksiyonlar buradan alinir.
 from app.services.encoded_blobs import find_encoded_blobs
+from app.services.log_refs import current_file_label
 from app.services.rule_engine import Match, RuleSpec, compile_rules, find_matches_compiled
 
 
@@ -139,7 +140,7 @@ class DetectionOrchestrator:
                 ]
                 logger.error(
                     "detector_crash detector=%s file=%r error_type=%s frames=%s",
-                    detector.name, metadata.get("file_path"), type(exc).__name__,
+                    detector.name, current_file_label(), type(exc).__name__,
                     " > ".join(frames[-8:]),
                 )
                 # A single detector layer crashing on one file must not take

@@ -9,6 +9,7 @@ import pytest
 
 from app.services import llm_recognizer
 from app.services.detectors import DetectionOrchestrator, DetectorRegistry
+from app.services.log_refs import log_file_label
 from app.services.llm_detector import LLMDetector
 
 
@@ -146,12 +147,17 @@ def test_unexpected_crash_logs_source_location_without_content_or_exception_text
 
     registry = DetectorRegistry()
     registry.register(BrokenDetector())
+    async def scan():
+        # Faz 2a (kural 7): log kaynak yolu degil "maskeli yol#kimlik" etiketini yazar.
+        with log_file_label("mask/test.txt#0123456789ab"):
+            return await DetectionOrchestrator(registry).scan("PRIVATE_CONTENT", {"file_path": "test.txt"})
+
     with caplog.at_level(logging.ERROR, logger="uvicorn.error.detectors"):
-        output = asyncio.run(DetectionOrchestrator(registry).scan(
-            "PRIVATE_CONTENT", {"file_path": "test.txt"}))
+        output = asyncio.run(scan())
     assert len(output.crashes) == 1 and "TypeError" in output.crashes[0]
     assert "detector_crash" in caplog.text
     assert "test_llm_response_validation.py:" in caplog.text
-    assert "detect" in caplog.text and "test.txt" in caplog.text
+    assert "detect" in caplog.text and "file='mask/test.txt#0123456789ab'" in caplog.text
+    assert "file='test.txt'" not in caplog.text
     assert "PRIVATE" not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)

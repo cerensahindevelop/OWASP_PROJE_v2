@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 from app.services.llm_detector import LLMDetector
 from app.services.llm_recognizer import LLMRecognitionError
+from app.services.log_refs import log_file_label
 
 
 def _settings(**overrides):
@@ -171,8 +172,15 @@ def test_vllm_failure_is_reported_as_error_not_raised(monkeypatch):
     monkeypatch.setattr("app.services.llm_recognizer.call_vllm", _raise)
 
     detector = LLMDetector(_settings())
-    output = asyncio.run(detector.detect("herhangi bir metin", metadata={"file_path": "a.py"}))
+
+    async def detect():
+        # Faz 2a (kural 7): hata metni rapora gider; kaynak yol degil etiket yazilir.
+        with log_file_label("mask/a.py#0123456789ab"):
+            return await detector.detect("herhangi bir metin", metadata={"file_path": "a.py"})
+
+    output = asyncio.run(detect())
 
     assert output.results == []
     assert len(output.errors) == 1
-    assert "a.py" in output.errors[0]
+    assert "(dosya=mask/a.py#0123456789ab)" in output.errors[0]
+    assert "dosya=a.py" not in output.errors[0]

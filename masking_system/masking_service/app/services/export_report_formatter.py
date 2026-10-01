@@ -42,13 +42,18 @@ _STATUS_DISPLAY_NAMES = {
 # Once duz cumlelik bir baslik/ozet, sonra (varsa) kural dagilimi, en sonda da
 # SADECE dikkat gerektiren (sifirdan farkli) durumlar - 8 satirlik "hepsi 0"
 # dokumu okunurlugu bogar, o yuzden burada gosterilmez.
+_HIDDEN_PATH = "<gizlendi>"
+
+
 def format_export_report(report: "ExportReport") -> str:
     status_label = _STATUS_DISPLAY_NAMES.get(report.status, report.status)
     lines = [
         f"Export raporu - run_id={report.run_id} durum={status_label}",
         f"  Proje: {report.project_name} | sicil: {report.sicil_no} | Branch: {report.branch_name}",
-        f"  Kaynak: {report.source_path}",
-        f"  Hedef:  {report.target_path}"
+        # Kok klasorler ve dosyalar kaynak yolla degil, maskeli yolla yazilir
+        # (kural 7): rapor metni CLI'den dosyaya/loga yonlendirilebilir.
+        f"  Kaynak: {report.display_source_path or _HIDDEN_PATH}",
+        f"  Hedef:  {report.display_target_path or _HIDDEN_PATH}"
         + (" (onceki export uzerine yazildi)" if report.target_overwritten else ""),
         "",
     ]
@@ -169,7 +174,7 @@ def format_export_report(report: "ExportReport") -> str:
         for outcome in report.outcomes:
             if outcome.status == "failed_syntax_validation":
                 lines.append(
-                    f"    - {outcome.relative_path} dosyasinda maskeleme sozdizimini bozdu, "
+                    f"    - {report.file_label(outcome.relative_path)} dosyasinda maskeleme sozdizimini bozdu, "
                     "bu dosya disa aktarilmadi, manuel incelemeniz gerekiyor."
                 )
 
@@ -183,7 +188,7 @@ def format_export_report(report: "ExportReport") -> str:
         )
         for outcome in report.outcomes:
             if outcome.status == "failed_round_trip_validation":
-                lines.append(f"    - {outcome.relative_path}: {outcome.error}")
+                lines.append(f"    - {report.file_label(outcome.relative_path)}: {outcome.error}")
 
     if report.files_failed_consistency_validation:
         lines.append("")
@@ -194,7 +199,7 @@ def format_export_report(report: "ExportReport") -> str:
         )
         for outcome in report.outcomes:
             if outcome.status == "failed_consistency_validation":
-                lines.append(f"    - {outcome.relative_path}: {outcome.error}")
+                lines.append(f"    - {report.file_label(outcome.relative_path)}: {outcome.error}")
 
     if report.files_failed_finalization:
         lines.append("")
@@ -205,7 +210,7 @@ def format_export_report(report: "ExportReport") -> str:
         )
         for outcome in report.outcomes:
             if outcome.status == "failed_finalization":
-                lines.append(f"    - {outcome.relative_path}: {outcome.error}")
+                lines.append(f"    - {report.file_label(outcome.relative_path)}: {outcome.error}")
 
     attention: list[str] = []
     if report.files_skipped_unsupported:
@@ -215,7 +220,7 @@ def format_export_report(report: "ExportReport") -> str:
         )
         for outcome in report.outcomes:
             if outcome.status == "skipped_unsupported":
-                attention.append(f"{outcome.relative_path}: {outcome.error}")
+                attention.append(f"{report.file_label(outcome.relative_path)}: {outcome.error}")
     if report.files_copied_binary:
         attention.append(f"{report.files_copied_binary} binary dosya dogrulanamadi ve ciktiya alinmadi")
     if report.files_skipped_symlink:
