@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from dataclasses import dataclass
 import httpx
 from contextvars import ContextVar
 import logging
+import math
+import threading
 from time import monotonic
 from uuid import uuid4
 
@@ -35,6 +38,88 @@ def llm_file_context(file_path: str):
 def current_llm_file() -> str | None:
     path = _file_path.get()
     return None if path == "<unknown>" else path
+
+
+# Bir dosyanin bir export boyunca harcadigi LLM kaynagi (tespit + denetim +
+# otomatik duzeltme yeniden denetimleri). Yalnizca sayi/sure; icerik yok.
+# llm_seconds: dosyanin tarama (scan) duvar saati surelerinin toplami - parca
+# istekleri eszamanli calistigi icin istek surelerinin toplami degildir.
+@dataclass
+class LLMFileUsage:
+    detection_scans: int = 0
+    audit_scans: int = 0
+    failed_scans: int = 0
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    llm_seconds: float = 0.0
+    queue_seconds: float = 0.0
+
+
+# Bir export'un LLMScanMetrics kayitlarini dosya bazinda toplar. Contextvar
+# ile tasinir: export_project kurar, Faz A/C/E'nin asyncio gorevleri
+# (ensure_future/gather) olusturulduklari baglami kopyaladigi icin AYNI
+# nesneye yazar. LLM cagrisi thread/executor icinde yapilmaz; yine de kayit
+# bir kilitle korunur. Kurulu degilse (orn. serbest birakma denetimi) kayit
+# atlanir.
+class LLMUsageCollector:
+    def __init__(self) -> None:
+        self.by_file: dict[str, LLMFileUsage] = {}
+        self._lock = threading.Lock()
+
+    def record(self, metrics: "LLMScanMetrics", elapsed: float, ok: bool) -> None:
+        with self._lock:
+            usage = self.by_file.setdefault(metrics.file_path or "<unknown>", LLMFileUsage())
+            if metrics.phase == "detection":
+                usage.detection_scans += 1
+            else:
+                usage.audit_scans += 1
+            usage.failed_scans += 0 if ok else 1
+            usage.requests += metrics.requests
+            usage.prompt_tokens += metrics.prompt_tokens
+            usage.completion_tokens += metrics.completion_tokens
+            usage.llm_seconds += elapsed
+            usage.queue_seconds += metrics.queue_seconds
+
+
+_usage_collector: ContextVar[LLMUsageCollector | None] = ContextVar("llm_usage_collector", default=None)
+
+
+# Bu baglamda (ve buradan sonra olusturulan asyncio gorevlerinde) LLM
+# kullanimini `collector`a yazdirir. Donen token stop_llm_usage'a verilir.
+def start_llm_usage(collector: LLMUsageCollector):
+    return _usage_collector.set(collector)
+
+
+def stop_llm_usage(token) -> None:
+    _usage_collector.reset(token)
+
+
+# En yakin sira (nearest-rank) yuzdeligi; bos listede 0.
+def percentile(values: list[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(pct / 100 * len(ordered)) - 1)]
+
+
+# Dosya bazli kullanimdan rapor ozeti (yol icermez).
+def usage_summary(by_file: dict[str, LLMFileUsage]) -> dict[str, float]:
+    usages = list(by_file.values())
+    if not usages:
+        return {}
+    seconds = [usage.llm_seconds for usage in usages]
+    return {
+        "files": len(usages),
+        "requests": sum(usage.requests for usage in usages),
+        "prompt_tokens": sum(usage.prompt_tokens for usage in usages),
+        "completion_tokens": sum(usage.completion_tokens for usage in usages),
+        "failed_scans": sum(usage.failed_scans for usage in usages),
+        "scans_per_file": round(sum(u.detection_scans + u.audit_scans for u in usages) / len(usages), 2),
+        "requests_per_file": round(sum(usage.requests for usage in usages) / len(usages), 2),
+        "llm_seconds_p50": round(percentile(seconds, 50), 3),
+        "llm_seconds_p95": round(percentile(seconds, 95), 3),
+    }
 
 
 def _gate(settings):
@@ -86,12 +171,16 @@ class LLMScanMetrics:
         return self
 
     def __exit__(self, kind, exc, tb):
+        elapsed = monotonic() - self.started
+        collector = _usage_collector.get()
+        if collector is not None:
+            collector.record(self, elapsed, ok=kind is None)
         logger.info(
             "llm_file scan_id=%s file=%r phase=%s chunks=%d completed=%d "
             "requests=%d elapsed_seconds=%.3f queue_seconds=%.3f status=%s "
             "error_type=%s prompt_tokens=%d completion_tokens=%d usage_responses=%d",
             self.scan_id, self.file_path, self.phase, self.chunk_count, self.completed,
-            self.requests, monotonic() - self.started, self.queue_seconds,
+            self.requests, elapsed, self.queue_seconds,
             "ok" if kind is None else "error", kind.__name__ if kind else "none",
             self.prompt_tokens, self.completion_tokens, self.usage_responses,
         )

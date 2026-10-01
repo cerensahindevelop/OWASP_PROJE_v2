@@ -51,7 +51,9 @@ from app.services.file_type import peek_classify, write_text_preserving_encoding
 from app.services.java_classfile import JAVA_CLASS_ENCODING, CLASS_COVERAGE, ClassFormatError, parse_class
 from app.services.detectors import DetectionOrchestrator, synthetic_llm_rule
 from app.services.llm_recognizer import LLMRecognitionError
-from app.services.llm_runtime import llm_file_context
+from app.services.llm_runtime import (
+    LLMFileUsage, LLMUsageCollector, llm_file_context, start_llm_usage, stop_llm_usage, usage_summary,
+)
 from app.services.learned_decisions import LearnedDecisionPolicy
 from app.services.lockfile_policy import plan_lockfile, structured_format
 from app.services.roundtrip_validator import text_digest, verify_round_trip, verify_round_trip_digest
@@ -215,6 +217,15 @@ class ExportReport:
     # export_report_formatter.py) - "Katman 3 hic calismadi" bilgisi
     # sessizce kaybolmamali, sadece basari/basarisizlik hukmunu degistirmemeli.
     llm_disabled: bool = False
+    # Dosya (goreli yol) bazinda LLM kullanimi: tarama/istek sayisi, token,
+    # sure (bkz. llm_runtime.LLMUsageCollector). Rapor metni yalnizca toplu
+    # ozeti gosterir; yollar gosterilmez.
+    llm_usage_by_file: dict[str, LLMFileUsage] = field(default_factory=dict)
+
+    # Toplam istek/token, dosya basina tarama ve LLM suresi p50/p95.
+    @property
+    def llm_usage_summary(self) -> dict[str, float]:
+        return usage_summary(self.llm_usage_by_file)
 
     # Tek bir dosyanin sonucunu (FileOutcome) rapor toplamlarina isler.
     def record(self, outcome: FileOutcome) -> None:
@@ -2372,6 +2383,10 @@ async def export_project(
     failed = False
     publication = None
     next_detection: asyncio.Future | None = None
+    # Faz A/C/E'de olusturulan gorevler bu baglami kopyalar ve ayni toplayiciya yazar.
+    llm_usage = LLMUsageCollector()
+    report.llm_usage_by_file = llm_usage.by_file
+    llm_usage_token = start_llm_usage(llm_usage)
     # Ara commit'ler (asagida) sonrasi mapping onbellegindeki ORM nesneleri
     # her erisimde yeniden SELECT'lenmesin diye; cikista eski deger geri yuklenir.
     previous_expire_on_commit = db.expire_on_commit
@@ -2965,6 +2980,7 @@ async def export_project(
         _mark_run_failed(db, run.id)
         raise
     finally:
+        stop_llm_usage(llm_usage_token)
         db.expire_on_commit = previous_expire_on_commit
         if publication is not None:
             publication.close()

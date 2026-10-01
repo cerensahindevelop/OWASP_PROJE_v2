@@ -276,6 +276,7 @@ class ExportReportOut(BaseModel):
     validation_warnings: list[str] = []
     degraded_detectors: list[str] = []
     blocked_by_check: dict[str, int] = {}
+    llm_usage_summary: dict[str, float] = {}
 
 
 class ExportPathRequest(IdentityMixin):

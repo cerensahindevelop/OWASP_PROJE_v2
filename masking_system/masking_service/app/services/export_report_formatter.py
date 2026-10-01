@@ -128,6 +128,17 @@ def format_export_report(report: "ExportReport") -> str:
             "sadece kural/sozluk (Katman 1) ve Presidio (Katman 2) taramasi yapildi."
         )
 
+    llm_usage = report.llm_usage_summary
+    if llm_usage:
+        lines.append("")
+        lines.append(
+            f"  LLM kullanimi: {llm_usage['files']} dosya, {llm_usage['requests']} istek "
+            f"(dosya basina {llm_usage['requests_per_file']} istek, {llm_usage['scans_per_file']} tarama), "
+            f"{llm_usage['prompt_tokens']} girdi / {llm_usage['completion_tokens']} cikti token, "
+            f"dosya basina LLM suresi p50 {llm_usage['llm_seconds_p50']} sn / p95 {llm_usage['llm_seconds_p95']} sn"
+            + (f", basarisiz tarama {llm_usage['failed_scans']}" if llm_usage["failed_scans"] else "")
+        )
+
     if report.validation_warnings:
         lines.append("")
         lines.append("  SOZDIZIMI DOGRULAMA UYARILARI:")
