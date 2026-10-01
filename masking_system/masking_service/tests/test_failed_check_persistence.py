@@ -123,3 +123,57 @@ def test_clean_export_has_no_blocked_breakdown(tmp_path, monkeypatch):
         assert "Ciktiya alinmama nedenleri" not in report.summary_text()
     finally:
         _cleanup_identity(project)
+
+
+def _summary_module():
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "failed_check_summary.py"
+    spec = importlib.util.spec_from_file_location("failed_check_summary", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_summary_classifies_errors_without_echoing_reason_text():
+    summary = _summary_module()
+    prefix = "Ikincil denetim (LLM) cagrisi basarisiz oldu ya da zaman asimina ugradi: vLLM istegi basarisiz: "
+    assert summary.classify_reason(prefix + "katman=backend_llm; hata=HTTPStatusError; HTTP=503; x") == \
+        "HTTPStatusError_503"
+    assert summary.classify_reason(prefix + "katman=backend_llm; hata=ReadTimeout; gecen_saniye=200") == "ReadTimeout"
+    assert summary.classify_reason("llm detector katmani beklenmeyen bir hatayla durdu (TypeError); x") == "TypeError"
+    assert summary.classify_reason("LLM yaniti tamamlanmadi (finish_reason stop degil: length)") == "yanit_kesildi"
+    assert summary.classify_reason("LLM HTTP toplam sure siniri asildi") == "zaman_asimi"
+    assert summary.classify_reason("") == "diger"
+
+
+def test_summary_reads_persisted_failed_checks_read_only(tmp_path, monkeypatch):
+    import sqlite3
+
+    from app.core.config import DatabaseSettings
+
+    project = f"{_IDENTITY_PREFIX}-summary"
+    try:
+        class _CrashingLLM:
+            async def scan(self, text, metadata=None):
+                return DetectorOutput(crashes=["llm detector katmani beklenmeyen bir hatayla durdu (TypeError); x"])
+
+        monkeypatch.setattr(exporter_module, "build_orchestrator", lambda *a, **kw: _CrashingLLM())
+        monkeypatch.setattr(exporter_module.settings.vllm, "enabled", False)
+        report = _run_export(_source(tmp_path, "app.py", "value = 1\n"), tmp_path / "target", project)
+
+        summary = _summary_module()
+        db = summary._connect(Path(DatabaseSettings().resolved_path))
+        try:
+            result = summary.summarize(db, report.run_id)
+            try:
+                db.execute("CREATE TABLE yazma_denemesi (x)")
+                raise AssertionError("ozet baglantisi yazabiliyor")
+            except sqlite3.OperationalError:
+                pass
+        finally:
+            db.close()
+        assert result["nedene_gore"] == {"tespit_katmani": 1}
+        assert result["hata_siniflari"] == {"tespit_katmani": {"TypeError": 1}}
+    finally:
+        _cleanup_identity(project)
