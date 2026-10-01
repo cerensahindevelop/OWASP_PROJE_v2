@@ -2066,7 +2066,8 @@ def _try_remediation(
         if len(finding.ilgili_bolum) > _MAX_REMEDIATION_QUOTE_CHARS:
             return FailedCheck.UZUN_ALINTI
     audit_rule = synthetic_llm_rule(_AUDIT_REMEDIATION_TYPE)
-    values.extend((finding.ilgili_bolum, audit_rule, "llm") for finding in request.findings)
+    # Denetim alintisi LLM ciktisidir: sezgisel kaynak, Katman 1 yetkisi yok (LLM09).
+    values.extend((finding.ilgili_bolum, audit_rule, "llm_audit") for finding in request.findings)
 
     cache = run_ctx.mapping_cache.mappings if run_ctx.mapping_cache is not None else None
     cache_snapshot = _snapshot_dict(cache) if cache is not None else None

@@ -87,7 +87,8 @@ def registry_authority(original_value: str, source: str, match: Match | None = N
     - Deterministik kaynaklar (sozluk/kurumsal terim/ogrenilmis karar, regex ve
       secret kurallari, parametrik proje/sicil/branch, ozel Presidio kurallari,
       checksum'li Presidio tipleri): harf/rakam iceriyorsa otorite.
-    - Yuksek guvenli LLM bulgulari ve Presidio PERSON (ad soyad biciminde):
+    - Yuksek guvenli LLM bulgulari, denetim alintilari (llm_audit) ve
+      Presidio PERSON (ad soyad biciminde):
       bicim kapisindan (>=4 karakter, harf iceren, salt sayi olmayan, genel
       kelime/anahtar kelime olmayan) gecerse 'weak'.
     - Diger her sey (Presidio ORGANIZATION/DATE_TIME/NRP/LOCATION/
@@ -113,6 +114,10 @@ def registry_authority(original_value: str, source: str, match: Match | None = N
         if confidence == "yuksek" and _weak_value_ok(value, allow_numeric_id=True):
             return "weak"
         return None
+    if source == "llm_audit":
+        # Denetim alintisi dogrulanmis bir LLM ciktisidir: en fazla sezgisel
+        # ('weak') yayilir, asla otorite olmaz (LLM09).
+        return "weak" if _weak_value_ok(value, allow_numeric_id=True) else None
     return None
 
 

@@ -279,3 +279,40 @@ def test_multiline_quote_goes_to_review(db_session, tmp_path, monkeypatch, quote
     assert (target / "notes.txt").exists() is released
     if not released:
         assert any("check=cok_satirli_alinti" in d for d in _trail(db_session, report))
+
+
+# --- LLM09: denetim alintisi Katman 1 yetkisi kazanmaz -------------------------
+
+def test_audit_quote_inside_identifier_is_not_expanded_like_dictionary(db_session, tmp_path, monkeypatch):
+    # Denetim LLM'i bir identifier'in yalnizca bir parcasini alintiliyor.
+    # Sozluk terimi olsaydi tum identifier'a genisletilirdi; LLM ciktisi bu
+    # yetkiyi kazanmaz: guvenli sinira oturtulamaz, dosya onaya duser.
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", _single_quote_audit("Poseidon", "PoseidonService"))
+
+    report, target = _export(db_session, tmp_path, {"src/a.py": "client = PoseidonService()\n"}, "audit-llm09")
+
+    assert not (target / "src" / "a.py").exists()
+    assert _outcome(report, "src/a.py").final_state == "SECURITY_QUARANTINE"
+    assert any("check=maskeleme" in detail for detail in _trail(db_session, report))
+
+
+def test_audit_quote_mapping_is_heuristic_not_dictionary(db_session, tmp_path, monkeypatch):
+    from app.services import consistency_masking
+
+    seen = []
+    original = consistency_masking.registry_authority
+
+    def spy(original_value, source, match=None):
+        seen.append((source, match.confidence if match is not None else None))
+        return original(original_value, source, match)
+
+    monkeypatch.setattr(consistency_masking, "registry_authority", spy)
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", _single_quote_audit("Hakan Yilmaz", "# sorumlu: Hakan Yilmaz"))
+
+    report, _ = _export(db_session, tmp_path, {"src/b.py": "# sorumlu: Hakan Yilmaz\nx = 1\n"}, "audit-src")
+
+    assert _outcome(report, "src/b.py").final_state == "READY"
+    assert ("llm_audit", "orta") in seen
+    assert not any(source == "dictionary" for source, _ in seen)

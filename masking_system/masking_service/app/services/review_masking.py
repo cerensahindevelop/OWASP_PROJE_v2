@@ -35,11 +35,18 @@ def mask_review_values(db, run, content: str, file_path: str, values: list[tuple
     context = db.get(MaskingContext, run.context_id)
     masked, _, _ = mask_known_values(
         db, MaskingRunContext(context=context, run_id=run.id), content, file_path,
+        # Inceleme ekraninda bir insanin onayladigi degerler: sozluk yetkisi.
         [(value, synthetic_llm_rule(entity_type), "dictionary") for value, entity_type in dict.fromkeys(values)],
     )
     if not verify_round_trip(original, masked, _reverse_map(db, run)).ok:
         raise ValueError("Otomatik maskeleme geri dönüş doğrulamasından geçemedi; dosya çıktıya eklenmedi.")
     return masked
+
+
+# Yalnizca sozluk kurali ya da insan onayi kesin sayilir; diger kaynaklar
+# (denetim LLM'i dahil) yuksek guven/Katman 1 yetkisi kazanmaz.
+def _confidence_for(source: str) -> str:
+    return "yuksek" if source == "dictionary" else "orta"
 
 
 def mask_known_values(
@@ -50,7 +57,11 @@ def mask_known_values(
 ) -> tuple[str, list[Match], list[ValueMapping]]:
     """Degeri kesin bilinen ifadeleri (value, kural, kaynak) maskeler.
 
-    Her gecis TokenBoundaryValidator'dan gecer; tek bir gecis bile guvenli
+    Her gecis kendi kaynagiyla (source) TokenBoundaryValidator'dan gecer:
+    yalnizca "dictionary" (sozluk kurali ya da insan onayi) identifier
+    sinirina genisletme yetkisi alir. Denetim LLM'inin alintilari
+    ("llm_audit") sezgisel kalir ve "yuksek" guven kazanmaz (LLM09).
+    Tek bir gecis bile guvenli
     sinira oturtulamazsa ya da mevcut bir yer tutucuyla cakisirsa hicbir sey
     degistirilmez (ValueError). Donus: (maskeli metin, eslesmeler, eslemeler);
     eslesmeler ve eslemeler ayni sirada, tutarlilik registry'sine verilebilir.
@@ -68,7 +79,8 @@ def mask_known_values(
     for value, rule, source in dict.fromkeys(values):
         if not value or not value.strip():
             continue
-        source_by_rule.setdefault(rule.rule_name, source)
+        if source_by_rule.setdefault(rule.rule_name, source) != source:
+            raise ValueError("Ayni kural farkli kaynaklarla verildi; dosya degistirilmedi.")
         for found in re.finditer(re.escape(value), content):
             start, end = found.span()
             if Path(file_path).name == ".env" or Path(file_path).name.startswith(".env.") or Path(file_path).suffix == ".env":
@@ -79,8 +91,9 @@ def mask_known_values(
                 continue
             candidates.append(Match(rule=rule, original_value=value, start=start, end=end))
     validated, rejections = TokenBoundaryValidator().validate(content, [
-        DetectionResult(deger=content[m.start:m.end], tip=m.rule.category, guven_seviyesi="yuksek",
-                        kaynak_motor="dictionary", start=m.start, end=m.end, rule=m.rule)
+        DetectionResult(deger=content[m.start:m.end], tip=m.rule.category,
+                        guven_seviyesi=_confidence_for(source_by_rule[m.rule.rule_name]),
+                        kaynak_motor=source_by_rule[m.rule.rule_name], start=m.start, end=m.end, rule=m.rule)
         for m in candidates
     ], file_path=file_path)
     if rejections:
@@ -99,7 +112,7 @@ def mask_known_values(
         candidates.append(Match(
             rule=result.rule, original_value=result.deger, start=result.start, end=result.end,
             entity_type=result.rule.category, source_detector=source_by_rule.get(result.rule.rule_name),
-            confidence="yuksek",
+            confidence=result.guven_seviyesi,
         ))
     selected = []
     for candidate in sorted(candidates, key=lambda m: (-(m.end - m.start), m.start)):

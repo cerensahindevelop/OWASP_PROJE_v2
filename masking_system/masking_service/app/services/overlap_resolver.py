@@ -35,8 +35,9 @@ from app.services.detectors import DetectionResult
 _CONFIDENCE_RANK: dict[str, int] = {"yuksek": 2, "orta": 1, "dusuk": 0}
 
 # "dictionary" = Katman 1, "katman2_presidio" = Katman 2, "llm" = Katman 3
-# (bkz. RuleBasedDetector.name / PresidioDetector.name / LLMDetector.name)
-_SOURCE_RANK: dict[str, int] = {"dictionary": 2, "katman2_presidio": 1, "llm": 0}
+# (bkz. RuleBasedDetector.name / PresidioDetector.name / LLMDetector.name),
+# "llm_audit" = maskeleme sonrasi denetim LLM'inin alintisi (sezgisel).
+_SOURCE_RANK: dict[str, int] = {"dictionary": 2, "katman2_presidio": 1, "llm": 0, "llm_audit": 0}
 
 _CORPORATE_TERM_RULE_PREFIX = "kurumsal_terim_"
 _CORPORATE_ALIAS_RULE_PREFIX = "kurumsal_alias_"
@@ -93,7 +94,7 @@ def _authority(result: DetectionResult) -> int:
         return _AUTHORITY_RANK["deterministic_regex"]
     if result.kaynak_motor == "katman2_presidio":
         return _AUTHORITY_RANK["heuristic"]
-    if result.kaynak_motor == "llm":
+    if result.kaynak_motor in ("llm", "llm_audit"):
         return _AUTHORITY_RANK["heuristic"]
     return 0
 
