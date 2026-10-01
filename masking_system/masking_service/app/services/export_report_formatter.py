@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.services.failed_checks import failed_check_label
+
 if TYPE_CHECKING:
     from app.services.exporter import ExportReport
 
@@ -105,6 +107,12 @@ def format_export_report(report: "ExportReport") -> str:
         f"⛔ Güvenlik Karantinası {report.files_security_quarantine} | "
         f"✕ Doğrulama Başarısız {report.files_validation_failed}"
     )
+    blocked_by_check = report.blocked_by_check
+    if blocked_by_check:
+        lines.append("  Ciktiya alinmama nedenleri (dosyayi alikoyan kontrol):")
+        lines.extend(
+            f"    - {failed_check_label(code)} ({code}): {count}" for code, count in blocked_by_check.items()
+        )
 
     if report.degraded_detectors:
         lines.append("")

@@ -549,6 +549,12 @@ class AuditWarning(Base):
         "anahtariyla). Icerik birebir ayniysa serbest birakmada model yeniden cagrilmaz - ayni "
         "icerik ayni karari alir. NULL: kayit yok ya da denetim yapilmadi.",
     )
+    failed_check: Mapped[str | None] = mapped_column(
+        "basarisiz_kontrol", String(64), nullable=True,
+        comment="Dosyayi ciktidan alikoyan kontrolun kodu (bkz. app/services/failed_checks.py "
+        "FailedCheck; orn. 'llm_denetimi', 'llm_tespit', 'sozdizimi'). Karantina nedeni "
+        "dagilimini olcmek icindir. Eski kayitlarda NULL.",
+    )
     status: Mapped[str] = mapped_column(
         "durum", String(20), nullable=False, default="pending",
         comment="'pending', 'confirmed' (risk gercek, dosya karantinada kalir) ya da "
