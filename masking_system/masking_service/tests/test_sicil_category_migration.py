@@ -92,7 +92,7 @@ def test_user_modified_seed_rule_is_left_alone_with_warning(migrate):
 
 
 def test_manually_installed_sicil_rule_is_untouched_both_ways(migrate):
-    # Elle kurulmus DB: kural zaten sicil_no (seed_data.py bicimi, farkli aciklama).
+    # Elle kurulmus DB: kural zaten sicil_no (eski app/db/seed_data.py bicimi, farkli aciklama).
     migrate("upgrade", BEFORE)
     _sql(migrate.path, "UPDATE filtre_kurallari SET kural_adi = 'sicil_no', kategori = 'sicil_no', "
                        "aciklama = 'sicil numarasi - calisma zamaninda saglanan literal deger.' "
