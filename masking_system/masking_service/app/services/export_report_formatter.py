@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.services.failed_checks import failed_check_label
+from app.services.runtime_params import RuntimeParam
 
 if TYPE_CHECKING:
     from app.services.exporter import ExportReport
@@ -21,9 +22,9 @@ if TYPE_CHECKING:
 # insan-okunur karsiligi. Eslesmesi olmayan (orn. sonradan kural-ekle ile
 # eklenmis) bir rule_name oldugu gibi gosterilir - bu bir hata degildir.
 _RULE_DISPLAY_NAMES = {
-    "project_name": "Proje adi",
-    "sicil_no": "Sicil numarasi",
-    "branch_name": "Branch adi",
+    RuntimeParam.PROJECT_NAME: "Proje adi",
+    RuntimeParam.SICIL_NO: "Sicil numarasi",
+    RuntimeParam.BRANCH_NAME: "Branch adi",
     "aws_access_key": "AWS erisim anahtari",
     "generic_secret_assignment": "Genel gizli bilgi (API anahtari/parola/token)",
     "email_address": "E-posta adresi",

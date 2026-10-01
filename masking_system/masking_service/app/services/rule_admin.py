@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 # icin). VALIDATORS: validator_name girisinin bilinen bir dogrulayiciya
 # karsilik geldigini kontrol etmek icin.
 from app.db.models import FilterRule
+from app.services.runtime_params import RuntimeParam
 from app.services.rule_engine import _compile_flags
 from app.services.validators import VALIDATORS
 
@@ -113,6 +114,15 @@ def add_rule(
             raise RuleValidationError("pattern_type='parametric' kurallarda --pattern verilmemelidir")
         if validator_name:
             raise RuleValidationError("pattern_type='parametric' kurallarda --dogrulayici verilmemelidir")
+        # Parametrik kural yalnizca kategorisi bir runtime parametresiyse
+        # eslesir; aksi halde hicbir zaman calismayan sessiz bir kural olur
+        # (personnel_no/sicil_no uyusmazligi, bkz. app/services/runtime_params.py).
+        if (category or rule_name) not in set(RuntimeParam):
+            bilinen = ", ".join(param.value for param in RuntimeParam)
+            raise RuleValidationError(
+                f"pattern_type='parametric' kurallarin kategorisi bir calisma zamani parametresi "
+                f"olmalidir ({bilinen}); verilen: '{category or rule_name}'"
+            )
     elif pattern_type == "llm":
         if regex_pattern:
             raise RuleValidationError("pattern_type='llm' kurallarda --pattern verilmemelidir")

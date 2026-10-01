@@ -49,6 +49,7 @@ from dataclasses import dataclass
 
 # VALIDATORS: regex ile yakalanan bir degerin gercekten formata uydugunu
 # (checksum vb.) dogrulamak icin kullanilan adlandirilmis fonksiyon sozlugu.
+from app.services.runtime_params import RuntimeParam
 from app.services.validators import VALIDATORS
 # chunk_text: buyuk metinleri overlap'li parcalara bolen ortak yardimci -
 # presidio_detector.py (Katman 2) ile PAYLASILIR. Katman 1 (bu modul)
@@ -420,7 +421,7 @@ def _is_numeric_technical_context(text: str, start: int, end: int) -> bool:
 # bolse bile (bkz. asagisi), teknik-baglam kontrolu chunk sinirindan
 # etkilenmeden dogru komsu karakterlere bakabilsin diye boyle tasarlandi.
 def _parametric_match_allowed(rule: RuleSpec, text: str, value: str, start: int, end: int) -> bool:
-    if rule.category != "sicil_no":
+    if rule.category != RuntimeParam.SICIL_NO:
         return True
     if _looks_like_technical_sicil_token(value):
         return False

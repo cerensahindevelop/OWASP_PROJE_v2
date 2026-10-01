@@ -54,6 +54,7 @@ from app.services.llm_detector import LLMDetector
 from app.services.learned_decisions import LearnedDecisionPolicy, LearnedSensitiveDetector
 from app.services.overlap_resolver import OverlapConflict, OverlapResolver
 from app.services.presidio_detector import PresidioDetector, PresidioRuleSpec
+from app.services.runtime_params import RuntimeParam
 from app.services.rule_engine import JSON_BARE_INTEGER_RE, JSON_NUMERIC_COUNTER_NAMESPACE, Match, RuleSpec, find_matches, make_json_numeric_placeholder
 from app.services.string_literal_index import StringLiteralIndex
 from app.services.consistency_masking import PRESIDIO_STRUCTURED_TYPES
@@ -288,7 +289,7 @@ def mask_relative_path(
         # Maven/Gradle'in standart `src/main` klasorunu maskeleyip derlemeyi
         # bozmamalidir. Sicil degeri ise salt sayisal olabilen gercek bir
         # kimliktir; onun mevcut teknik-baglam filtresi rule_engine'de kalir.
-        if rule.category != "sicil_no" and classify_term(value).status != "ok":
+        if rule.category != RuntimeParam.SICIL_NO and classify_term(value).status != "ok":
             return False
         return True
 

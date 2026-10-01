@@ -48,6 +48,7 @@ from app.services.audit_reviewer import (
     audit_masked_text, audit_record_key, decode_audit_record, encode_audit_record,
 )
 from app.services.llm_runtime import llm_file_context
+from app.services.runtime_params import build_runtime_params
 from app.services.log_refs import file_label, file_ref, log_file_label
 from app.services.audit_warning_details import describe_audit_warning
 from app.services.file_type import write_text_preserving_encoding
@@ -533,11 +534,7 @@ class AuditWarningService:
         context = self.db.get(MaskingContext, run.context_id)
         if context is None:
             raise ValueError("İşlem bağlamı bulunamadı; dosya çıktıya yazılamaz")
-        runtime_params = {
-            "project_name": context.project_name,
-            "sicil_no": context.sicil_no,
-            "branch_name": context.branch_name,
-        }
+        runtime_params = build_runtime_params(context.project_name, context.sicil_no, context.branch_name)
         masked, _ = mask_relative_path(
             self.db, context, Path(warning.file_path), runtime_params,
             load_active_rules(self.db), run_id=run.id,

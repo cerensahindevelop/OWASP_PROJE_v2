@@ -1,18 +1,24 @@
-"""Single source of truth for the initial filter_rules and exclude_patterns
-datasets.
+"""Ilk kurulum kural/haric tutma verisinin TARIHSEL referans kopyasi.
 
-Imported by the Alembic seed migrations so the DB gets these rows on a
-fresh install. Keeping the seed data in one module prevents drift between
-runtime code and database migrations.
+UYARI: Bu modul hicbir yerden import EDILMIYOR ve DB'nin kaynagi DEGIL.
+Taze kurulum verisi alembic migrasyonlarinda sabit olarak durur
+(9f21a6b8e4c3 ve sonrakiler); sonraki migrasyonlar bazi kurallari
+guncelledi (orn. generic_secret_assignment regex'i), burada eski halleri
+var. Bu modul ile alembic arasindaki fark sicil kuralinda sizintiya yol
+acti (personnel_no/sicil_no; duzeltme f1c3a5e7b9d2). Gercek durum icin
+`alembic upgrade head` ile kurulan DB'ye bakin; parametrik kategoriler icin
+tek kaynak app/services/runtime_params.py.
 """
+
+from app.services.runtime_params import RuntimeParam
 
 # Ilk kurulumda (fresh install) filtre_kurallari tablosuna yuklenen cekirdek
 # kural seti: parametrik kimlik kurallari (proje/sicil/branch) ve temel
 # regex kurallari (secret/email/ip).
 SEED_RULES = [
     dict(
-        rule_name="project_name",
-        category="project_name",
+        rule_name=RuntimeParam.PROJECT_NAME.value,
+        category=RuntimeParam.PROJECT_NAME.value,
         pattern_type="parametric",
         regex_pattern=None,
         regex_flags=None,
@@ -22,8 +28,8 @@ SEED_RULES = [
         description="Proje adi - calisma zamaninda saglanan literal deger, whole-word eslesir.",
     ),
     dict(
-        rule_name="sicil_no",
-        category="sicil_no",
+        rule_name=RuntimeParam.SICIL_NO.value,
+        category=RuntimeParam.SICIL_NO.value,
         pattern_type="parametric",
         regex_pattern=None,
         regex_flags=None,
@@ -33,8 +39,8 @@ SEED_RULES = [
         description="sicil numarasi - calisma zamaninda saglanan literal deger.",
     ),
     dict(
-        rule_name="branch_name",
-        category="branch_name",
+        rule_name=RuntimeParam.BRANCH_NAME.value,
+        category=RuntimeParam.BRANCH_NAME.value,
         pattern_type="parametric",
         regex_pattern=None,
         regex_flags=None,
