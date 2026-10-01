@@ -30,6 +30,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -333,15 +334,20 @@ def _one_run(manifest: dict, source: Path, work: Path, index: int) -> dict:
         "geri_alma": {"karsilastirilan": len(ready), "farkli": roundtrip_diff,
                       "cozulemeyen_placeholder": unmask_report.total_placeholders_unresolved},
         "derleme": compile_java(target, GOLDEN_DIR / manifest["stubs_dir"], expected_java, work / f"javac_{index}"),
+        "rapor_metni": report.summary_text(),
         "_maskelenen_degerler": masked_values,
         "_cikti": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
     }
 
 
-def measure(llm_mode: str, runs: int, stub_error_rate: float = 0.0, keep: Path | None = None) -> dict:
+def measure(llm_mode: str, runs: int, stub_error_rate: float = 0.0, keep: Path | None = None,
+            log_file: Path | None = None) -> dict:
     manifest = load_manifest()
     source = GOLDEN_DIR / manifest["project_dir"]
     work = Path(tempfile.mkdtemp(prefix="golden-olcum-"))
+    if log_file is not None:
+        # Uygulama loglari (orn. uvicorn.error.llm) kok logger'a akar; yol sizintisi kontrolu icin.
+        logging.basicConfig(level=logging.INFO, filename=str(log_file), encoding="utf-8", force=True)
     stub = StubLLM(manifest, stub_error_rate) if llm_mode == "stub" else None
     try:
         if stub is not None:
@@ -428,9 +434,10 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="JSON ve Markdown raporunun yazilacagi klasor")
     parser.add_argument("--name", default=None, help="Rapor dosya adi oneki (varsayilan: llm modu)")
     parser.add_argument("--keep", type=Path, help="Gecici calisma klasorunu (cikti, geri alma, DB) buraya kopyala")
+    parser.add_argument("--log-file", type=Path, help="Uygulama loglarini (INFO) bu dosyaya yaz")
     args = parser.parse_args()
 
-    result = measure(args.llm, args.runs, args.stub_error_rate, args.keep)
+    result = measure(args.llm, args.runs, args.stub_error_rate, args.keep, args.log_file)
     markdown = to_markdown(result)
     print(markdown)
     if args.out:

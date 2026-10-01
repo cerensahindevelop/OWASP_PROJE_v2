@@ -72,8 +72,10 @@ def test_measurement_runs_end_to_end(tmp_path, llm_mode):
     report = json.loads((tmp_path / f"{llm_mode}.json").read_text(encoding="utf-8"))
     assert (tmp_path / f"{llm_mode}.md").is_file()
     assert report["kosu_sayisi"] == 2
+    project = Path(__file__).parent / "fixtures" / "golden" / "project"
+    project_files = sum(1 for path in project.rglob("*") if path.is_file())
     for run in report["kosular"]:
-        assert run["taranan_dosya"] == 10
+        assert run["taranan_dosya"] == project_files
         # Degismez kural 1: yayinlanan her dosya bayt bayt geri alinir.
         assert run["geri_alma"]["farkli"] == []
         assert run["geri_alma"]["cozulemeyen_placeholder"] == 0

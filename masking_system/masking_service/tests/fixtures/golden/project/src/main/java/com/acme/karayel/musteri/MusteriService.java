@@ -1,5 +1,6 @@
 package com.acme.karayel.musteri;
 
+import com.acme.karayel.poseidon.PoseidonGatewayClient;
 import org.springframework.stereotype.Service;
 
 @Service

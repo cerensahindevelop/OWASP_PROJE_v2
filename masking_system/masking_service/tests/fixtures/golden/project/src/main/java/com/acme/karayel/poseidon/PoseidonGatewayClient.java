@@ -1,4 +1,4 @@
-package com.acme.karayel.musteri;
+package com.acme.karayel.poseidon;
 
 import org.springframework.stereotype.Component;
 
