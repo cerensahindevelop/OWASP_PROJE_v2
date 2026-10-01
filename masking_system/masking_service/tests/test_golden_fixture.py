@@ -50,6 +50,18 @@ def test_manifest_ids_and_dictionary_terms_are_consistent():
     assert any(entry["canary"] for entry in manifest["sensitive"])
 
 
+def test_runtime_entries_match_measurement_identity():
+    # 'runtime' girisleri export'a verilen kimlikten gelir; deger IDENTITY ile ayni olmali.
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "measure_golden.py"
+    spec = importlib.util.spec_from_file_location("measure_golden_identity", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runtime = [entry["value"] for entry in _manifest()["sensitive"] if entry["kaynak"] == "runtime"]
+    assert runtime == [module.IDENTITY[1]]
+
+
 @pytest.mark.skipif(shutil.which("javac") is None, reason="javac yok")
 def test_unmasked_golden_java_project_compiles(tmp_path):
     sources = [str(path) for path in sorted(GOLDEN_DIR.rglob("*.java"))]

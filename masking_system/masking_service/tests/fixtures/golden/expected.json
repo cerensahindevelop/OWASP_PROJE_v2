@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "aciklama": "Altin test kumesi: tum degerler sentetiktir. project/ export edilir; stubs/ yalnizca maskeli Java ciktisini javac ile derlemek icindir, export edilmez. 'kaynak' alani degeri hangi katmanin bulmasi gerektigini belirtir: dictionary = kurumsal sozluk (dictionary_terms ile DB'ye yuklenir), llm = yalnizca LLM (stub LLM 'llm' alanina gore yanit verir). 'denetim': true ise stub denetim LLM'i deger ya da varyantlarindan maskeli metinde hala acik olanlari (kismi sizinti dahil) alintilar. Canary degerlerinin kendisi ve varyantlari (kismi sizinti: e-posta yerel kismi, host kisa adi) ciktida hicbir kodlamada (duz, base64, URL-encoded) gecmemelidir.",
+  "aciklama": "Altin test kumesi: tum degerler sentetiktir. project/ export edilir; stubs/ yalnizca maskeli Java ciktisini javac ile derlemek icindir, export edilmez. 'kaynak' alani degeri hangi katmanin bulmasi gerektigini belirtir: dictionary = kurumsal sozluk (dictionary_terms ile DB'ye yuklenir), runtime = export'ta verilen proje/sicil/branch (scripts/measure_golden.py IDENTITY), llm = yalnizca LLM (stub LLM 'llm' alanina gore yanit verir). 'denetim': true ise stub denetim LLM'i deger ya da varyantlarindan maskeli metinde hala acik olanlari (kismi sizinti dahil) alintilar. Canary degerlerinin kendisi ve varyantlari (kismi sizinti: e-posta yerel kismi, host kisa adi) ciktida hicbir kodlamada (duz, base64, URL-encoded) gecmemelidir.",
   "project_dir": "project",
   "stubs_dir": "stubs",
   "java_source_root": "project/src/main/java",
@@ -113,17 +113,25 @@
       "canary": true,
       "llm": {"tip": "KIMLIK_NO", "guven": "yuksek"},
       "denetim": true
+    },
+    {
+      "id": "sicil_kullanici",
+      "aciklama": "Export'u baslatan kullanicinin sicili (calisma zamani parametresi). Alembic seed'indeki personnel_no/sicil_no uyusmazligi bunu icerikte ve yolda acik birakiyordu.",
+      "value": "P-GOLDEN-0001",
+      "variants": [],
+      "kaynak": "runtime",
+      "canary": true
     }
   ],
   "must_not_mask": ["UserService", "customerId", "getCustomerId", "getName", "MusteriController", "musteriService",
                     "Teknik sorumlu", "Veri merkezi"],
   "yol_beklentileri": {
     "aciklama": "Faz 3 kabul kriteri (tests/test_golden_path_acceptance.py). Iceride maskelenen terim yolda da (dosya ve ust dizin adlari) maskelenir; job sozlugunde olmayan yol parcasi aynen kalir. Maske yazim stilini korur: PascalCase dosya adinda 'Mask<..>', kucuk harfli paket dizininde 'mask<..>' (alt cizgisiz).",
-    "yolda_gecmemeli": ["karayel", "poseidon"],
+    "yolda_gecmemeli": ["karayel", "poseidon", "P-GOLDEN-0001"],
     "korunacak_yol_parcalari": ["src", "main", "java", "com", "acme", "musteri", "resources", "db",
                                 "Musteri.java", "MusteriController.java", "MusteriRepository.java",
                                 "MusteriService.java", "UserService.java", "application.properties",
-                                "musteri.json", "schema.sql", "README.md"],
+                                "musteri.json", "schema.sql", "README.md", "docs", "ekip", "devir-notu.md"],
     "stil": {
       "PoseidonGatewayClient.java": "^Mask[A-Z0-9][A-Za-z0-9]*GatewayClient\\.java$",
       "karayel": "^mask[A-Z0-9][A-Za-z0-9]*$",
