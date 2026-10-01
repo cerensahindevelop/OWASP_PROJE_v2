@@ -77,7 +77,8 @@ Faz 2a PR'ı `main`'e merge edildikten sonra yapılır.
      yazar. TypeError olayının deseni budur.
 
    `/health` yalnızca `{"status": "ok"}` ya da `{"status": "degraded"}` döner.
-6. Sicil kuralının kategorisi (salt okunur; bkz. "Bilinen sorun" notu aşağıda):
+6. Sicil kuralının kategorisi (salt okunur; 3. adımdaki `alembic upgrade head`'den sonra). Ayrıntı
+   ve beklenen sonuç: dosyanın sonundaki "Sicil düzeltmesi" bölümü.
    ```powershell
    .venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('file:../masking.db?mode=ro', uri=True); print(c.execute(\"SELECT kural_adi, kategori, aktif_mi FROM filtre_kurallari WHERE desen_tipi='parametric'\").fetchall())"
    ```
@@ -95,10 +96,12 @@ Faz 2a PR'ı `main`'e merge edildikten sonra yapılır.
 
 `build state=ok` ve `RESULT=OFFLINE_OK` gelmeden sonraki adıma geçmeyin.
 
-**Bilinen sorun (Faz 2a'da bulundu, henüz düzeltilmedi):** alembic seed verisi sicil kuralını
-`personnel_no` kategorisiyle oluşturuyor, export ise değeri `sicil_no` anahtarıyla veriyor. Böyle
-bir DB'de sicil değeri içerikte ve yolda maskelenmez. 6. adımın çıktısı, gerçek DB'nin bundan
-etkilenip etkilenmediğini gösterecek.
+**Sicil düzeltmesi (PR #13):** alembic seed verisi sicil kuralını `personnel_no` kategorisiyle
+oluşturuyordu. Bu yüzden sicil değeri içerikte ve yolda maskelenmiyordu. Düzeltme, 3. adımdaki
+`alembic upgrade head` ile uygulanan `f1c3a5e7b9d2` migrasyonudur. 6. adımın çıktısında
+`('sicil_no', 'sicil_no', 1)` görünmeli ve `personnel_no` geçmemeli. Kontrol ve geçmiş etki
+adımları için dosyanın sonundaki "Sicil düzeltmesi" bölümüne bakın; Adım 1'den önce
+tamamlanmalı.
 
 ---
 
