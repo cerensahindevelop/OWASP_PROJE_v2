@@ -44,13 +44,16 @@ from app.services.consistency_masking import (
 )
 from app.services.exclude_admin import load_active_exclude_specs
 from app.services.export_report_formatter import _RULE_DISPLAY_NAMES, format_export_report
+from app.services.failed_checks import UNKNOWN_FAILED_CHECK, FailedCheck, failed_check_label
 from app.services.file_classifier import ignored_directory_reason, is_opaque_binary_filename
 from app.services.file_pipeline import ReadStatus, describe_file_error, read_scanned_file
 from app.services.file_type import peek_classify, write_text_preserving_encoding
 from app.services.java_classfile import JAVA_CLASS_ENCODING, CLASS_COVERAGE, ClassFormatError, parse_class
 from app.services.detectors import DetectionOrchestrator, synthetic_llm_rule
 from app.services.llm_recognizer import LLMRecognitionError
-from app.services.llm_runtime import llm_file_context
+from app.services.llm_runtime import (
+    LLMFileUsage, LLMUsageCollector, llm_file_context, start_llm_usage, stop_llm_usage, usage_summary,
+)
 from app.services.learned_decisions import LearnedDecisionPolicy
 from app.services.lockfile_policy import plan_lockfile, structured_format
 from app.services.roundtrip_validator import text_digest, verify_round_trip, verify_round_trip_digest
@@ -110,6 +113,10 @@ _REPORT_BUCKETS = {
 }
 
 
+# Dosyanin ciktiya ALINMADIGI son durumlar (bkz. FileOutcome.__post_init__).
+_BLOCKING_FINAL_STATES = {"REVIEW_REQUIRED", "SECURITY_QUARANTINE", "VALIDATION_FAILED"}
+
+
 # Export oncesi yol/guvenlik kontrolleri basarisiz oldugunda firlatilan hata
 # (orn. hedef kaynagin icinde, ya da kaynak hic yok).
 class ExportValidationError(ValueError):
@@ -129,9 +136,9 @@ class FileOutcome:
     rule_breakdown: dict[str, int] = field(default_factory=dict)
     error: str | None = None
     final_state: str | None = None
-    # Dosyayi bloklayan son kontrolun kisa kodu (orn. "acik_terim",
-    # "sozdizimi"); otomatik duzeltme basarisizliginin gerekcesi icin.
-    failed_check: str | None = None
+    # Dosyayi bloklayan son kontrolun kodu (bkz. failed_checks.FailedCheck);
+    # rapor kirilimi ve otomatik duzeltme basarisizliginin gerekcesi icin.
+    failed_check: FailedCheck | None = None
 
     def __post_init__(self) -> None:
         if self.final_state is not None:
@@ -210,6 +217,15 @@ class ExportReport:
     # export_report_formatter.py) - "Katman 3 hic calismadi" bilgisi
     # sessizce kaybolmamali, sadece basari/basarisizlik hukmunu degistirmemeli.
     llm_disabled: bool = False
+    # Dosya (goreli yol) bazinda LLM kullanimi: tarama/istek sayisi, token,
+    # sure (bkz. llm_runtime.LLMUsageCollector). Rapor metni yalnizca toplu
+    # ozeti gosterir; yollar gosterilmez.
+    llm_usage_by_file: dict[str, LLMFileUsage] = field(default_factory=dict)
+
+    # Toplam istek/token, dosya basina tarama ve LLM suresi p50/p95.
+    @property
+    def llm_usage_summary(self) -> dict[str, float]:
+        return usage_summary(self.llm_usage_by_file)
 
     # Tek bir dosyanin sonucunu (FileOutcome) rapor toplamlarina isler.
     def record(self, outcome: FileOutcome) -> None:
@@ -262,6 +278,7 @@ class ExportReport:
         outcome.status = "failed_consistency_validation"
         outcome.final_state = "VALIDATION_FAILED"
         outcome.error = error
+        outcome.failed_check = FailedCheck.TUTARLILIK
 
     def mark_finalization_failed(self, outcome: FileOutcome, error: str) -> None:
         """A file passed every content check (syntax/round-trip/consistency/
@@ -284,6 +301,7 @@ class ExportReport:
         outcome.status = "failed_finalization"
         outcome.final_state = "VALIDATION_FAILED"
         outcome.error = error
+        outcome.failed_check = FailedCheck.SONLANDIRMA
 
     def mark_scan_only_verification_result(
         self, outcome: FileOutcome, *, status: str, final_state: str, error: str
@@ -308,6 +326,21 @@ class ExportReport:
         outcome.status = status
         outcome.final_state = final_state
         outcome.error = error
+        outcome.failed_check = FailedCheck.LOCK_SON_DOGRULAMA
+
+    # Ciktiya alinmayan (onay bekleyen, karantinada ya da dogrulamasi basarisiz)
+    # dosyalarin, onlari alikoyan kontrole (failed_checks.FailedCheck) gore
+    # sayisi. outcomes uzerinden hesaplanir: mark_* metodlari sonucu yerinde
+    # degistirdigi icin ayri bir sayac tutulmaz. Kodsuz sonuc "bilinmiyor"dur.
+    @property
+    def blocked_by_check(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for outcome in self.outcomes:
+            if outcome.final_state not in _BLOCKING_FINAL_STATES:
+                continue
+            key = outcome.failed_check.value if outcome.failed_check else UNKNOWN_FAILED_CHECK
+            counts[key] = counts.get(key, 0) + 1
+        return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
     # Ikincil risk denetiminden gecemeyen (ya da denetlenemeyen) dosya var mi.
     @property
@@ -439,7 +472,8 @@ def _rule_breakdown(mappings, rule_names_by_id: dict[int, str]) -> dict[str, int
 # bir dosya icin DB'ye bir AuditWarning kaydi ekler - insan onayi bu kayit uzerinden yapilir.
 def _create_audit_warning(
     db: Session, *, run_id: int, file_path: str, masked_content: str, encoding: str | None, reasoning: str,
-    audit_failed: bool, output_path: str | None = None, audit_record: str | None = None,
+    audit_failed: bool, failed_check: FailedCheck, output_path: str | None = None,
+    audit_record: str | None = None,
 ) -> None:
     db.add(
         AuditWarning(
@@ -449,6 +483,7 @@ def _create_audit_warning(
             encoding=encoding,
             reasoning=reasoning,
             audit_failed=audit_failed,
+            failed_check=failed_check.value,
             output_path=output_path,
             audit_record=audit_record,
         )
@@ -566,7 +601,8 @@ def _mark_consistency_failure(
     )
     _create_audit_warning(
         db, run_id=run_id, file_path=output_file.outcome.relative_path,
-        masked_content=text or "", encoding=encoding, reasoning=error, audit_failed=True,
+        masked_content=text or "", encoding=encoding, reasoning=error,
+        failed_check=FailedCheck.TUTARLILIK, audit_failed=True,
         output_path=(output_file.masked_relative_path.as_posix() if output_file.masked_relative_path else None),
     )
 
@@ -1073,9 +1109,12 @@ def _prepare_file(
         db.add(AuditLog(run_id=run_id, file_path=rel, action="error", detail=read_outcome.error))
         _create_audit_warning(
             db, run_id=run_id, file_path=rel, masked_content="", encoding=None,
-            reasoning=f"Dosya güvenlik doğrulamasına hazırlanamadı: {read_outcome.error}", audit_failed=True,
+            reasoning=f"Dosya güvenlik doğrulamasına hazırlanamadı: {read_outcome.error}",
+            failed_check=FailedCheck.OKUMA, audit_failed=True,
         )
-        return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(rel, status="error", error=read_outcome.error))
+        return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(
+            rel, status="error", error=read_outcome.error, failed_check=FailedCheck.OKUMA,
+        ))
 
     if read_outcome.status == ReadStatus.SKIPPED_TOO_LARGE:
         db.add(
@@ -1089,9 +1128,11 @@ def _prepare_file(
         _create_audit_warning(
             db, run_id=run_id, file_path=rel, masked_content="", encoding=None,
             reasoning=f"Dosya boyut sınırını aştığı için güvenlik doğrulaması tamamlanamadı ({read_outcome.size} bayt)",
-            audit_failed=True,
+            failed_check=FailedCheck.BOYUT, audit_failed=True,
         )
-        return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(rel, status="skipped_too_large"))
+        return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(
+            rel, status="skipped_too_large", failed_check=FailedCheck.BOYUT,
+        ))
 
     if read_outcome.status == ReadStatus.COPIED_BINARY:
         # The reader also serves unmask, where COPIED_BINARY is a legacy
@@ -1132,9 +1173,12 @@ def _prepare_file(
         )
         _create_audit_warning(
             db, run_id=run_id, file_path=rel, masked_content="", encoding=read_outcome.detected_encoding,
-            reasoning="Metin kodlaması çözülemediği için güvenlik doğrulaması tamamlanamadı", audit_failed=True,
+            reasoning="Metin kodlaması çözülemediği için güvenlik doğrulaması tamamlanamadı",
+            failed_check=FailedCheck.KODLAMA, audit_failed=True,
         )
-        return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(rel, status="copied_undecodable"))
+        return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(
+            rel, status="copied_undecodable", failed_check=FailedCheck.KODLAMA,
+        ))
 
     if read_outcome.status == ReadStatus.ARCHIVE_UNSUPPORTED:
         # ARCHIVE: recursive extraction/repack is out of scope for this
@@ -1153,11 +1197,14 @@ def _prepare_file(
         )
         _create_audit_warning(
             db, run_id=run_id, file_path=rel, masked_content="", encoding=None,
-            reasoning=reason, audit_failed=True,
+            reasoning=reason, failed_check=FailedCheck.ARSIV, audit_failed=True,
         )
         return _FilePrep(
             scanned, dest_path, rel,
-            outcome=FileOutcome(rel, status="archive_unsupported", error=reason, final_state="SECURITY_QUARANTINE"),
+            outcome=FileOutcome(
+                rel, status="archive_unsupported", error=reason, final_state="SECURITY_QUARANTINE",
+                failed_check=FailedCheck.ARSIV,
+            ),
         )
 
     mode = "scan_only" if read_outcome.status == ReadStatus.SCAN_ONLY_TEXT_READY else "mask"
@@ -1266,11 +1313,11 @@ def _apply_masking(
         _create_audit_warning(
             db, run_id=run_ctx.run_id, file_path=prep.rel, masked_content=masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=f"Round-trip doğrulaması başarısız: {round_trip.detail}",
-            audit_failed=True,
+            failed_check=FailedCheck.GERI_DONUS, audit_failed=True,
         )
         return FileOutcome(
             prep.rel, status="failed_round_trip_validation", match_count=len(mappings),
-            rule_breakdown=rule_breakdown, error=round_trip.detail,
+            rule_breakdown=rule_breakdown, error=round_trip.detail, failed_check=FailedCheck.GERI_DONUS,
         )
 
     # Only detections that survived overlap/boundary resolution, produced a
@@ -1342,9 +1389,13 @@ def _finalize_scan_only(
         )
         _create_audit_warning(
             db, run_id=run_id, file_path=prep.rel, masked_content="",
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.TESPIT_KATMANI, audit_failed=True,
         )
-        return FileOutcome(prep.rel, status="failed_detection", error=reason, final_state="VALIDATION_FAILED")
+        return FileOutcome(
+            prep.rel, status="failed_detection", error=reason, final_state="VALIDATION_FAILED",
+            failed_check=FailedCheck.TESPIT_KATMANI,
+        )
 
     if outcome.encoded_leaks:
         reason = _encoded_leak_reason(outcome.encoded_leaks)
@@ -1354,9 +1405,11 @@ def _finalize_scan_only(
         ))
         _create_audit_warning(
             db, run_id=run_id, file_path=prep.rel, masked_content=prep.text or "",
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.KODLANMIS_VERI, audit_failed=False,
         )
-        return FileOutcome(prep.rel, status="scan_only_sensitive", error=reason, final_state="SECURITY_QUARANTINE")
+        return FileOutcome(prep.rel, status="scan_only_sensitive", error=reason, final_state="SECURITY_QUARANTINE",
+                           failed_check=FailedCheck.KODLANMIS_VERI)
 
     # Paket ozetleri ve public registry URL'leri izin listesindedir; sozluk
     # bulgulari haric (bkz. lockfile_policy). Kalan tum bulgular ic registry
@@ -1381,7 +1434,7 @@ def _finalize_scan_only(
             return result
         remediation_note = (
             f" (iç registry URL maskelemesi denendi, şu kontrolde başarısız oldu: "
-            f"{_LOCKFILE_CHECK_LABELS.get(result, result)})"
+            f"{failed_check_label(result)})"
         )
 
     if plan.remaining or unlocated:
@@ -1399,9 +1452,11 @@ def _finalize_scan_only(
         )
         _create_audit_warning(
             db, run_id=run_id, file_path=prep.rel, masked_content="",
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.LOCK_BULGU, audit_failed=True,
         )
-        return FileOutcome(prep.rel, status="scan_only_sensitive", error=reason, final_state="SECURITY_QUARANTINE")
+        return FileOutcome(prep.rel, status="scan_only_sensitive", error=reason, final_state="SECURITY_QUARANTINE",
+                           failed_check=FailedCheck.LOCK_BULGU)
 
     try:
         shutil.copy2(prep.scanned.absolute_path, prep.dest_path)
@@ -1410,9 +1465,10 @@ def _finalize_scan_only(
         db.add(AuditLog(run_id=run_id, file_path=prep.rel, action="error", detail=reason))
         _create_audit_warning(
             db, run_id=run_id, file_path=prep.rel, masked_content="",
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.LOCK_KOPYALAMA, audit_failed=True,
         )
-        return FileOutcome(prep.rel, status="error", error=reason)
+        return FileOutcome(prep.rel, status="error", error=reason, failed_check=FailedCheck.LOCK_KOPYALAMA)
 
     db.add(
         AuditLog(
@@ -1423,20 +1479,13 @@ def _finalize_scan_only(
     return FileOutcome(prep.rel, status="scan_only_clean", final_state="READY")
 
 
-_LOCKFILE_CHECK_LABELS = {
-    "geri_donus": "geri dönüş doğrulaması",
-    "acik_terim": "açık terim kontrolü",
-    "ayristirma": "dosya biçimi (parser) doğrulaması",
-}
-
-
 # Lock dosyasindaki ic registry URL'lerini maskeler, ardindan geri donus +
 # acik terim + parser (JSON/YAML/TOML) kontrollerini calistirir ve dosyayi
 # yazar. Kendi SAVEPOINT'inde calisir: bir kontrol basarisizsa eslemeler ve
 # onbellek geri alinir, basarisiz kontrolun kodu doner (caller onaya gonderir).
 def _mask_lockfile_urls(
     db: Session, run_ctx: MaskingRunContext, prep: "_FilePrep", url_spans: list[tuple[int, int]],
-) -> "FileOutcome | str":
+) -> "FileOutcome | FailedCheck":
     rule = replace(
         synthetic_llm_rule("INTERNAL_REGISTRY_URL"),
         rule_name="lockfile:internal_registry_url", description="Lock dosyasindaki ic registry URL'si.",
@@ -1457,11 +1506,11 @@ def _mask_lockfile_urls(
         placeholder_map = {m.placeholder_value: decrypt_value(m.original_value_encrypted) for m in mappings}
         _register_passthrough_placeholders(placeholder_map, prep.text)
         if not verify_round_trip(prep.text, masked_text, placeholder_map).ok:
-            failure = "geri_donus"
+            failure = FailedCheck.GERI_DONUS
         elif find_leaked_terms(db, masked_text):
-            failure = "acik_terim"
+            failure = FailedCheck.ACIK_TERIM
         elif validate_masked_syntax(f"lockfile.{structured_format(prep.rel)}", masked_text, original_text=None):
-            failure = "ayristirma"
+            failure = FailedCheck.AYRISTIRMA
         if failure is None:
             write_text_preserving_encoding(prep.dest_path, masked_text, prep.encoding)
     except BaseException:
@@ -1514,7 +1563,8 @@ def _quarantine_scan_only_after_verification(
     )
     _create_audit_warning(
         db, run_id=run_id, file_path=rel, masked_content="",
-        encoding=output_file.encoding, reasoning=reason, audit_failed=True,
+        encoding=output_file.encoding, reasoning=reason,
+        failed_check=FailedCheck.LOCK_SON_DOGRULAMA, audit_failed=True,
     )
     report.mark_scan_only_verification_result(output_file.outcome, status=status, final_state=final_state, error=reason)
 
@@ -1677,7 +1727,8 @@ def _finalize_file(
         )
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.TESPIT_KATMANI, audit_failed=True,
         )
         db.add(
             AuditLog(
@@ -1688,7 +1739,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
-            failed_check="tespit_katmani",
+            failed_check=FailedCheck.TESPIT_KATMANI,
         )
 
     # Base64/hex/bayt dizisiyle kodlanmis bir metnin icinde parola, connection
@@ -1699,7 +1750,8 @@ def _finalize_file(
         reason = _encoded_leak_reason(masked_file.encoded_leaks)
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.KODLANMIS_VERI, audit_failed=False,
         )
         db.add(AuditLog(
             run_id=run_id, file_path=prep.rel, action="skipped",
@@ -1708,7 +1760,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="SECURITY_QUARANTINE",
-            failed_check="kodlanmis_veri",
+            failed_check=FailedCheck.KODLANMIS_VERI,
         )
 
     # Katman 3 (LLM) tespiti bu dosya icin basarisiz oldu mu? (bkz.
@@ -1728,7 +1780,8 @@ def _finalize_file(
         )
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.LLM_TESPIT, audit_failed=True,
         )
         db.add(
             AuditLog(
@@ -1739,7 +1792,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
-            failed_check="llm_tespit",
+            failed_check=FailedCheck.LLM_TESPIT,
         )
 
     if masked_file.review_results:
@@ -1749,7 +1802,8 @@ def _finalize_file(
         )
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.INCELEME, audit_failed=False,
         )
         db.add(AuditLog(
             run_id=run_id, file_path=prep.rel, action="skipped",
@@ -1758,7 +1812,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="REVIEW_REQUIRED",
-            failed_check="inceleme",
+            failed_check=FailedCheck.INCELEME,
         )
 
     if audit_result is None:
@@ -1816,7 +1870,8 @@ def _finalize_file(
             reason += f"\nİlk 20 eşleşme gösteriliyor; toplam {len(leaked_terms)}."
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.ACIK_TERIM, audit_failed=False,
         )
         db.add(
             AuditLog(
@@ -1827,7 +1882,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="SECURITY_QUARANTINE",
-            failed_check="acik_terim",
+            failed_check=FailedCheck.ACIK_TERIM,
         )
 
     if isinstance(audit_result, LLMRecognitionError):
@@ -1837,7 +1892,8 @@ def _finalize_file(
         )
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.LLM_DENETIMI_TAMAMLANAMADI, audit_failed=True,
         )
         db.add(
             AuditLog(
@@ -1848,7 +1904,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="VALIDATION_FAILED",
-            failed_check="llm_denetimi_tamamlanamadi",
+            failed_check=FailedCheck.LLM_DENETIMI_TAMAMLANAMADI,
         )
 
     if audit_result.risky:
@@ -1856,7 +1912,8 @@ def _finalize_file(
         reason = audit_result.reasoning_text()
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=False,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+            failed_check=FailedCheck.LLM_DENETIMI, audit_failed=False,
         )
         db.add(
             AuditLog(
@@ -1867,7 +1924,7 @@ def _finalize_file(
         return FileOutcome(
             prep.rel, status="quarantined_pending_audit", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=reason, final_state="SECURITY_QUARANTINE",
-            failed_check="llm_denetimi",
+            failed_check=FailedCheck.LLM_DENETIMI,
         )
 
     # Son guvenlik agi: maskeleme sozdizimini BOZDU mu? (kaynak zaten bozuksa buradan gecer)
@@ -1892,12 +1949,12 @@ def _finalize_file(
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
             encoding=prep.encoding, output_path=prep.masked_rel, reasoning=f"Sözdizimi doğrulaması başarısız: {syntax_error}",
-            audit_failed=True,
+            failed_check=FailedCheck.SOZDIZIMI, audit_failed=True,
         )
         return FileOutcome(
             prep.rel, status="failed_syntax_validation", match_count=masked_file.match_count,
             rule_breakdown=masked_file.rule_breakdown, error=syntax_error,
-            failed_check="sozdizimi",
+            failed_check=FailedCheck.SOZDIZIMI,
         )
 
     if prep.class_document is not None:
@@ -1909,10 +1966,11 @@ def _finalize_file(
                                       masked_file.masked_text, prep.encoding)
             _warn(run_id=run_id, file_path=prep.rel,
                   masked_content=masked_file.masked_text, encoding=prep.encoding,
-                  output_path=prep.masked_rel, reasoning=reason, audit_failed=True)
+                  output_path=prep.masked_rel, reasoning=reason,
+                  failed_check=FailedCheck.SOZDIZIMI, audit_failed=True)
             db.add(AuditLog(run_id=run_id, file_path=prep.rel, action="error",
                             detail=f"final_state=VALIDATION_FAILED final_output=blocked; {reason}"))
-            return FileOutcome(prep.rel, failed_check="sozdizimi", status="failed_syntax_validation",
+            return FileOutcome(prep.rel, failed_check=FailedCheck.SOZDIZIMI, status="failed_syntax_validation",
                                match_count=masked_file.match_count,
                                rule_breakdown=masked_file.rule_breakdown, error=reason)
         notice = f"{prep.rel}: {CLASS_COVERAGE}"
@@ -1932,9 +1990,10 @@ def _finalize_file(
         db.add(AuditLog(run_id=run_id, file_path=prep.rel, action="error", detail=detail))
         _warn(
             run_id=run_id, file_path=prep.rel, masked_content=masked_file.masked_text,
-            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=f"Doğrulanmış çıktı yazılamadı: {detail}", audit_failed=True,
+            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=f"Doğrulanmış çıktı yazılamadı: {detail}",
+            failed_check=FailedCheck.YAZMA, audit_failed=True,
         )
-        return FileOutcome(prep.rel, failed_check="yazma", status="error", error=detail)
+        return FileOutcome(prep.rel, failed_check=FailedCheck.YAZMA, status="error", error=detail)
 
     # match_count==0 (hicbir sey maskelenmedi) burada tamamen gecerli bir
     # sonuctur - dosya secilen katmanlardan ve gerekli dogrulamalardan TEMIZ
@@ -1957,20 +2016,11 @@ _MAX_REMEDIATION_ROUNDS = 2
 # Bundan uzun ya da alt satira gecen denetim alintisi otomatik maskelenmez,
 # insan onayina gider (buyuk bir parcayi tek yer tutucuyla ortmek riskli).
 _MAX_REMEDIATION_QUOTE_CHARS = 200
-# Otomatik duzeltme basarisizliginda insan onayi gerekcesine yazilan kontrol adlari.
-_REMEDIATION_CHECK_LABELS = {
-    "kural": "sözlük kuralı bulunamadı",
-    "maskeleme": "değerlerin güvenli sınırla maskelenmesi",
-    "daraltma": "alıntının bir kısmı açık kalacaktı",
-    "cok_satirli_alinti": "alıntı birden fazla satıra yayılıyor",
-    "uzun_alinti": f"alıntı {_MAX_REMEDIATION_QUOTE_CHARS} karakterden uzun",
-    "geri_donus": "geri dönüş doğrulaması",
-    "sozdizimi": "sözdizimi doğrulaması",
-    "acik_terim": "açık terim kontrolü",
-    "llm_denetimi": "LLM denetimi",
-    "llm_denetimi_tamamlanamadi": "LLM denetimi tamamlanamadı",
-    "yazma": "çıktı yazma",
-}
+# Otomatik duzeltme basarisizliginda insan onayi gerekcesine yazilan kontrol adi.
+def _remediation_check_label(check: FailedCheck) -> str:
+    if check == FailedCheck.UZUN_ALINTI:
+        return f"alıntı {_MAX_REMEDIATION_QUOTE_CHARS} karakterden uzun"
+    return failed_check_label(check)
 
 
 def _placeholder_reverse_map(db: Session, run_ctx: MaskingRunContext, text: str) -> dict[str, str]:
@@ -2002,19 +2052,19 @@ def _try_remediation(
     request: _RemediationRequest,
     rules_by_name: dict[str, object],
     rule_names_by_id: dict[int, str],
-) -> "tuple[_MaskedFile, list, list] | str":
+) -> "tuple[_MaskedFile, list, list] | FailedCheck":
     prep = masked_file.prep
     values = []
     for term in request.leaked_terms:
         rule = rules_by_name.get(term.rule_name)
         if rule is None:
-            return "kural"
+            return FailedCheck.KURAL
         values.append((term.matched_value, rule, "dictionary"))
     for finding in request.findings:
         if "\n" in finding.ilgili_bolum or "\r" in finding.ilgili_bolum:
-            return "cok_satirli_alinti"
+            return FailedCheck.COK_SATIRLI_ALINTI
         if len(finding.ilgili_bolum) > _MAX_REMEDIATION_QUOTE_CHARS:
-            return "uzun_alinti"
+            return FailedCheck.UZUN_ALINTI
     audit_rule = synthetic_llm_rule(_AUDIT_REMEDIATION_TYPE)
     values.extend((finding.ilgili_bolum, audit_rule, "llm") for finding in request.findings)
 
@@ -2030,19 +2080,19 @@ def _try_remediation(
         except NarrowedValueError:
             # Daraltilan alintinin acik kalacak kismini yakalayacak tek sey
             # ikinci LLM denetimi olurdu; bu belirsiz kontrole birakilmaz.
-            failure = "daraltma"
+            failure = FailedCheck.DARALTMA
         except ValueError:
-            failure = "maskeleme"
+            failure = FailedCheck.MASKELEME
         if failure is None:
             reverse_map = _placeholder_reverse_map(db, run_ctx, text)
             if not verify_round_trip(prep.text, text, reverse_map).ok:
-                failure = "geri_donus"
+                failure = FailedCheck.GERI_DONUS
         if failure is None and find_leaked_terms(db, text):
-            failure = "acik_terim"
+            failure = FailedCheck.ACIK_TERIM
         if failure is None and validate_masked_syntax(
             prep.rel, text, original_text=prep.text, sql_dialect=settings.validation.sql_dialect,
         ):
-            failure = "sozdizimi"
+            failure = FailedCheck.SOZDIZIMI
     except BaseException:
         savepoint.rollback()
         if cache is not None:
@@ -2076,13 +2126,13 @@ def _fallback_after_remediation(
     failed_dir: Path,
     validation_warnings: list[str] | None,
     decision_policy: LearnedDecisionPolicy | None,
-    check: str,
+    check: FailedCheck,
 ) -> FileOutcome:
     db.add(AuditLog(
         run_id=run_id, file_path=masked_file.prep.rel, action="skipped",
         detail=f"auto_remediation=failed check={check}",
     ))
-    label = _REMEDIATION_CHECK_LABELS.get(check, check)
+    label = _remediation_check_label(check)
     return _finalize_file(
         db, run_id, masked_file, audit_result, failed_dir, validation_warnings,
         decision_policy=decision_policy,
@@ -2106,7 +2156,7 @@ def _start_remediation(
     rule_names_by_id: dict[int, str],
 ) -> "FileOutcome | _PendingRemediation":
     result = _try_remediation(db, run_ctx, masked_file, request, rules_by_name, rule_names_by_id)
-    if isinstance(result, str):
+    if isinstance(result, FailedCheck):
         return _fallback_after_remediation(
             db, run_ctx.run_id, masked_file, audit_result, failed_dir, validation_warnings, decision_policy, result,
         )
@@ -2150,7 +2200,7 @@ def _continue_remediation(
         )
         if isinstance(outcome, _RemediationRequest):
             result = _try_remediation(db, run_ctx, item.current, outcome, rules_by_name, rule_names_by_id)
-            if not isinstance(result, str):
+            if not isinstance(result, FailedCheck):
                 savepoint.commit()
                 remediated, matches, mappings = result
                 return _PendingRemediation(
@@ -2169,7 +2219,7 @@ def _continue_remediation(
             ))
             return outcome
         else:
-            check = outcome.failed_check or "beklenmeyen"
+            check = outcome.failed_check or FailedCheck.BEKLENMEYEN
     except BaseException:
         savepoint.rollback()
         if cache is not None:
@@ -2223,10 +2273,12 @@ def _quarantine_after_finalize_crash(
     )
     _create_audit_warning(
         db, run_id=run_id, file_path=prep.rel, masked_content="",
-        encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+        encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+        failed_check=FailedCheck.FAZ_D_COKMESI, audit_failed=True,
     )
     return FileOutcome(
         prep.rel, status="quarantined_pending_audit", error=reason, final_state="VALIDATION_FAILED",
+        failed_check=FailedCheck.FAZ_D_COKMESI,
     )
 
 
@@ -2331,6 +2383,10 @@ async def export_project(
     failed = False
     publication = None
     next_detection: asyncio.Future | None = None
+    # Faz A/C/E'de olusturulan gorevler bu baglami kopyalar ve ayni toplayiciya yazar.
+    llm_usage = LLMUsageCollector()
+    report.llm_usage_by_file = llm_usage.by_file
+    llm_usage_token = start_llm_usage(llm_usage)
     # Ara commit'ler (asagida) sonrasi mapping onbellegindeki ORM nesneleri
     # her erisimde yeniden SELECT'lenmesin diye; cikista eski deger geri yuklenir.
     previous_expire_on_commit = db.expire_on_commit
@@ -2581,10 +2637,12 @@ async def export_project(
                         )
                         _create_audit_warning(
                             db, run_id=run.id, file_path=prep.rel, masked_content="",
-                            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+                            encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+                            failed_check=FailedCheck.TESPIT_KATMANI, audit_failed=True,
                         )
                         batch_results[i] = FileOutcome(
                             prep.rel, status="failed_detection", error=reason, final_state="VALIDATION_FAILED",
+                            failed_check=FailedCheck.TESPIT_KATMANI,
                         )
                     continue
                 # SAVEPOINT: bir dosyanin mapping/DB yazma adiminda BEKLENMEYEN
@@ -2633,11 +2691,13 @@ async def export_project(
                     )
                     _create_audit_warning(
                         db, run_id=run.id, file_path=prep.rel, masked_content="",
-                        encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason, audit_failed=True,
+                        encoding=prep.encoding, output_path=prep.masked_rel, reasoning=reason,
+                        failed_check=FailedCheck.MASKELEME_HATASI, audit_failed=True,
                     )
                     batch_results[i] = FileOutcome(
                         prep.rel, status="quarantined_pending_audit", error=reason,
                         final_state="VALIDATION_FAILED",
+                        failed_check=FailedCheck.MASKELEME_HATASI,
                     )
 
             # Siradaki batch'in hazirligi hala yazma kilidi altindayken yapilir;
@@ -2875,7 +2935,8 @@ async def export_project(
                 )
                 _create_audit_warning(
                     db, run_id=run.id, file_path=output_file.outcome.relative_path, masked_content="",
-                    encoding=output_file.encoding, reasoning=reason, audit_failed=True,
+                    encoding=output_file.encoding, reasoning=reason,
+                    failed_check=FailedCheck.SONLANDIRMA, audit_failed=True,
                 )
                 report.mark_finalization_failed(output_file.outcome, reason)
                 continue
@@ -2919,6 +2980,7 @@ async def export_project(
         _mark_run_failed(db, run.id)
         raise
     finally:
+        stop_llm_usage(llm_usage_token)
         db.expire_on_commit = previous_expire_on_commit
         if publication is not None:
             publication.close()

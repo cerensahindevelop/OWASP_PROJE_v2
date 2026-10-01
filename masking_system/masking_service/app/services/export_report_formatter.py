@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.services.failed_checks import failed_check_label
+
 if TYPE_CHECKING:
     from app.services.exporter import ExportReport
 
@@ -105,6 +107,12 @@ def format_export_report(report: "ExportReport") -> str:
         f"⛔ Güvenlik Karantinası {report.files_security_quarantine} | "
         f"✕ Doğrulama Başarısız {report.files_validation_failed}"
     )
+    blocked_by_check = report.blocked_by_check
+    if blocked_by_check:
+        lines.append("  Ciktiya alinmama nedenleri (dosyayi alikoyan kontrol):")
+        lines.extend(
+            f"    - {failed_check_label(code)} ({code}): {count}" for code, count in blocked_by_check.items()
+        )
 
     if report.degraded_detectors:
         lines.append("")
@@ -118,6 +126,17 @@ def format_export_report(report: "ExportReport") -> str:
         lines.append(
             "  (i) BILGI: LLM (Katman 3) bu calisma icin KAPALI (VLLM_ENABLED=false) - "
             "sadece kural/sozluk (Katman 1) ve Presidio (Katman 2) taramasi yapildi."
+        )
+
+    llm_usage = report.llm_usage_summary
+    if llm_usage:
+        lines.append("")
+        lines.append(
+            f"  LLM kullanimi: {llm_usage['files']} dosya, {llm_usage['requests']} istek "
+            f"(dosya basina {llm_usage['requests_per_file']} istek, {llm_usage['scans_per_file']} tarama), "
+            f"{llm_usage['prompt_tokens']} girdi / {llm_usage['completion_tokens']} cikti token, "
+            f"dosya basina LLM suresi p50 {llm_usage['llm_seconds_p50']} sn / p95 {llm_usage['llm_seconds_p95']} sn"
+            + (f", basarisiz tarama {llm_usage['failed_scans']}" if llm_usage["failed_scans"] else "")
         )
 
     if report.validation_warnings:

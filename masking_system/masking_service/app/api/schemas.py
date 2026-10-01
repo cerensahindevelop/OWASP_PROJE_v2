@@ -230,6 +230,7 @@ class FileOutcomeOut(BaseModel):
     rule_breakdown: dict[str, int] = {}
     error: str | None = None
     final_state: str | None = None
+    failed_check: str | None = None
 
 
 class ExportReportOut(BaseModel):
@@ -274,6 +275,8 @@ class ExportReportOut(BaseModel):
     status: str
     validation_warnings: list[str] = []
     degraded_detectors: list[str] = []
+    blocked_by_check: dict[str, int] = {}
+    llm_usage_summary: dict[str, float] = {}
 
 
 class ExportPathRequest(IdentityMixin):
