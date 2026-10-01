@@ -45,6 +45,34 @@ def read_instructions(database_path):
     return [row[0] for row in rows if row[0]]
 
 
+def check_runtime_rules(database_path):
+    """Parametrik kurallar runtime parametreleriyle uyumlu mu? (salt okunur)
+
+    Kategorisi proje/sicil/branch disinda olan parametrik kural hicbir zaman
+    eslesmez; bir parametrenin aktif kurali yoksa o deger maskelenmez
+    (personnel_no/sicil_no sizintisi). Donus: basarisiz asama sayisi.
+    """
+    from app.services.runtime_params import RuntimeParam
+
+    uri = Path(database_path).resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as db:
+        rows = db.execute(
+            "SELECT kategori, aktif_mi FROM filtre_kurallari WHERE desen_tipi = 'parametric'"
+        ).fetchall()
+    known = {param.value for param in RuntimeParam}
+    unknown = sorted({category for category, _active in rows if category not in known})
+    missing = [param.value for param in RuntimeParam
+               if not any(category == param.value and active for category, active in rows)]
+    for category in unknown:
+        print(f"FAIL stage=runtime_rules kategori={category} reason=hicbir_zaman_eslesmez")
+    for category in missing:
+        print(f"FAIL stage=runtime_rules kategori={category} reason=aktif_kural_yok_deger_maskelenmez")
+    if unknown or missing:
+        return 1
+    print("PASS stage=runtime_rules " + " ".join(f"{param.value}=aktif" for param in RuntimeParam))
+    return 0
+
+
 def module_info(module):
     path = Path(module.__file__).resolve()
     print(f"module={module.__name__} path={path} sha256={hashlib.sha256(path.read_bytes()).hexdigest()}")
@@ -174,6 +202,11 @@ def main(argv=None):
             print(f"db_rules=count:{len(instructions)} types:{','.join(sorted({type(v).__name__ for v in instructions}))}")
         except Exception as exc:
             failure("db_rules", exc)
+            failures += 1
+        try:
+            failures += check_runtime_rules(config.DatabaseSettings().resolved_path)
+        except Exception as exc:
+            failure("runtime_rules", exc)
             failures += 1
     failures += asyncio.run(check_paths(settings, instructions))
     print("RESULT=" + ("OFFLINE_OK" if not failures else "OFFLINE_FAILED"))

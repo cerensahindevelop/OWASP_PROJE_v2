@@ -113,3 +113,64 @@ def test_existing_sicil_rule_blocks_rename_without_breaking(migrate):
     rules = _rules(migrate.path)
     assert rules["personnel_no"][2] == "personnel_no" and rules["sicil_no"][6] == "mask_sicil"
     assert "DEGISTIRILMEDI" in output
+
+
+# --- Gecmis etki raporu (scripts/sicil_etki_raporu.py, salt okunur) -----------
+
+def _report(path: Path, *args: str) -> str:
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "sicil_etki_raporu.py"), "--db", str(path), *args],
+                            cwd=ROOT, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_impact_report_lists_runs_without_values_or_paths(migrate, tmp_path):
+    migrate("upgrade", BEFORE)
+    source, target = tmp_path / "gizli-proje-kaynak", tmp_path / "gizli-proje-cikti"
+    for root in (source, target):
+        (root / "ekip" / "Z998877").mkdir(parents=True)
+        (root / "ekip" / "Z998877" / "not.md").write_text("Acan: Z998877\n", encoding="utf-8")
+        (root / "temiz.md").write_text("sicil yok\n", encoding="utf-8")
+    with sqlite3.connect(migrate.path) as db:
+        db.execute("INSERT INTO maskeleme_baglamlari (id, proje_adi, personel_no, branch_adi) "
+                   "VALUES (1, 'gizli-proje', 'Z998877', 'main')")
+        for run_id, date in ((1, "2026-09-01 10:00:00"), (2, "2026-09-02 10:00:00")):
+            db.execute("INSERT INTO maskeleme_calismalari (id, baglam_id, islem_tipi, kaynak_yol, hedef_yol, "
+                       "baslatan, durum, baslangic_tarihi, esleme_surumu) VALUES (?, 1, 'mask', ?, ?, 'Z998877', "
+                       "'completed', ?, 2)", (run_id, str(source), str(target), date))
+        db.execute("INSERT INTO maskeleme_calismalari (id, baglam_id, islem_tipi, kaynak_yol, hedef_yol, baslatan, "
+                   "durum, esleme_surumu) VALUES (3, 1, 'unmask', 'x', 'y', 'Z998877', 'completed', 2)")
+        rule_id = db.execute("SELECT id FROM filtre_kurallari WHERE kural_adi = 'personnel_no'").fetchone()[0]
+        db.execute("INSERT INTO deger_eslemeleri (calisma_id, baglam_id, kural_id, orijinal_deger_sifreli, "
+                   "orijinal_deger_duz_metin, orijinal_deger_hash, yer_tutucu_degeri) "
+                   "VALUES (2, 1, ?, 'x', 'x', 'h', 'mask_personel_no_1')", (rule_id,))
+    before = (sqlite3.connect(migrate.path).execute("SELECT COUNT(*), SUM(id) FROM maskeleme_calismalari").fetchone())
+
+    output = _report(migrate.path, "--tara")
+    lines = output.splitlines()
+    assert lines[0] == "sicil_kurali=ETKILENIYOR export_sayisi=2"
+    assert lines[1] == ("run_id=1 tarih=2026-09-01 10:00:00 durum=completed sicil_eslemesi=0 sonuc=olasi "
+                        "kaynakta=1 ciktida=1")
+    assert lines[2].startswith("run_id=2 ") and lines[2].endswith("sonuc=etkilenmedi")
+    assert lines[-1] == "olasi_etkilenen=1"
+    assert "Z998877" not in output and "gizli" not in output and str(tmp_path) not in output
+    assert _report(migrate.path, "--once", "2026-09-02").splitlines()[-1] == "olasi_etkilenen=1"
+    # Salt okunur: DB degismedi.
+    assert sqlite3.connect(migrate.path).execute(
+        "SELECT COUNT(*), SUM(id) FROM maskeleme_calismalari").fetchone() == before
+
+    migrate("upgrade", FIX)
+    assert _report(migrate.path).splitlines()[0] == "sicil_kurali=duzeltilmis export_sayisi=2"
+
+
+def test_preflight_runtime_rules_stage(migrate, capsys):
+    from scripts import check_llm_preflight as preflight
+
+    migrate("upgrade", BEFORE)
+    assert preflight.check_runtime_rules(migrate.path) == 1
+    output = capsys.readouterr().out
+    assert "FAIL stage=runtime_rules kategori=personnel_no reason=hicbir_zaman_eslesmez" in output
+    assert "FAIL stage=runtime_rules kategori=sicil_no reason=aktif_kural_yok_deger_maskelenmez" in output
+    migrate("upgrade", FIX)
+    assert preflight.check_runtime_rules(migrate.path) == 0
+    assert "PASS stage=runtime_rules project_name=aktif sicil_no=aktif branch_name=aktif" in capsys.readouterr().out
