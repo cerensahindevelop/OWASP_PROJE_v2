@@ -133,3 +133,21 @@ def test_validation_error_in_background_job_is_not_logged(api_client, monkeypatc
             time.sleep(0.05)
     assert job["status"] == "failed" and "zebrafin.txt" in job["error_message"].casefold()
     _assert_not_logged(caplog)
+
+
+def test_display_masking_writes_no_mappings(db_session, tmp_path, monkeypatch):
+    # Rapor basligi ve kok klasor maskelemesi yalnizca goruntulemedir: DB'ye
+    # esleme yazmaz, sayac tuketmez (ciktidaki yer tutucu numaralari degismez).
+    from app.db.models import ValueMapping
+    from app.services.mapping_service import load_active_rules, mask_display_path
+
+    commit_term_upload(db_session, filename="terms.txt", content=b"Zeferan\n", category="pytest_logref")
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", lambda *a, **k: asyncio.sleep(0, result=exporter.AuditVerdict(risky=False)))
+
+    report = _export(db_session, tmp_path, {"notlar.txt": "icerikte hassas deger yok\n"}, "zeferan-pytest-logref")
+
+    assert db_session.query(ValueMapping).filter_by(run_id=report.run_id).count() == 0
+    assert "zeferan" not in report.summary_text().casefold()
+    params = {"project_name": "pytest-logref", "sicil_no": "P-LOGREF", "branch_name": "main"}
+    assert mask_display_path("a/Zeferan-pytest-logref", params, load_active_rules(db_session)).startswith("a/mask_")
