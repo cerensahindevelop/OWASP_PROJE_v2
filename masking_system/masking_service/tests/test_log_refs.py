@@ -57,7 +57,14 @@ def test_report_roots_and_files_are_masked_and_ids_resolve(db_session, tmp_path,
 
     text = report.summary_text()
     assert "zeferan" not in text.casefold()
-    assert "Kaynak: " in text and "<gizlendi>" not in text
+    # Rapor basligindaki proje/sicil de ayni yol maskelemesinden gecer.
+    assert "pytest-logref" not in text and "P-LOGREF" not in text
+    assert report.display_project_name and report.display_project_name.startswith("mask_")
+    # Maskeli hali ham degeri hala iceriyorsa (generic 'main' ya da kurali
+    # eslesmeyen sicil) baslikta fail-closed gizlenir.
+    assert "Branch: <gizlendi>" in text and "main" not in text.split("Branch:", 1)[1].split("\n", 1)[0]
+    kaynak_line = text.split("Kaynak:", 1)[1].split("\n", 1)[0]
+    assert "<gizlendi>" not in kaynak_line and "mask_" in kaynak_line
     label = report.file_label("zeferan/app.py")
     assert "zeferan" not in label.casefold() and label.endswith("/app.py#" + label.rsplit("#", 1)[1])
     ref = label.rsplit("#", 1)[1]

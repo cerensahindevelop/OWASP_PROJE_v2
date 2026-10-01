@@ -233,6 +233,10 @@ class ExportReport:
     # yazar (kok klasor adi siklikla proje/kod adi icerir).
     display_source_path: str | None = None
     display_target_path: str | None = None
+    # Rapor basligindaki kimlik degerleri; kok klasorlerle ayni yol maskelemesi.
+    display_project_name: str | None = None
+    display_sicil_no: str | None = None
+    display_branch_name: str | None = None
     # Yalnizca olcum (kural 9, Faz 2a): yayinlanan dosyalarda icerikte
     # maskelenen terimin maskeli yolda acik kaldigi dosya etiketi -> terim
     # sayisi. Dosya engellenmez; bkz. _measure_path_content_mismatch.
@@ -2088,9 +2092,10 @@ def _measure_path_content_mismatch(
             ))
 
 
-# Rapor metnindeki kok klasor (kaynak/hedef): dosya yollariyla AYNI yol
-# maskelemesinden gecer; kok klasor adi siklikla proje/kod adi icerir
-# (kural 7). Maskeleme basarisiz olur ya da maskeli kokte aktif terim kalirsa
+# Rapor metnindeki kok klasor (kaynak/hedef) ve baslik kimlik degerleri
+# (proje/sicil/branch): dosya yollariyla AYNI yol maskelemesinden gecer; kok
+# klasor adi siklikla proje/kod adi icerir (kural 7). Goreli deger (kimlik)
+# tek bir yol bileseni gibi maskelenir. Maskeleme basarisiz olur ya da maskeli kokte aktif terim kalirsa
 # yalnizca surucu/kok gosterilir - orijinal ad asla yazilmaz.
 def _masked_root(
     db: Session, context, root: Path, runtime_params: dict[str, str], rules, mapping_cache, run_id: int,
@@ -2111,6 +2116,19 @@ def _masked_root(
     except Exception:
         return hidden
     return str(Path(root.anchor) / masked) if root.anchor else str(masked)
+
+
+# Rapor basligindaki kimlik degeri (proje/sicil/branch): yol maskelemesinden
+# gecer; ham deger maskeli halde hala aynen gorunuyorsa (generic oldugu icin
+# yolda maskelenmeyen 'main' gibi ya da kurali eslesmeyen bir deger) fail-closed
+# gizlenir.
+def _masked_identity(
+    db: Session, context, value: str, runtime_params: dict[str, str], rules, mapping_cache, run_id: int,
+) -> str:
+    if not value:
+        return "<gizlendi>"
+    masked = _masked_root(db, context, Path(value), runtime_params, rules, mapping_cache, run_id)
+    return "<gizlendi>" if value.casefold() in masked.casefold() else masked
 
 
 # Otomatik duzeltme sinirlari: denetim alintisi bu tiple maskelenir; en fazla
@@ -2652,6 +2670,10 @@ async def export_project(
         )
         report.display_target_path = _masked_root(
             db, context, target, runtime_params, active_rules, mapping_cache, run.id,
+        )
+        report.display_project_name, report.display_sicil_no, report.display_branch_name = (
+            _masked_identity(db, context, value, runtime_params, active_rules, mapping_cache, run.id)
+            for value in (project_name, sicil_no, branch_name)
         )
 
         # Use the same path decoder as unmask, including compound names.

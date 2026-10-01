@@ -116,10 +116,15 @@ def test_report_never_falls_back_to_source_paths():
 
     assert "karayel" not in text.casefold()
     assert "Kaynak: <gizlendi>" in text and "<dosya?>: ilk fark 1" in text
+    # Baslik kimlik degerleri de maskeli haline duser, ham deger yazilmaz.
+    assert "Poseidon" not in text and "EMP-1001" not in text
+    assert "Proje: <gizlendi> | sicil: <gizlendi> | Branch: <gizlendi>" in text
 
 
 def test_report_uses_masked_roots_and_labels():
-    report = _base_report(display_source_path="/home/u/mask_kurumsal_terim_1", display_target_path="/out/x")
+    report = _base_report(display_source_path="/home/u/mask_kurumsal_terim_1", display_target_path="/out/x",
+                          display_project_name="mask_proje_adi_1", display_sicil_no="mask_sicil_no_1",
+                          display_branch_name="main")
     report.file_labels["src/a.py"] = "src/a.py#00aa11bb22cc"
     report.record(FileOutcome("src/a.py", status="failed_round_trip_validation", error="ilk fark 1"))
 
@@ -127,4 +132,5 @@ def test_report_uses_masked_roots_and_labels():
 
     assert "Kaynak: /home/u/mask_kurumsal_terim_1" in text
     assert "Hedef:  /out/x" in text
+    assert "Proje: mask_proje_adi_1 | sicil: mask_sicil_no_1 | Branch: main" in text
     assert "src/a.py#00aa11bb22cc: ilk fark 1" in text
