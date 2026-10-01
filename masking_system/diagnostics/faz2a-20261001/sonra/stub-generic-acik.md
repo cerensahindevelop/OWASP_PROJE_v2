@@ -8,14 +8,14 @@
 | Nedene gore | llm_denetimi=4 | llm_denetimi=4 | llm_denetimi=4 |
 | Yol/icerik uyusmazligi (olcum) | 0 dosya / 0 terim | 0 dosya / 0 terim | 0 dosya / 0 terim |
 | LLM istek (dosya basina) | 24 (2.18) | 24 (2.18) | 24 (2.18) |
-| Dosya basina LLM sn p50/p95 | 0.955/1.35 | 0.935/1.221 | 0.941/1.026 |
+| Dosya basina LLM sn p50/p95 | 0.762/1.115 | 0.909/1.31 | 0.887/1.074 |
 | Canary sizintisi | 0 | 0 | 0 |
 | Terim sizintisi | tckimlik=5 | tckimlik=5 | tckimlik=5 |
 | Maskelenmemesi gereken ihlali | 0 | 0 | 0 |
 | Geri alma bayt farki | 0/7 | 0/7 | 0/7 |
 | javac | basarisiz (hata 2, eksik java 2) | basarisiz (hata 2, eksik java 2) | basarisiz (hata 2, eksik java 2) |
 
-Determinizm: Jaccard (min) 1.0, maskelenen deger sayilari [24, 24, 24], birebir ayni cikti dosyasi 7/7.
+Determinizm: Jaccard (min) 1.0, maskelenen deger sayilari [23, 23, 23], birebir ayni cikti dosyasi 7/7.
 
 ## Dosya bazinda sonuc (kosu 1)
 

@@ -163,6 +163,19 @@ Ayrıntı ve commit listesi: `diagnostics/faz2a-20261001/RAPOR.md`. Kısaca:
   da yeniden başlatılmamış backend'de export 503. `/health` alanı. Preflight'ta `build_stamp` ve
   saf AST `signature_consistency` aşamaları.
 
+Onay sonrası değişiklikler (RAPOR bölüm 8):
+- `/health` minimal
+- kısa Türkçe kökler generic listeden çıktı
+- rapor başlığında proje/sicil/branch maskeleniyor
+- kaynak yollu doğrulama hatalarının loga gitmediğine dair test
+
+PR `main`'e açıldı; merge kullanıcıda. Faz 2b taslağı: `docs/faz2b-taslak-plan.md`. Intranet
+verisi gelince kesinleşecek; dağılıma göre öncelik tablosu taslağın 3. bölümünde.
+
+**Açık hata (kapsam dışı, ayrı görev):** alembic seed verisindeki sicil kuralı
+`kategori="personnel_no"`, export ise `sicil_no` kullanıyor. Alembic DB'lerinde sicil
+maskelenmiyor.
+
 Önemli sonuç: altın kümede onay kuyruğu %9'dan %36'ya çıktı. Neden: denetim alıntıları artık
 identifier'a genişletilemiyor. `weak` yayılmasının payı 0. Canary sızıntısı 0.
 

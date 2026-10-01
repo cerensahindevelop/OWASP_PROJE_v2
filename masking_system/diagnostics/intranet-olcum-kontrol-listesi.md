@@ -18,53 +18,87 @@ Aşağıdaki "Getirin" maddeleri bu çalışmayı yürüten oturuma geri getiril
 
 ---
 
-## Adım 0 — Tek commit'ten dağıtım ve preflight
+## Adım 0 — `main`'den damgalı dağıtım ve preflight
 
-1. Dağıtılacak commit'i not edin (GitHub'daki dal veya PR'ın son commit'i).
-   Paketi git'in olduğu makinede hazırlarken sürüm damgasını üretin. `build_offline_bundle.py`
-   bunu otomatik yapar; yalnızca klasör kopyalıyorsanız elle çalıştırın:
+Faz 2a PR'ı `main`'e merge edildikten sonra yapılır.
+
+1. **Paketi git'in olduğu makinede hazırlayın** (flash'a kopyalamadan önce):
    ```powershell
+   git fetch origin main
+   git checkout --detach origin/main
+   git rev-parse --short=12 HEAD
+   cd masking_system\masking_service
    .venv\Scripts\python.exe scripts\write_build_stamp.py
    ```
-   Bu komut `app\BUILD_STAMP.json` dosyasını yazar (commit + `app\` dosyalarının özetleri).
-2. Bu commit'ten şunları **eksiksiz** kopyalayın (seçili dosya değil, klasörün tamamı):
+   - Son komut `app\BUILD_STAMP.json` dosyasını yazar: commit + `app\` dosyalarının özetleri.
+   - Çıktı `stamp=... commit=<12 hex> tree=<12 hex> files=N` biçimindedir.
+   - `commit` değeri `-dirty` ile bitiyorsa çalışma kopyasında commit'lenmemiş değişiklik vardır;
+     temiz bir checkout'tan yeniden üretin.
+   - `scripts\build_offline_bundle.py` kullanıyorsanız damga otomatik üretilir.
+2. Bu commit'ten şunları **eksiksiz** kopyalayın. Seçili dosyalar değil, klasörlerin tamamı;
+   `app\BUILD_STAMP.json` dahil:
    - `masking_service\app\`
    - `masking_service\alembic\`
    - `masking_service\scripts\`
    - `masking_service\tests\fixtures\golden\` (yalnızca ölçüm için)
-3. Veritabanını yedekleyin ve migrasyonu uygulayın (yalnızca yeni bir kolon ekler):
+
+   Intranette eski `app\` klasörünün üzerine kopyalıyorsanız, damgada olmayan eski dosyalar
+   preflight'ta `WARN ... reason=damgada_yok` olarak görünür. Bu engellemez, ama mümkünse eski
+   `app\` klasörünü silip temiz kopyalayın.
+3. Veritabanını yedekleyin ve migrasyonu uygulayın:
    ```powershell
    Copy-Item ..\masking.db ..\masking.db.yedek-olcum
    .venv\Scripts\python.exe -m alembic upgrade head
    ```
+   Faz 2a yeni migrasyon eklemedi. Faz 0'ın kolon migrasyonu henüz uygulanmadıysa bu komut onu
+   uygular.
 4. Backend ve arayüzü kapatıp yeniden başlatın. Backend logunu dosyaya alın:
    ```powershell
    .venv\Scripts\python.exe -m uvicorn api_app:app --host 127.0.0.1 --port 8001 *>&1 | Tee-Object -FilePath ..\backend-olcum.log
    ```
-   Açılışta logda `build state=... commit=...` satırı görünür. `state=mismatch` ise backend açılır
-   ama dışa aktarma 503 hatasıyla reddedilir. `app\` klasörünü aynı paketten yeniden kopyalayın.
-   Kod kopyalanıp backend yeniden başlatılmadıysa da dışa aktarma reddedilir.
-5. Preflight:
+   Açılışta logda `build state=... commit=...` satırı görünür.
+   - `state=ok`: damga uyuşuyor.
+   - `state=no_stamp`: damga kopyalanmamış. Yalnızca uyarıdır, ama bu ölçüm için 1. adıma dönün.
+   - `state=mismatch`: backend açılır ama dışa aktarma 503 ile reddedilir; ayrıntı logdaki
+     `build_mismatch commit=... files=...` satırındadır. `app\` klasörünü aynı paketten yeniden
+     kopyalayıp backend'i yeniden başlatın.
+   - Kod kopyalanıp backend yeniden başlatılmadıysa da dışa aktarma reddedilir
+     (`export_refused reason=code_changed_since_start`).
+5. Preflight ve health:
    ```powershell
    .venv\Scripts\python.exe scripts\check_llm_preflight.py
    if ($LASTEXITCODE -ne 0) { Write-Host "PREFLIGHT BASARISIZ" }
-   Invoke-RestMethod http://127.0.0.1:8001/health | ConvertTo-Json -Depth 4
+   Invoke-RestMethod http://127.0.0.1:8001/health | ConvertTo-Json
    ```
-   Preflight artık önce sürüm tutarlılığını kontrol eder (app modüllerini import etmeden):
+   Preflight önce sürüm tutarlılığını kontrol eder (app modüllerini import etmeden):
    - `build state=... commit=...` ve `PASS|FAIL stage=build_stamp`
    - `PASS|FAIL stage=signature_consistency checked_calls=N`: modüller arası çağrı/imza uyumu.
      Uyumsuzlukta `FAIL stage=signature_consistency caller=app/...:satir callee=... reason=...`
      yazar. TypeError olayının deseni budur.
 
+   `/health` yalnızca `{"status": "ok"}` ya da `{"status": "degraded"}` döner.
+6. Sicil kuralının kategorisi (salt okunur; bkz. "Bilinen sorun" notu aşağıda):
+   ```powershell
+   .venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('file:../masking.db?mode=ro', uri=True); print(c.execute(\"SELECT kural_adi, kategori, aktif_mi FROM filtre_kurallari WHERE desen_tipi='parametric'\").fetchall())"
+   ```
+   DB yolunuz farklıysa `.env`'deki `DB_PATH`'i kullanın.
+
 **Getirin:**
-- [ ] Dağıtılan commit kimliği ve preflight'taki `build state=...` satırı
+- [ ] 1. adımdaki `git rev-parse` çıktısı ve `write_build_stamp.py` satırı (`commit=... tree=...`)
+- [ ] Backend logundaki açılış satırı: `build state=... commit=... tree=...`
 - [ ] `check_llm_preflight.py` çıktısındaki tüm `PASS`/`FAIL`/`WARN` satırları ve `RESULT=...`.
       `FAIL` varsa `FAIL ... frames=` ya da `FAIL stage=signature_consistency ...` satırı.
       Kurulum yollarını gizleyebilirsiniz.
-- [ ] `/health` çıktısındaki `build` alanı
+- [ ] `/health` yanıtı
+- [ ] 6. adımdaki sorgunun çıktısı (yalnızca kural adı/kategori; değer içermez)
 - [ ] `python --version` çıktısı
 
-`RESULT=OFFLINE_OK` gelmeden sonraki adıma geçmeyin.
+`build state=ok` ve `RESULT=OFFLINE_OK` gelmeden sonraki adıma geçmeyin.
+
+**Bilinen sorun (Faz 2a'da bulundu, henüz düzeltilmedi):** alembic seed verisi sicil kuralını
+`personnel_no` kategorisiyle oluşturuyor, export ise değeri `sicil_no` anahtarıyla veriyor. Böyle
+bir DB'de sicil değeri içerikte ve yolda maskelenmez. 6. adımın çıktısı, gerçek DB'nin bundan
+etkilenip etkilenmediğini gösterecek.
 
 ---
 
@@ -99,6 +133,49 @@ Aşağıdaki "Getirin" maddeleri bu çalışmayı yürüten oturuma geri getiril
 - [ ] Log sayıları (4 sayı)
 - [ ] `golden-real-adim1\once.json` ve `once.md`. İçerik sentetik, paylaşılabilir.
 - [ ] Kullanılan `VLLM_*` ayarları: yalnızca anahtar ve değer. `VLLM_API_KEY` hariç.
+- [ ] Backend logundan şu sayı (0 olmalı): `(Select-String -Path ..\backend-olcum.log -Pattern "export_refused").Count`
+
+Not: Faz 2a'dan sonra `llm_denetimi` payının önceki koda göre artması beklenir. Denetim
+alıntıları artık identifier'a genişletilemiyor. `failed_check_summary.py`'deki
+"Otomatik duzeltme basarisizlik nedeni" satırında `maskeleme` sayısı bunu gösterir.
+
+---
+
+## Adım 1b — Aynı projede generic bileşik ad filtresi açık (ayrı ölçüm)
+
+Adım 1'den hemen sonra, `.env`'de **yalnızca bu bayrağı** değiştirerek yapılır. Diğer ayarlar
+Adım 1'deki gibi kalır.
+
+1. `.env`'yi yedekleyin ve şu satırı ekleyin:
+   ```powershell
+   Copy-Item ..\.env ..\.env.yedek-adim1b
+   Add-Content ..\.env "SCAN_GENERIC_COMPOUND_FILTER=true"
+   ```
+   `.env`, `masking_service` klasörünün bir üstündedir (`..\.env`). Backend'i yeniden başlatın ve
+   logu ayrı bir dosyaya alın (`..\backend-adim1b.log`). Açılış logunda yine `build state=ok`
+   görünmeli.
+2. Aynı projede, **aynı proje/sicil/branch** ile export'u tekrarlayın. Hedef klasör farklı olsun:
+   ```powershell
+   .venv\Scripts\python.exe -m app.cli export --kaynak <proje> --hedef <cikti-adim1b> --proje <ad> --sicil <sicil> --branch <branch>
+   .venv\Scripts\python.exe scripts\failed_check_summary.py --son --proje <ad>
+   ```
+3. Altın kümede aynı bayrakla:
+   ```powershell
+   $env:SCAN_GENERIC_COMPOUND_FILTER="true"
+   .venv\Scripts\python.exe scripts\measure_golden.py --llm real --runs 3 --out ..\diagnostics\golden-real-adim1 --name generic-acik
+   Remove-Item Env:SCAN_GENERIC_COMPOUND_FILTER
+   ```
+4. Ölçümden sonra bayrağı geri alın (`.env.yedek-adim1b`'yi geri kopyalayın) ve backend'i yeniden
+   başlatın. Bayrağın kalıcı açılması ayrı bir karar.
+
+**Getirin:**
+- [ ] `failed_check_summary.py` çıktısının tamamı (Adım 1 ile karşılaştırmak için)
+- [ ] Export raporundaki `Durumlar`, `Ciktiya alinmama nedenleri`, `Bulunan hassas veri turleri`
+      satırlarındaki sayılar ve varsa `Yol/icerik uyusmazligi` sayıları. Dosya listeleri ve
+      kimlikler hariç.
+- [ ] `golden-real-adim1\generic-acik.json` ve `generic-acik.md`
+- [ ] Bayrak açıkken maskelenmeyen ama maskelenmesi gerektiğini düşündüğünüz bir ad gördüyseniz,
+      **değerini değil** yalnızca türünü yazın (ör. "iki parçalı Türkçe kod adı").
 
 ---
 
