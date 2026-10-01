@@ -83,7 +83,10 @@ def client(db_session):
 def test_health(client):
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    body = resp.json()
+    assert body["status"] == "ok"
+    # Faz 2a: calisan kodun surum durumu da gorunur (bkz. app/core/build_info.py).
+    assert body["build"]["state"] in {"ok", "no_stamp"} and "build_message" not in body
 
 
 @pytest.mark.parametrize('branch', ['feature-java-check', 'main'])

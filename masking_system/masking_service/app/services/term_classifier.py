@@ -21,6 +21,8 @@ import keyword
 import sys
 from dataclasses import dataclass
 
+from app.services.identifier_parts import normalized_parts
+
 _MIN_TERM_LENGTH = 3
 
 _COMMON_WORDS_EN = {
@@ -145,3 +147,88 @@ def is_generic_code_token(value: str) -> bool:
         # kimlik, hesap no) ayirt edicidir.
         return len(normalized) < 6
     return classify_term(normalized).status != "ok"
+
+
+# --- Generic bilesik ad (SCAN_GENERIC_COMPOUND_FILTER, Faz 2a) ----------------
+# Bilesik bir identifier'in (UserService, KayitSorguServisi, getMusteriListesi)
+# TUM parcalari bu kumelerdeyse ad generic sayilir. Kume yalnizca programlama
+# ekleri, fiiller ve teknik terimlerden olusur; genel isim/sifat (kara, yel,
+# mavi, yildiz...) EKLENMEZ - kod adlari bu tur kelimelerden olusabilir
+# (KARAYEL). Turkce ekli bicimler (servisi, listesi) ayrica yazilir;
+# karsilastirma Turkce karakterleri ASCII'ye katlayarak yapilir.
+_GENERIC_PARTS_EN = {
+    # ekler / roller
+    "controller", "repository", "repo", "impl", "manager", "handler", "factory", "dto", "dao", "entity",
+    "util", "utils", "helper", "helpers", "mapper", "adapter", "request", "response", "exception", "error",
+    "builder", "provider", "base", "abstract", "validator", "converter", "parser", "reader", "writer",
+    "listener", "event", "job", "task", "scheduler", "filter", "interceptor", "configuration", "properties",
+    "settings", "context", "session", "cache", "queue", "message", "notification", "model", "view", "page",
+    "form", "component", "detail", "details", "summary", "record", "entry", "query", "command", "gateway",
+    "proxy", "rest", "endpoint", "resource", "spec", "mock", "stub", "wrapper", "processor", "engine",
+    "store", "registry", "facade", "bean", "vo", "id", "no", "num", "number", "count",
+    "total", "by", "all", "new", "old", "info", "list", "map", "set", "get", "is", "has", "to",
+    # fiiller
+    "find", "save", "add", "remove", "create", "update", "delete", "fetch", "load", "read", "write", "send",
+    "check", "validate", "convert", "parse", "build", "init", "handle", "process", "search", "sync",
+}
+_GENERIC_PARTS_TR = {
+    # teknik terimler (yalin + iyelik ekli bicimler)
+    "servis", "servisi", "islem", "islemi", "islemleri", "kayit", "kaydi", "kayitlari", "sorgu", "sorgusu",
+    "liste", "listesi", "bilgi", "bilgisi", "bilgileri", "istek", "istegi", "yanit", "yaniti", "cevap",
+    "cevabi", "hata", "hatasi", "durum", "durumu", "tip", "tipi", "tur", "turu", "kod", "kodu", "no", "numara",
+    "numarasi", "ad", "adi", "isim", "ismi", "yonetici", "yoneticisi", "yonetim", "yonetimi", "kullanici",
+    "kullanicisi", "veri", "verisi", "tablo", "tablosu", "alan", "alani", "deger", "degeri", "parametre",
+    "parametresi", "ayar", "ayari", "ayarlari", "kural", "kurali", "rapor", "raporu", "dosya", "dosyasi",
+    "klasor", "dizin", "yol", "yolu", "adres", "adresi", "baglanti", "baglantisi", "oturum", "oturumu",
+    "yetki", "yetkisi", "rol", "rolu", "grup", "grubu", "sayfa", "sayfasi", "ekran", "ekrani", "mesaj",
+    "mesaji", "bildirim", "bildirimi", "olay", "olayi", "gorev", "gorevi", "kuyruk", "kuyrugu", "onbellek",
+    "gecmis", "gecmisi", "tarih", "tarihi", "zaman", "sure", "suresi", "sayi", "sayisi", "sayac", "toplam",
+    "adet", "miktar", "tutar", "oran", "orani", "detay", "detayi", "ozet", "ozeti", "sonuc", "sonucu",
+    "cikti", "ciktisi", "girdi", "girdisi", "model", "modeli", "varlik", "depo", "deposu", "denetleyici",
+    "yardimci", "arac", "araci", "istemci", "istemcisi", "sunucu", "sunucusu", "arayuz", "arayuzu", "sinif",
+    "sinifi", "nesne", "nesnesi", "modul", "modulu", "paket", "paketi", "test", "testi", "ornek", "ornegi",
+    "sablon", "sablonu", "tanim", "tanimi", "aciklama", "aciklamasi", "baslik", "basligi", "icerik",
+    "icerigi", "metin", "metni", "anahtar", "anahtari", "kimlik", "kimligi", "sifre", "sifresi", "giris",
+    "cikis", "dogrulama", "dogrulamasi", "kontrol", "kontrolu", "yapilandirma", "kategori", "kategorisi",
+    # fiiller (kok ve yaygin bicimler)
+    "getir", "kaydet", "sil", "guncelle", "ekle", "bul", "al", "ver", "olustur", "oku", "yaz", "gonder",
+    "dogrula", "hesapla", "listele", "ara", "sorgula", "sec", "cevir", "donustur", "temizle", "baslat",
+    "durdur", "calistir", "yukle", "indir", "ata", "onayla", "reddet", "kapat", "ac", "iptal", "getirme",
+    "kaydetme", "silme", "guncelleme", "ekleme", "bulma", "olusturma", "okuma", "yazma", "gonderme",
+}
+_TR_ASCII = str.maketrans("çğıöşüâîû", "cgiosuaiu")
+
+
+def _fold_tr(text: str) -> str:
+    return text.casefold().replace("i̇", "i").translate(_TR_ASCII)
+
+
+_GENERIC_PARTS_FOLDED = {_fold_tr(w) for w in _GENERIC_PARTS_EN | _GENERIC_PARTS_TR} | {
+    _fold_tr(w) for w in _COMMON_WORDS | _CODE_KEYWORDS_FOLDED
+}
+
+
+def _is_generic_part(part: str) -> bool:
+    if part.isdigit():
+        return len(part) < 6
+    return _fold_tr(part) in _GENERIC_PARTS_FOLDED
+
+
+def is_generic_compound(value: str) -> bool:
+    """True: bosluksuz, en az iki parcali bir identifier'in TUM parcalari generic.
+
+    `UserService`, `KayitSorguServisi` -> True; `PoseidonGatewayClient`,
+    `KaraKartalServisi` -> False (en az bir parca genel kelime degil).
+    Yalnizca sezgisel kaynaklarin (LLM, llm_audit, Presidio NER) bulgularina
+    uygulanir; sozluk/alias/runtime terimleri bu kontrolden gecmez.
+    """
+    normalized = (value or "").strip()
+    if not normalized or any(ch.isspace() for ch in normalized):
+        return False
+    parts = normalized_parts(normalized)
+    return len(parts) >= 2 and all(_is_generic_part(part) for part in parts)
+
+
+def is_generic_heuristic_value(value: str, *, compound: bool) -> bool:
+    """Sezgisel bulgu filtresi: mevcut tek parca kontrolu + (bayrakla) bilesik ad kurali."""
+    return is_generic_code_token(value) or (compound and is_generic_compound(value))

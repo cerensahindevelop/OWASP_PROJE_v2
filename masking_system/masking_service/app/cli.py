@@ -341,5 +341,22 @@ def rapor_detay(run_id: int = typer.Option(..., "--run-id")) -> None:
             typer.echo(f"[{e.created_at}] {e.action:9s} {e.file_path}  {e.detail or ''}")
 
 
+# Log/rapordaki "maskeli yol#kimlik" etiketini DB'deki kaynak yola esler
+# (yalnizca yerel operator ekranina yazar; bkz. app/services/log_refs.py).
+@app.command("dosya-kimligi")
+def dosya_kimligi(
+    run_id: int = typer.Option(..., "--run-id"),
+    kimlik: str = typer.Option(..., "--id", help="Etiketteki '#' sonrasi 12 haneli kimlik"),
+) -> None:
+    """Log/rapordaki kisa dosya kimligini bu calismanin kaynak yoluna esler."""
+    with session_scope() as db:
+        paths = reporting.find_file_by_ref(db, run_id, kimlik)
+    if not paths:
+        typer.secho("Bu kimlikle eslesen dosya kaydi bulunamadi.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+    for path in paths:
+        typer.echo(path)
+
+
 if __name__ == "__main__":
     app()

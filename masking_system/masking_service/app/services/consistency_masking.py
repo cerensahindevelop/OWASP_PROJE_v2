@@ -20,7 +20,8 @@ import unicodedata
 
 from app.db.models import ValueMapping
 from app.services.rule_engine import JSON_BARE_INTEGER_RE, Match, PLACEHOLDER_RE, RuleSpec
-from app.services.term_classifier import is_generic_code_token
+from app.core.config import settings
+from app.services.term_classifier import is_generic_heuristic_value
 from app.services.token_boundary_validator import TokenBoundaryValidator
 from app.services.string_literal_index import StringLiteralIndex
 
@@ -56,7 +57,7 @@ class SensitiveValueEntry:
 
 _DETERMINISTIC_PATTERN_TYPES = {"regex", "parametric", "presidio"}
 # Presidio'nun regex + checksum/format dogrulamali yerlesik tipleri.
-_PRESIDIO_STRUCTURED_TYPES = {"EMAIL_ADDRESS", "IP_ADDRESS", "CREDIT_CARD", "IBAN_CODE", "CRYPTO"}
+PRESIDIO_STRUCTURED_TYPES = {"EMAIL_ADDRESS", "IP_ADDRESS", "CREDIT_CARD", "IBAN_CODE", "CRYPTO"}
 _WEAK_MIN_LENGTH = 4
 _PERSON_NAME_RE = re.compile(r"[^\W\d_][^\W\d_'’.-]*(?:\s+[^\W\d_][^\W\d_'’.-]*)+")
 
@@ -78,7 +79,8 @@ def _weak_value_ok(value: str, *, allow_numeric_id: bool = False) -> bool:
         return False
     if not any(ch.isalpha() for ch in stripped):
         return False
-    return not is_generic_code_token(stripped)
+    # Bayrak acikken bilesik generic adlar (UserService) da yayilmaz.
+    return not is_generic_heuristic_value(stripped, compound=settings.scan.generic_compound_filter)
 
 
 def registry_authority(original_value: str, source: str, match: Match | None = None) -> str | None:
@@ -87,7 +89,8 @@ def registry_authority(original_value: str, source: str, match: Match | None = N
     - Deterministik kaynaklar (sozluk/kurumsal terim/ogrenilmis karar, regex ve
       secret kurallari, parametrik proje/sicil/branch, ozel Presidio kurallari,
       checksum'li Presidio tipleri): harf/rakam iceriyorsa otorite.
-    - Yuksek guvenli LLM bulgulari ve Presidio PERSON (ad soyad biciminde):
+    - Yuksek guvenli LLM bulgulari, denetim alintilari (llm_audit) ve
+      Presidio PERSON (ad soyad biciminde):
       bicim kapisindan (>=4 karakter, harf iceren, salt sayi olmayan, genel
       kelime/anahtar kelime olmayan) gecerse 'weak'.
     - Diger her sey (Presidio ORGANIZATION/DATE_TIME/NRP/LOCATION/
@@ -103,7 +106,7 @@ def registry_authority(original_value: str, source: str, match: Match | None = N
     if source == "dictionary" or pattern_type in _DETERMINISTIC_PATTERN_TYPES:
         return "authoritative"
     if source == "katman2_presidio":
-        if entity_type in _PRESIDIO_STRUCTURED_TYPES:
+        if entity_type in PRESIDIO_STRUCTURED_TYPES:
             return "authoritative"
         if entity_type == "PERSON" and _PERSON_NAME_RE.fullmatch(value.strip()) and _weak_value_ok(value):
             return "weak"
@@ -113,6 +116,10 @@ def registry_authority(original_value: str, source: str, match: Match | None = N
         if confidence == "yuksek" and _weak_value_ok(value, allow_numeric_id=True):
             return "weak"
         return None
+    if source == "llm_audit":
+        # Denetim alintisi dogrulanmis bir LLM ciktisidir: en fazla sezgisel
+        # ('weak') yayilir, asla otorite olmaz (LLM09).
+        return "weak" if _weak_value_ok(value, allow_numeric_id=True) else None
     return None
 
 

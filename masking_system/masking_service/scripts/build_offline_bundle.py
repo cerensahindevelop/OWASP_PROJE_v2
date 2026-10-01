@@ -104,6 +104,10 @@ def copy_project_source(output: Path) -> None:
         shutil.copy2(SERVICE / filename, destination / filename)
     for filename in (".env.example", "README.md"):
         shutil.copy2(SERVICE.parent / filename, output / "source" / filename)
+    # Surum damgasi: intranette git yok; backend ve preflight karisik surumu
+    # bu damgayla yakalar (bkz. app/core/build_info.py).
+    subprocess.run([sys.executable, str(SERVICE / "scripts" / "write_build_stamp.py"),
+                    "--app-dir", str(destination / "app")], check=True)
     shutil.copy2(SERVICE / "scripts" / "OFFLINE_INSTALL.md", output / "README.md")
 
 

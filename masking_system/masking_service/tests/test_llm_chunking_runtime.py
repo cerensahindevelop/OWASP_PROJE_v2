@@ -10,6 +10,7 @@ import pytest
 from app.services import audit_reviewer, llm_recognizer
 from app.services.llm_detector import LLMDetector
 from app.services.llm_runtime import LLMScanMetrics, llm_file_context
+from app.services.log_refs import log_file_label
 
 
 def settings(**kw):
@@ -124,17 +125,23 @@ def test_detection_and_audit_jobs_share_request_limit_and_log_usage(monkeypatch,
         return response(audit=payload['response_format']['json_schema']['name']=='denetim_semasi')
     monkeypatch.setattr(llm_recognizer, 'call_vllm', fake)
     monkeypatch.setattr(audit_reviewer, 'call_vllm', fake)
+    async def detect():
+        # Faz 2a (kural 7): log kaynak yolu degil "maskeli yol#kimlik" etiketini yazar.
+        with log_file_label('mask/detect.txt#00000000d01e'):
+            return await LLMDetector(settings()).detect('PRIVATE_CONTENT', {'file_path': 'detect.txt'})
     async def run():
-        with llm_file_context('audit.txt'):
+        with llm_file_context('audit.txt'), log_file_label('mask/audit.txt#00000000a0d1'):
             return await asyncio.gather(
-                LLMDetector(settings()).detect('PRIVATE_CONTENT', {'file_path': 'detect.txt'}),
+                detect(),
                 audit_reviewer.audit_masked_text('PRIVATE_CONTENT', settings()),
                 audit_reviewer.audit_masked_text('PRIVATE_CONTENT', settings()),
             )
     with caplog.at_level(logging.INFO, logger='uvicorn.error.llm'):
         asyncio.run(run())
     assert peak == 1
-    assert 'file=\'audit.txt\'' in caplog.text and 'file=\'detect.txt\'' in caplog.text
+    assert "file='mask/audit.txt#00000000a0d1'" in caplog.text
+    assert "file='mask/detect.txt#00000000d01e'" in caplog.text
+    assert "file='audit.txt'" not in caplog.text and "file='detect.txt'" not in caplog.text
     assert 'requests=1' in caplog.text and 'prompt_tokens=101' in caplog.text
     assert 'PRIVATE_CONTENT' not in caplog.text
 

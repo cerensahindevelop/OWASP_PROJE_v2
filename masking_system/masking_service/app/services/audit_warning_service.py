@@ -48,6 +48,7 @@ from app.services.audit_reviewer import (
     audit_masked_text, audit_record_key, decode_audit_record, encode_audit_record,
 )
 from app.services.llm_runtime import llm_file_context
+from app.services.log_refs import file_label, file_ref, log_file_label
 from app.services.audit_warning_details import describe_audit_warning
 from app.services.file_type import write_text_preserving_encoding
 from app.services.learned_decisions import LearnedDecisionPolicy, covered_by_values, remember_decision
@@ -445,7 +446,8 @@ class AuditWarningService:
                 logger.info("llm_audit_record_reused warning_id=%s findings=%d", warning.id, len(verdict.findings))
         if verdict is None:
             try:
-                with llm_file_context(warning.file_path):
+                label = file_label(warning.output_path, file_ref(run.context_id, run.id, warning.file_path))
+                with llm_file_context(warning.file_path), log_file_label(label):
                     verdict = await audit_masked_text(content, settings.vllm)
             except LLMRecognitionError as exc:
                 return f"AI güvenlik doğrulaması tamamlanamadı: {exc}"

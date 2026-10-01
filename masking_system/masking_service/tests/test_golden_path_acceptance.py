@@ -105,9 +105,20 @@ def test_pom_group_id_points_to_existing_package_directory(golden_run):
 
 # --- Faz 3 kabul kriterleri ----------------------------------------------------
 
+def _require_path_term_files_published(run) -> None:
+    """On kosul: yolunda maskelenmesi gereken terim gecen kaynak dosyalarin hepsi
+    ciktida (READY). Aksi halde yol testleri bos kumeye karsi gecer: dosya
+    karantinadaysa yolu ciktida hic olmaz ve kriter sinanmamis olur."""
+    terms = [t.casefold() for t in run["manifest"]["yol_beklentileri"]["yolda_gecmemeli"]]
+    sources = [p.relative_to(run["source"]).as_posix() for p in run["source"].rglob("*") if p.is_file()]
+    missing = [rel for rel in sources if any(t in rel.casefold() for t in terms) and rel not in _ready(run)]
+    assert missing == [], ("yol terimi iceren dosya ciktida degil; test sinanamaz", missing)
+
+
 @FAZ3
 def test_content_masked_terms_never_appear_in_output_paths(golden_run):
     """Yeni degismez kural: iceride maskelenen terim yolda da maskelenir."""
+    _require_path_term_files_published(golden_run)
     leaking = [(path, term) for path in golden_run["paths"]
                for term in golden_run["manifest"]["yol_beklentileri"]["yolda_gecmemeli"]
                if term.casefold() in path.casefold()]
@@ -117,6 +128,7 @@ def test_content_masked_terms_never_appear_in_output_paths(golden_run):
 @FAZ3
 def test_path_masks_preserve_naming_style(golden_run):
     """PoseidonGatewayClient.java -> Mask<..>GatewayClient.java; karayel/poseidon -> mask<..>."""
+    _require_path_term_files_published(golden_run)
     style = {name: re.compile(pattern) for name, pattern in golden_run["manifest"]["yol_beklentileri"]["stil"].items()}
     java_files = [path for path in golden_run["paths"] if path.endswith(".java")]
     source_names = {p.name for p in golden_run["source"].rglob("*.java")}
@@ -129,6 +141,7 @@ def test_path_masks_preserve_naming_style(golden_run):
 
 @FAZ3
 def test_java_public_class_matches_file_name(golden_run):
+    _require_path_term_files_published(golden_run)
     mismatched = []
     for path in golden_run["paths"]:
         if path.endswith(".java"):
@@ -141,6 +154,7 @@ def test_java_public_class_matches_file_name(golden_run):
 
 @FAZ3
 def test_java_package_matches_directory(golden_run):
+    _require_path_term_files_published(golden_run)
     java_root = golden_run["manifest"]["java_source_root"].split("/", 1)[1]
     mismatched = []
     for path in golden_run["paths"]:
@@ -160,9 +174,23 @@ def test_masked_java_project_compiles(golden_run):
     assert compiled["durum"] == "basarili" and compiled["eksik_java_dosyasi"] == 0, compiled
 
 
-@FAZ3
 def test_report_and_logs_do_not_contain_original_paths(golden_run):
-    terms = golden_run["manifest"]["yol_beklentileri"]["yolda_gecmemeli"]
-    for name, text in (("rapor", golden_run["report"]["rapor_metni"]), ("log", golden_run["log"])):
-        found = [term for term in terms if term.casefold() in text.casefold()]
-        assert found == [], (name, found)
+    """Faz 2a (K1/7): log ve raporda KAYNAK yol gecmez; dosya "maskeli yol#kimlik"
+    ile anilir. Yol maskelemesinin bugun kapsadigi (sozluk) terimler hicbir
+    yerde gecmez. LLM kaynakli `poseidon`'un maskeli yolda kalmasi ayri kabul
+    testinin konusudur (test_content_masked_terms_never_appear_in_output_paths)."""
+    manifest = golden_run["manifest"]
+    path_terms = [t for t in manifest["yol_beklentileri"]["yolda_gecmemeli"]
+                  if any(e["kaynak"] == "dictionary" and e["value"].casefold() == t.casefold()
+                         for e in manifest["sensitive"])]
+    assert path_terms, "sozluk kaynakli yol terimi yok; test anlamsizlasir"
+    source_paths = [p.relative_to(golden_run["source"]).as_posix()
+                    for p in golden_run["source"].rglob("*") if p.is_file()]
+    masked_source_paths = [rel for rel in source_paths if any(t.casefold() in rel.casefold() for t in path_terms)]
+    assert masked_source_paths
+    report, log = golden_run["report"]["rapor_metni"], golden_run["log"]
+    assert log and re.search(r"llm_request .*file='[^']+#[0-9a-f]{12}'", log)
+    for name, text in (("rapor", report), ("log", log)):
+        assert [rel for rel in masked_source_paths if rel in text] == [], name
+        assert [t for t in path_terms if t.casefold() in text.casefold()] == [], name
+    assert "<gizlendi>" not in report.split("Kaynak:", 1)[1].split("\n", 1)[0]

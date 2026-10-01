@@ -8,8 +8,11 @@ Komutlar PowerShell'dir ve `C:\masking\masking_service` klasöründe çalıştı
 kurulum yolunuz farklıysa uyarlayın.
 
 **Asla paylaşmayın:** `.env`, `masking.db`, maskeli çıktı klasörü, kaynak dosyalar, backend
-logunun ham satırları. Faz 2a'ya kadar loglar orijinal dosya yollarını içerir (kural 7); loglardan
-yalnızca aşağıda belirtilen **sayıları** getirin.
+logunun ham satırları. Faz 2a'dan itibaren loglar ve export raporu kaynak yol yerine
+`maskeli/yol#<12 hex>` yazar (kural 7). Ancak maskeli yolda LLM kaynaklı terimler Faz 3'e kadar açık
+kalabilir. Bu yüzden loglardan yine yalnızca aşağıda belirtilen **sayıları** getirin. Bir dosya
+kimliğinin hangi kaynak dosya olduğunu yalnızca sunucuda görebilirsiniz:
+`.venv\Scripts\python.exe -m app.cli dosya-kimligi --run-id <N> --id <12 hex>`.
 
 Aşağıdaki "Getirin" maddeleri bu çalışmayı yürüten oturuma geri getirilecek çıktılardır.
 
@@ -18,6 +21,12 @@ Aşağıdaki "Getirin" maddeleri bu çalışmayı yürüten oturuma geri getiril
 ## Adım 0 — Tek commit'ten dağıtım ve preflight
 
 1. Dağıtılacak commit'i not edin (GitHub'daki dal veya PR'ın son commit'i).
+   Paketi git'in olduğu makinede hazırlarken sürüm damgasını üretin. `build_offline_bundle.py`
+   bunu otomatik yapar; yalnızca klasör kopyalıyorsanız elle çalıştırın:
+   ```powershell
+   .venv\Scripts\python.exe scripts\write_build_stamp.py
+   ```
+   Bu komut `app\BUILD_STAMP.json` dosyasını yazar (commit + `app\` dosyalarının özetleri).
 2. Bu commit'ten şunları **eksiksiz** kopyalayın (seçili dosya değil, klasörün tamamı):
    - `masking_service\app\`
    - `masking_service\alembic\`
@@ -32,15 +41,27 @@ Aşağıdaki "Getirin" maddeleri bu çalışmayı yürüten oturuma geri getiril
    ```powershell
    .venv\Scripts\python.exe -m uvicorn api_app:app --host 127.0.0.1 --port 8001 *>&1 | Tee-Object -FilePath ..\backend-olcum.log
    ```
+   Açılışta logda `build state=... commit=...` satırı görünür. `state=mismatch` ise backend açılır
+   ama dışa aktarma 503 hatasıyla reddedilir. `app\` klasörünü aynı paketten yeniden kopyalayın.
+   Kod kopyalanıp backend yeniden başlatılmadıysa da dışa aktarma reddedilir.
 5. Preflight:
    ```powershell
    .venv\Scripts\python.exe scripts\check_llm_preflight.py
+   if ($LASTEXITCODE -ne 0) { Write-Host "PREFLIGHT BASARISIZ" }
+   Invoke-RestMethod http://127.0.0.1:8001/health | ConvertTo-Json -Depth 4
    ```
+   Preflight artık önce sürüm tutarlılığını kontrol eder (app modüllerini import etmeden):
+   - `build state=... commit=...` ve `PASS|FAIL stage=build_stamp`
+   - `PASS|FAIL stage=signature_consistency checked_calls=N`: modüller arası çağrı/imza uyumu.
+     Uyumsuzlukta `FAIL stage=signature_consistency caller=app/...:satir callee=... reason=...`
+     yazar. TypeError olayının deseni budur.
 
 **Getirin:**
-- [ ] Dağıtılan commit kimliği
-- [ ] `check_llm_preflight.py` çıktısının son satırları (`RESULT=...`). `FAIL` varsa `FAIL ... frames=`
-      satırı. Kurulum yollarını gizleyebilirsiniz.
+- [ ] Dağıtılan commit kimliği ve preflight'taki `build state=...` satırı
+- [ ] `check_llm_preflight.py` çıktısındaki tüm `PASS`/`FAIL`/`WARN` satırları ve `RESULT=...`.
+      `FAIL` varsa `FAIL ... frames=` ya da `FAIL stage=signature_consistency ...` satırı.
+      Kurulum yollarını gizleyebilirsiniz.
+- [ ] `/health` çıktısındaki `build` alanı
 - [ ] `python --version` çıktısı
 
 `RESULT=OFFLINE_OK` gelmeden sonraki adıma geçmeyin.
@@ -73,7 +94,8 @@ Aşağıdaki "Getirin" maddeleri bu çalışmayı yürüten oturuma geri getiril
 **Getirin:**
 - [ ] `failed_check_summary.py` çıktısının tamamı
 - [ ] Export raporundaki `Durumlar`, `Ciktiya alinmama nedenleri` ve `LLM kullanimi` satırları.
-      Altlarındaki dosya listelerini getirmeyin.
+      Altlarındaki dosya listelerini getirmeyin. Varsa `Yol/icerik uyusmazligi` satırındaki iki sayı
+      (dosya ve terim; kimlikleri getirmeyin). `failed_check_summary.py` de bu sayıları yazar.
 - [ ] Log sayıları (4 sayı)
 - [ ] `golden-real-adim1\once.json` ve `once.md`. İçerik sentetik, paylaşılabilir.
 - [ ] Kullanılan `VLLM_*` ayarları: yalnızca anahtar ve değer. `VLLM_API_KEY` hariç.

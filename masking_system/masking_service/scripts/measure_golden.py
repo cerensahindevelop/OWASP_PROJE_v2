@@ -322,6 +322,8 @@ def _one_run(manifest: dict, source: Path, work: Path, index: int) -> dict:
         "disarida_kalan_dosya": blocked,
         "disarida_kalan_orani": round(blocked / scanned, 3),
         "nedene_gore": report.blocked_by_check,
+        "yol_icerik_uyusmazligi": {"dosya": len(report.path_content_mismatch),
+                                   "terim": sum(report.path_content_mismatch.values())},
         "dosya_durumlari": {o.relative_path: (o.failed_check.value if o.failed_check else o.final_state)
                             for o in sorted(report.outcomes, key=lambda o: o.relative_path)},
         "llm": report.llm_usage_summary,
@@ -400,6 +402,8 @@ def to_markdown(result: dict) -> str:
     row("Onay kuyrugu orani", lambda r: f"{r['onay_kuyrugu_orani']:.0%} ({r['onay_kuyrugu_dosya']})")
     row("Ciktidan disarida kalan orani", lambda r: f"{r['disarida_kalan_orani']:.0%} ({r['disarida_kalan_dosya']})")
     row("Nedene gore", lambda r: ", ".join(f"{k}={v}" for k, v in r["nedene_gore"].items()) or "-")
+    row("Yol/icerik uyusmazligi (olcum)", lambda r: "{dosya} dosya / {terim} terim".format(
+        **r.get("yol_icerik_uyusmazligi", {"dosya": "-", "terim": "-"})))
     row("LLM istek (dosya basina)", lambda r: f"{r['llm'].get('requests', 0)} ({r['llm'].get('requests_per_file', 0)})"
         if r["llm"] else "-")
     row("Dosya basina LLM sn p50/p95", lambda r: f"{r['llm']['llm_seconds_p50']}/{r['llm']['llm_seconds_p95']}"

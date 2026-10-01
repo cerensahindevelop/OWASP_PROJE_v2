@@ -1,13 +1,14 @@
 # Devam notu — LLM rolünün daraltılması ve onay kuyruğunun azaltılması
 
-Bu dosya, çalışmayı yeni bir sohbette sürdürecek asistan için yazıldı. Bir önceki sohbet
-1 Ekim 2026'da Faz 1'in sonunda kapandı. **Sıradaki iş: Faz 2a planını yazmak ve kullanıcının
-onayını beklemek** (bkz. bölüm 7). Kod yazmadan önce plan onayı alınmalı.
+Bu dosya, çalışmayı yeni bir sohbette sürdürecek asistan için yazıldı. Faz 0–1 1 Ekim 2026'da
+`claude/confident-edison-8uggpa` dalında tamamlandı ve merge edildi (PR #10). **Faz 2a aynı gün
+`claude/blissful-mccarthy-7qtl2x` dalında tamamlandı**; rapor:
+`diagnostics/faz2a-20261001/RAPOR.md`. Sıradaki iş: kullanıcının Faz 2a raporundaki onay
+noktalarını (test uyarlamaları, Türkçe generic liste, açık sorular) yanıtlaması ve intranet
+verisi; ardından Faz 2b planı (bkz. bölüm 4 ve 9).
 
-Dal: `claude/confident-edison-8uggpa` (repo `cerensahindevelop/OWASP_PROJE_v2`, hedef `main`).
-Bu dalda `main`'e açılmış bir PR var; kullanıcı inceleyip merge edecek. Yeni işe başlamadan
-önce PR'ın merge edilip edilmediğini kontrol edin. Merge edildiyse dal güncel `main`'den yeniden
-başlatılır.
+Yeni işe başlamadan önce Faz 2a dalının merge edilip edilmediğini kontrol edin. Merge edildiyse
+yeni iş güncel `main`'den açılan yeni bir dalda yapılır.
 
 ---
 
@@ -69,8 +70,9 @@ kullanıcıya sor.
    tasarım kararlarıdır; bunlara dokunma.
 7. Mevcut testleri silme veya gevşetme. Bir test yeni davranışla çelişiyorsa nedenini açıkla ve
    kullanıcıya sor.
-8. **(Güncel hali)** Her mantıklı adım için ayrı, açıklayıcı bir commit at. Push yalnızca kendi
-   dalına (`claude/confident-edison-8uggpa`) yapılabilir ve her faz sonunda yapılır. `main`'e
+8. **(Güncel hali)** Her mantıklı adım için ayrı, açıklayıcı bir commit at. Push yalnızca o
+   oturuma ayrılan kendi dalına yapılabilir (Faz 2a: `claude/blissful-mccarthy-7qtl2x`) ve her
+   faz sonunda yapılır. `main`'e
    veya başka bir dala push yok, force push yok. PR açılabilir ama merge edilmez; merge'ü
    kullanıcı yapar.
 9. **(K1 ile eklendi)** Bir dosyanın içeriğinde maskelenen her terim, o dosyanın ve üst
@@ -146,6 +148,27 @@ Faz 0–1 sonunda test takımı:
 
 ---
 
+### Faz 2a — tamamlandı (`claude/blissful-mccarthy-7qtl2x`)
+
+Ayrıntı ve commit listesi: `diagnostics/faz2a-20261001/RAPOR.md`. Kısaca:
+- a. LLM09: denetim alıntıları `llm_audit`, sezgisel, registry'de en fazla `weak`.
+  İnceleme ekranı (insan onayı) `dictionary` kalır.
+- b. Log ve rapor `maskeli/yol#<12 hex>` yazar (`app/services/log_refs.py`,
+  `app.cli dosya-kimligi`). Kök klasörler yol maskelemesinden geçer.
+- c. `yol_icerik_uyusmazligi`: `FailedCheck` içinde "yalnızca raporlanan" bölümde,
+  `REPORT_ONLY_CHECKS`. `ExportReport.path_content_mismatch` alanı var.
+- Ortak ayrıştırıcı: `app/services/identifier_parts.py` (Faz 3 bunu kullanacak).
+- d. `SCAN_GENERIC_COMPOUND_FILTER` (varsayılan kapalı). Türkçe liste kullanıcı incelemesinde.
+- e. `app/BUILD_STAMP.json` (`scripts/write_build_stamp.py`). Damga yoksa uyarı. Uyuşmazlıkta ya
+  da yeniden başlatılmamış backend'de export 503. `/health` alanı. Preflight'ta `build_stamp` ve
+  saf AST `signature_consistency` aşamaları.
+
+Önemli sonuç: altın kümede onay kuyruğu %9'dan %36'ya çıktı. Neden: denetim alıntıları artık
+identifier'a genişletilemiyor. `weak` yayılmasının payı 0. Canary sızıntısı 0.
+
+Test takımı: **1533 passed, 1 skipped, 5 xfailed** (3.11.15 ve 3.14.7). Kural 7 kabul testi
+geçiyor. Faz 3 yol testlerine "yol terimli dosyalar READY" ön koşulu eklendi.
+
 ## 5. Alınan kararlar
 
 - **K1 — LLM kaynaklı terimler dosya yoluna yansıtılır.** Koşullar:
@@ -187,7 +210,7 @@ Faz 0–1 sonunda test takımı:
 
 ## 6. Faz 2'nin bölünmesi
 
-- **Faz 2a** (gerçek veriye bağlı değil; sıradaki iş):
+- **Faz 2a** (gerçek veriye bağlı değil; TAMAMLANDI, bkz. bölüm 4):
   - a. LLM09 düzeltmesi
   - b. log ve raporda kaynak yol yerine maskeli yol + kısa dosya kimliği
   - c. `yol_icerik_uyusmazligi` ölçümü (yalnızca raporlama)
