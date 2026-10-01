@@ -107,10 +107,10 @@ def test_runtime_sicil_is_masked_in_output_paths_and_content(golden_run):
     """Sicil (calisma zamani parametresi) yolda ve icerikte maskelenir; alembic
     seed'indeki personnel_no/sicil_no uyusmazliginin regresyon testi."""
     sicil = next(e["value"] for e in golden_run["manifest"]["sensitive"] if e["kaynak"] == "runtime")
-    source_rel = f"docs/ekip/{sicil}/devir-notu.md"
+    source_rel = f"docs/ekip/{sicil}/notlar.md"
     assert source_rel in _ready(golden_run)
     assert [path for path in golden_run["paths"] if sicil.casefold() in path.casefold()] == []
-    masked = [path for path in golden_run["paths"] if path.startswith("docs/ekip/") and path.endswith("/devir-notu.md")]
+    masked = [path for path in golden_run["paths"] if path.startswith("docs/ekip/") and path.endswith("/notlar.md")]
     assert len(masked) == 1 and "mask_personel_no_" in masked[0]
     text = (golden_run["output"] / masked[0]).read_text(encoding="utf-8")
     assert sicil not in text and "mask_personel_no_" in text

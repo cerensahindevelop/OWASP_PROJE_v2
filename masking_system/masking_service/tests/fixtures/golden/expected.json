@@ -131,7 +131,7 @@
     "korunacak_yol_parcalari": ["src", "main", "java", "com", "acme", "musteri", "resources", "db",
                                 "Musteri.java", "MusteriController.java", "MusteriRepository.java",
                                 "MusteriService.java", "UserService.java", "application.properties",
-                                "musteri.json", "schema.sql", "README.md", "docs", "ekip", "devir-notu.md"],
+                                "musteri.json", "schema.sql", "README.md", "docs", "ekip", "notlar.md"],
     "stil": {
       "PoseidonGatewayClient.java": "^Mask[A-Z0-9][A-Za-z0-9]*GatewayClient\\.java$",
       "karayel": "^mask[A-Z0-9][A-Za-z0-9]*$",
