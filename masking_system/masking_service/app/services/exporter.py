@@ -44,7 +44,8 @@ from app.services.consistency_masking import (
 )
 from app.services.exclude_admin import load_active_exclude_specs
 from app.services.export_report_formatter import _RULE_DISPLAY_NAMES, format_export_report
-from app.services.failed_checks import UNKNOWN_FAILED_CHECK, FailedCheck, failed_check_label
+from app.services.failed_checks import REPORT_ONLY_CHECKS, UNKNOWN_FAILED_CHECK, FailedCheck, failed_check_label
+from app.services.identifier_parts import contains_term
 from app.services.file_classifier import ignored_directory_reason, is_opaque_binary_filename
 from app.services.file_pipeline import ReadStatus, describe_file_error, read_scanned_file
 from app.services.file_type import peek_classify, write_text_preserving_encoding
@@ -142,6 +143,8 @@ class FileOutcome:
     failed_check: FailedCheck | None = None
 
     def __post_init__(self) -> None:
+        if self.failed_check in REPORT_ONLY_CHECKS:
+            raise ValueError(f"{self.failed_check} yalnizca raporlanir, dosyayi alikoyan kontrol degildir")
         if self.final_state is not None:
             return
         if self.status in {"masked", "copied_text_no_match", "scan_only_clean"}:
@@ -229,6 +232,10 @@ class ExportReport:
     # yazar (kok klasor adi siklikla proje/kod adi icerir).
     display_source_path: str | None = None
     display_target_path: str | None = None
+    # Yalnizca olcum (kural 9, Faz 2a): yayinlanan dosyalarda icerikte
+    # maskelenen terimin maskeli yolda acik kaldigi dosya etiketi -> terim
+    # sayisi. Dosya engellenmez; bkz. _measure_path_content_mismatch.
+    path_content_mismatch: dict[str, int] = field(default_factory=dict)
 
     # Rapora/loga yazilacak dosya etiketi; bilinmiyorsa kaynak yol degil sabit metin.
     def file_label(self, relative_path: str) -> str:
@@ -2037,6 +2044,49 @@ def _finalize_file(
     )
 
 
+# Yol/icerik uyusmazligi olcumunde dikkate alinan en kisa deger (harf/rakam);
+# daha kisa degerler (orn. "01") rastgele yol parcalariyla cakisip olcumu bozar.
+_PATH_CONTENT_MIN_CHARS = 3
+
+
+# Kural 9 olcumu (Faz 2a, YALNIZCA RAPOR): yayinlanacak her metin dosyasinin
+# SON icerigindeki yer tutucularin orijinal degerleri, dosyanin maskeli
+# yolunda (dosya + ust dizinler) parca sinirinda aranir. Dosya engellenmez,
+# FileOutcome.failed_check degismez; AuditLog'a yalnizca sayi yazilir (deger
+# yok), rapora yalnizca dosya kimligi (maskeli yolun kendisi terimi icerir).
+def _measure_path_content_mismatch(
+    db: Session, run_ctx: MaskingRunContext, report: ExportReport, output_files: list, max_inline_size: int,
+) -> None:
+    for output_file in output_files:
+        if output_file.outcome.final_state != "READY" or not output_file.path.is_file():
+            continue
+        try:
+            text, _encoding, error = _read_consistency_target(
+                output_file.path, max_inline_size, preferred_encoding=output_file.encoding,
+            )
+            if text is None or error is not None:
+                continue
+            masked_path = (output_file.masked_relative_path or output_file.source_relative_path).as_posix()
+            # Yoldaki yer tutucularin kendi parcalari (mask, kurumsal, ...) terimle karismasin.
+            path_text = PLACEHOLDER_RE.sub("/", masked_path)
+            values = {
+                original for token, original in _placeholder_reverse_map(db, run_ctx, text).items()
+                if original != token and sum(ch.isalnum() for ch in original) >= _PATH_CONTENT_MIN_CHARS
+            }
+            open_terms = sum(1 for value in values if contains_term(path_text, value))
+        except Exception as exc:
+            # Olcum export sonucunu asla etkilemez; istisna metni loglanmaz.
+            db.add(AuditLog(run_id=run_ctx.run_id, file_path=output_file.outcome.relative_path, action="skipped",
+                            detail=f"path_content_check=error error_type={type(exc).__name__}"))
+            continue
+        if open_terms:
+            report.path_content_mismatch[report.file_label(output_file.outcome.relative_path)] = open_terms
+            db.add(AuditLog(
+                run_id=run_ctx.run_id, file_path=output_file.outcome.relative_path, action="skipped",
+                detail=f"path_content_check check={FailedCheck.YOL_ICERIK_UYUSMAZLIGI} terms={open_terms}",
+            ))
+
+
 # Rapor metnindeki kok klasor (kaynak/hedef): dosya yollariyla AYNI yol
 # maskelemesinden gecer; kok klasor adi siklikla proje/kod adi icerir
 # (kural 7). Maskeleme basarisiz olur ya da maskeli kokte aktif terim kalirsa
@@ -2937,6 +2987,7 @@ async def export_project(
         _run_scan_only_final_verification(
             db, run_ctx, consistency_registry, scan_only_output_files, report, max_inline_size,
         )
+        _measure_path_content_mismatch(db, run_ctx, report, output_files, max_inline_size)
 
         # Finalize (chmod + manifest kaydi): bu noktaya kadar dosya butun
         # icerik dogrulamalarindan (syntax/round-trip/consistency/audit)

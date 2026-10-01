@@ -44,6 +44,10 @@ class FailedCheck(StrEnum):
     COK_SATIRLI_ALINTI = "cok_satirli_alinti"
     UZUN_ALINTI = "uzun_alinti"
     BEKLENMEYEN = "beklenmeyen"
+    # --- Yalnizca raporlanan, dosyayi ALIKOYMAYAN olcumler (REPORT_ONLY_CHECKS) ---
+    # Faz 2a: icerikte maskelenen terim maskeli yolda acik (kural 9). Faz 3'te
+    # engelleyici olacak; DB metni sabit kalsin diye kod simdiden burada.
+    YOL_ICERIK_UYUSMAZLIGI = "yol_icerik_uyusmazligi"
 
 
 # Kodun kullaniciya gosterilen Turkce aciklamasi (rapor kirilimi ve insan
@@ -78,7 +82,12 @@ FAILED_CHECK_LABELS: dict[FailedCheck, str] = {
     FailedCheck.COK_SATIRLI_ALINTI: "alıntı birden fazla satıra yayılıyor",
     FailedCheck.UZUN_ALINTI: "alıntı izin verilen uzunluktan uzun",
     FailedCheck.BEKLENMEYEN: "beklenmeyen",
+    FailedCheck.YOL_ICERIK_UYUSMAZLIGI: "içerikte maskelenen terim yolda açık (yalnızca ölçüm)",
 }
+
+# Dosyayi ciktidan alikoymayan, yalnizca raporlanan kodlar: FileOutcome.
+# failed_check'e yazilmaz, blocked_by_check'te sayilmaz.
+REPORT_ONLY_CHECKS: frozenset[FailedCheck] = frozenset({FailedCheck.YOL_ICERIK_UYUSMAZLIGI})
 
 # Kod kaydi olmayan eski sonuclar/uyarilar rapor kiriliminda bu anahtarla sayilir.
 UNKNOWN_FAILED_CHECK = "bilinmiyor"

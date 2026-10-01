@@ -144,6 +144,16 @@ def format_export_report(report: "ExportReport") -> str:
             + (f", basarisiz tarama {llm_usage['failed_scans']}" if llm_usage["failed_scans"] else "")
         )
 
+    if report.path_content_mismatch:
+        # Yalnizca kimlik yazilir: maskeli yol, acik kalan terimin kendisini icerir.
+        refs = sorted("#" + label.rsplit("#", 1)[-1] for label in report.path_content_mismatch)
+        lines.append("")
+        lines.append(
+            f"  Yol/icerik uyusmazligi (yalnizca olcum, dosyalar engellenmedi): "
+            f"{len(refs)} dosya, {sum(report.path_content_mismatch.values())} terim "
+            f"icerikte maskeli ama yolda acik; dosya kimlikleri: {', '.join(refs)}"
+        )
+
     if report.validation_warnings:
         lines.append("")
         lines.append("  SOZDIZIMI DOGRULAMA UYARILARI:")

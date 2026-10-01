@@ -103,7 +103,16 @@ def summarize(db: sqlite3.Connection, run_id: int) -> dict:
         "SELECT COUNT(DISTINCT dosya_yolu) FROM denetim_kaydi WHERE calisma_id=? AND detay LIKE 'auto_remediated %'",
         (run_id,),
     ).fetchone()[0]
+    # Yalnizca olcum (Faz 2a, kural 9): dosyayi engellemez, ayri sayilir.
+    mismatch_files = mismatch_terms = 0
+    for (detail,) in db.execute(
+        "SELECT detay FROM denetim_kaydi WHERE calisma_id=? AND detay LIKE 'path_content_check check=%'",
+        (run_id,),
+    ):
+        mismatch_files += 1
+        mismatch_terms += int(detail.rsplit("terms=", 1)[1].split()[0])
     return {
+        "yol_icerik_uyusmazligi": {"dosya": mismatch_files, "terim": mismatch_terms},
         "uyarili_dosya": len(first_by_file),
         "nedene_gore": dict(sorted(by_check.items(), key=lambda item: (-item[1], item[0]))),
         "hata_siniflari": error_classes,
@@ -145,6 +154,9 @@ def main() -> int:
         print("Otomatik duzeltme basarisizlik nedeni: "
               + ", ".join(f"{k}={v}" for k, v in sorted(summary["otomatik_duzeltme_basarisiz"].items())))
     print(f"Otomatik duzeltilip yayinlanan dosya: {summary['otomatik_duzeltilen_dosya']}")
+    mismatch = summary["yol_icerik_uyusmazligi"]
+    print(f"Yol/icerik uyusmazligi (yalnizca olcum, yayinlanan dosya): dosya={mismatch['dosya']} "
+          f"terim={mismatch['terim']}")
     return 0
 
 
