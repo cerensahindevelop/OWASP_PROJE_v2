@@ -260,22 +260,9 @@ def get_or_create_mapping(
     return mapping, True
 
 
-# Klasor/dosya yolundaki aktif kurumsal terim/alias ve runtime kimliklerini,
-# icerik maskelemesiyle AYNI matcher/oncelik/mapping kayitlarini kullanarak
-# maskeler. Genel secret/IP vb. regex'ler yollarda calistirilmaz: yol kapsami
-# kurumsal kimlik ile proje/sicil/branch degerleriyle sinirlidir.
-def mask_relative_path(
-    db: Session,
-    context: MaskingContext,
-    relative_path: Path,
-    runtime_params: dict[str, str],
-    rules: list[RuleSpec] | None = None,
-    mapping_cache: MappingCache | None = None,
-    *,
-    run_id: int | None = None,
-) -> tuple[Path, list[ValueMapping]]:
-    rules = rules if rules is not None else load_active_rules(db)
-
+# Yol maskelemesinde calisan kurallar: aktif kurumsal terim/alias ve degeri
+# verilmis runtime kimlikleri. Genel secret/IP vb. regex'ler yollarda calismaz.
+def _path_rules(rules: list[RuleSpec], runtime_params: dict[str, str]) -> list[RuleSpec]:
     def _is_path_rule(rule: RuleSpec) -> bool:
         if is_corporate_rule(rule.rule_name):
             return True
@@ -293,11 +280,45 @@ def mask_relative_path(
             return False
         return True
 
-    path_rules = [
-        rule
-        for rule in rules
-        if _is_path_rule(rule)
-    ]
+    return [rule for rule in rules if _is_path_rule(rule)]
+
+
+# Yalnizca GORUNTULEME icin (rapor metnindeki kok klasor, baslik kimlikleri):
+# yol maskelemesiyle ayni kurallar ve eslestirici, ama DB'ye HICBIR SEY yazmaz
+# (esleme/sayac yok - ciktidaki yer tutucu numaralari etkilenmez). Eslesen
+# kisim `<onek>_*` olur; geri alinabilir olmasi gerekmez.
+def mask_display_path(text: str, runtime_params: dict[str, str], rules: list[RuleSpec]) -> str:
+    path_rules = _path_rules(rules, runtime_params)
+    if not path_rules or not text:
+        return text
+    candidates, _already_masked = find_matches(path_rules, text, runtime_params)
+    resolved, _conflicts = OverlapResolver().resolve([
+        DetectionResult(deger=text[m.start:m.end], tip=m.rule.category, guven_seviyesi="yuksek",
+                        kaynak_motor="dictionary", start=m.start, end=m.end, rule=m.rule)
+        for m in candidates if m.start < m.end
+    ])
+    masked = text
+    for result in sorted(resolved, key=lambda r: r.start, reverse=True):
+        masked = masked[:result.start] + f"{result.rule.placeholder_prefix or 'mask'}_*" + masked[result.end:]
+    return masked
+
+
+# Klasor/dosya yolundaki aktif kurumsal terim/alias ve runtime kimliklerini,
+# icerik maskelemesiyle AYNI matcher/oncelik/mapping kayitlarini kullanarak
+# maskeler. Genel secret/IP vb. regex'ler yollarda calistirilmaz: yol kapsami
+# kurumsal kimlik ile proje/sicil/branch degerleriyle sinirlidir.
+def mask_relative_path(
+    db: Session,
+    context: MaskingContext,
+    relative_path: Path,
+    runtime_params: dict[str, str],
+    rules: list[RuleSpec] | None = None,
+    mapping_cache: MappingCache | None = None,
+    *,
+    run_id: int | None = None,
+) -> tuple[Path, list[ValueMapping]]:
+    rules = rules if rules is not None else load_active_rules(db)
+    path_rules = _path_rules(rules, runtime_params)
     if not path_rules:
         return relative_path, []
 

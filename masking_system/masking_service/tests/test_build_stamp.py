@@ -20,23 +20,6 @@ SERVICE = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def client(db_session):
-    from fastapi.testclient import TestClient
-
-    from app.api.deps import get_request_db
-    from app.api.main import app
-
-    def _override():
-        yield db_session
-
-    app.dependency_overrides[get_request_db] = _override
-    try:
-        yield TestClient(app, raise_server_exceptions=False)
-    finally:
-        app.dependency_overrides.pop(get_request_db, None)
-
-
-@pytest.fixture
 def app_copy(tmp_path):
     target = tmp_path / "app"
     shutil.copytree(SERVICE / "app", target, ignore=shutil.ignore_patterns("__pycache__", build_info.STAMP_NAME))
@@ -64,7 +47,9 @@ def test_stamp_detects_changed_missing_and_extra_files(app_copy):
     assert status.state == "mismatch" and status.blocks_export
     assert status.mismatched == ("services/llm_runtime.py",)
     assert status.missing == ("services/audit_reviewer.py",)
-    assert "services/llm_runtime.py" in status.message() and "abc123" in status.message()
+    # Ayrinti yalnizca log satirinda; kullaniciya/API'ye giden mesajda yok.
+    assert "services/llm_runtime.py" in status.detail_line() and "abc123" in status.detail_line()
+    assert "llm_runtime" not in status.message() and "abc123" not in status.message()
     assert status.line().isascii()
 
 
@@ -97,20 +82,25 @@ def test_export_is_refused_when_code_changed_after_start(monkeypatch):
         ensure_export_allowed()
 
 
-def test_api_rejects_export_and_health_reports_mismatch(client, monkeypatch, tmp_path):
+def test_api_rejects_export_and_health_reports_only_degraded(api_client, monkeypatch, tmp_path, caplog):
+    import logging
+
     from app.api import main as api_main
 
     monkeypatch.setattr(build_info, "current_build_status", _mismatch)
     monkeypatch.setattr(api_main, "current_build_status", _mismatch)
     payload = dict(source_path=str(tmp_path), target_path=str(tmp_path / "out"), project_name="p",
                    sicil_no="s", branch_name="b", initiated_by="s")
-    for url in ("/export", "/export/jobs"):
-        resp = client.post(url, json=payload)
-        assert resp.status_code == 503, (url, resp.text)
-        assert "karisik surumde" in resp.json()["message"]
-    health = client.get("/health")
+    with caplog.at_level(logging.WARNING, logger="uvicorn.error.build"):
+        for url in ("/export", "/export/jobs"):
+            resp = api_client.post(url, json=payload)
+            assert resp.status_code == 503, (url, resp.text)
+            assert "karisik surumde" in resp.json()["message"]
+            assert "llm_runtime" not in resp.text and "abc123" not in resp.text
+    assert "export_refused build_mismatch commit=abc123 files=services/llm_runtime.py" in caplog.text
+    health = api_client.get("/health")
     assert health.status_code == 200
-    assert health.json()["build"]["state"] == "mismatch" and "app/ klasörünün" in health.json()["build_message"]
+    assert health.json() == {"status": "degraded"}
 
 
 def test_export_project_itself_refuses_on_mismatch(db_session, monkeypatch, tmp_path):

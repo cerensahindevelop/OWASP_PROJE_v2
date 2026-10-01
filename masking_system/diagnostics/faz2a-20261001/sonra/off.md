@@ -15,7 +15,7 @@
 | Geri alma bayt farki | 0/11 | 0/11 | 0/11 |
 | javac | basarili (hata 0, eksik java 0) | basarili (hata 0, eksik java 0) | basarili (hata 0, eksik java 0) |
 
-Determinizm: Jaccard (min) 1.0, maskelenen deger sayilari [20, 20, 20], birebir ayni cikti dosyasi 11/11.
+Determinizm: Jaccard (min) 1.0, maskelenen deger sayilari [19, 19, 19], birebir ayni cikti dosyasi 11/11.
 
 ## Dosya bazinda sonuc (kosu 1)
 

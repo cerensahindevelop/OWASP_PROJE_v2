@@ -57,7 +57,14 @@ def test_report_roots_and_files_are_masked_and_ids_resolve(db_session, tmp_path,
 
     text = report.summary_text()
     assert "zeferan" not in text.casefold()
-    assert "Kaynak: " in text and "<gizlendi>" not in text
+    # Rapor basligindaki proje/sicil de ayni yol maskelemesinden gecer.
+    assert "pytest-logref" not in text and "P-LOGREF" not in text
+    assert report.display_project_name and report.display_project_name.startswith("mask_")
+    # Maskeli hali ham degeri hala iceriyorsa (generic 'main' ya da kurali
+    # eslesmeyen sicil) baslikta fail-closed gizlenir.
+    assert "Branch: <gizlendi>" in text and "main" not in text.split("Branch:", 1)[1].split("\n", 1)[0]
+    kaynak_line = text.split("Kaynak:", 1)[1].split("\n", 1)[0]
+    assert "<gizlendi>" not in kaynak_line and "mask_" in kaynak_line
     label = report.file_label("zeferan/app.py")
     assert "zeferan" not in label.casefold() and label.endswith("/app.py#" + label.rsplit("#", 1)[1])
     ref = label.rsplit("#", 1)[1]
@@ -75,3 +82,72 @@ def test_detection_failure_keeps_source_path_out_of_logs_and_report(db_session, 
 
     assert "zeferan" not in caplog.text.casefold()
     assert "zeferan" not in report.summary_text().casefold()
+
+
+
+# --- Export'u durduran dogrulama hatalari (kullanici karari, Faz 2a) -----------
+# Yol cakismasi gibi hatalarin mesaji kaynak yolu ICERIR: operatorun sorunu
+# duzeltmesi icin gerekli, arayuz/CLI'ye aynen gider. Ama loga ASLA yazilmaz.
+
+def _collision_source(tmp_path):
+    source = tmp_path / "cakisma-kaynak"
+    source.mkdir()
+    # Buyuk/kucuk harf duyarsiz dosya sisteminde ayni hedefe dusen iki yol.
+    (source / "Zebrafin.txt").write_text("a\n", encoding="utf-8")
+    (source / "zebrafin.txt").write_text("b\n", encoding="utf-8")
+    return source
+
+
+def _collision_payload(tmp_path, monkeypatch, project):
+    from app.api.routers import export as router_module
+
+    monkeypatch.setattr(router_module, "ensure_path_allowed", lambda *a, **kw: None)
+    return dict(source_path=str(_collision_source(tmp_path)), target_path=str(tmp_path / "cakisma-cikti"),
+                project_name=project, sicil_no="P-LOGCHECK", branch_name="main", initiated_by="P-LOGCHECK")
+
+
+def _assert_not_logged(caplog) -> None:
+    assert "zebrafin" not in caplog.text.casefold()
+    assert all("zebrafin" not in str(record.args).casefold() for record in caplog.records)
+
+
+def test_validation_error_with_source_path_reaches_operator_but_not_logs(api_client, monkeypatch, tmp_path, caplog):
+    payload = _collision_payload(tmp_path, monkeypatch, "pytest-logcheck")
+    with caplog.at_level(logging.DEBUG):
+        resp = api_client.post("/export", json=payload)
+    assert resp.status_code == 400
+    assert "zebrafin.txt" in resp.json()["message"].casefold()
+    _assert_not_logged(caplog)
+
+
+def test_validation_error_in_background_job_is_not_logged(api_client, monkeypatch, tmp_path, caplog):
+    import time
+
+    payload = _collision_payload(tmp_path, monkeypatch, "pytest-logcheck-job")
+    with caplog.at_level(logging.DEBUG):
+        job_id = api_client.post("/export/jobs", json=payload).json()["job_id"]
+        for _ in range(400):
+            job = api_client.get(f"/export/jobs/{job_id}").json()
+            if job["status"] != "running":
+                break
+            time.sleep(0.05)
+    assert job["status"] == "failed" and "zebrafin.txt" in job["error_message"].casefold()
+    _assert_not_logged(caplog)
+
+
+def test_display_masking_writes_no_mappings(db_session, tmp_path, monkeypatch):
+    # Rapor basligi ve kok klasor maskelemesi yalnizca goruntulemedir: DB'ye
+    # esleme yazmaz, sayac tuketmez (ciktidaki yer tutucu numaralari degismez).
+    from app.db.models import ValueMapping
+    from app.services.mapping_service import load_active_rules, mask_display_path
+
+    commit_term_upload(db_session, filename="terms.txt", content=b"Zeferan\n", category="pytest_logref")
+    monkeypatch.setattr(exporter, "build_orchestrator", lambda *a, **k: _NoDetections())
+    monkeypatch.setattr(exporter, "audit_masked_text", lambda *a, **k: asyncio.sleep(0, result=exporter.AuditVerdict(risky=False)))
+
+    report = _export(db_session, tmp_path, {"notlar.txt": "icerikte hassas deger yok\n"}, "zeferan-pytest-logref")
+
+    assert db_session.query(ValueMapping).filter_by(run_id=report.run_id).count() == 0
+    assert "zeferan" not in report.summary_text().casefold()
+    params = {"project_name": "pytest-logref", "sicil_no": "P-LOGREF", "branch_name": "main"}
+    assert mask_display_path("a/Zeferan-pytest-logref", params, load_active_rules(db_session)).startswith("a/mask_")

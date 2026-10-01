@@ -26,12 +26,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import subprocess
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 from app.core.exceptions import BuildMismatchError
+
+logger = logging.getLogger("uvicorn.error.build")
 
 STAMP_NAME = "BUILD_STAMP.json"
 STAMP_VERSION = 1
@@ -60,20 +63,20 @@ class BuildStatus:
             f"mismatched={len(self.mismatched)} missing={len(self.missing)} extra={len(self.extra)}"
         )
 
+    # Kullaniciya/API'ye giden mesaj: modul adi ve commit YOK (uc noktalar kimlik
+    # dogrulamasiz). Ayrintilar yalnizca loga ve preflight ciktisina yazilir.
     def message(self) -> str:
-        names = ", ".join((*self.mismatched, *self.missing)[:10])
         return (
             "Calisan kod karisik surumde: app/ klasorundeki dosyalar surum damgasiyla "
-            f"(BUILD_STAMP.json, commit {self.commit}) uyusmuyor ({names}). Dışa aktarma "
-            "güvenlik nedeniyle durduruldu. app/ klasörünün tamamını aynı paketten yeniden "
-            "kopyalayıp backend'i yeniden başlatın, ardından scripts/check_llm_preflight.py çalıştırın."
+            "(BUILD_STAMP.json) uyusmuyor. Dışa aktarma güvenlik nedeniyle durduruldu. "
+            "app/ klasörünün tamamını aynı paketten yeniden kopyalayıp backend'i yeniden "
+            "başlatın; ayrıntılar için backend logu ve scripts/check_llm_preflight.py çıktısına bakın."
         )
 
-    def as_dict(self) -> dict:
-        return {
-            "state": self.state, "commit": self.commit, "source": self.source, "tree": self.tree,
-            "mismatched": list(self.mismatched), "missing": list(self.missing), "extra": list(self.extra),
-        }
+    def detail_line(self) -> str:
+        names = ",".join((*self.mismatched, *self.missing)[:20])
+        return f"build_mismatch commit={self.commit} files={names}"
+
 
 
 def file_digest(path: Path) -> str:
@@ -153,8 +156,12 @@ def current_build_status() -> BuildStatus:
 def ensure_export_allowed() -> None:
     started = current_build_status()
     if started.blocks_export:
+        logger.warning("export_refused %s", started.detail_line())
         raise BuildMismatchError(started.message())
-    if tree_digest(tree_digests(APP_DIR)) != started.tree:
+    current_tree = tree_digest(tree_digests(APP_DIR))
+    if current_tree != started.tree:
+        logger.warning("export_refused reason=code_changed_since_start started_tree=%s current_tree=%s",
+                       started.tree, current_tree)
         raise BuildMismatchError(
             "app/ klasöründeki kod backend başladıktan sonra değişti; çalışan süreç eski kodu "
             "kullanıyor. Dışa aktarma güvenlik nedeniyle durduruldu: backend'i yeniden başlatın."

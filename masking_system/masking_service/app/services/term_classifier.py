@@ -175,12 +175,12 @@ _GENERIC_PARTS_TR = {
     # teknik terimler (yalin + iyelik ekli bicimler)
     "servis", "servisi", "islem", "islemi", "islemleri", "kayit", "kaydi", "kayitlari", "sorgu", "sorgusu",
     "liste", "listesi", "bilgi", "bilgisi", "bilgileri", "istek", "istegi", "yanit", "yaniti", "cevap",
-    "cevabi", "hata", "hatasi", "durum", "durumu", "tip", "tipi", "tur", "turu", "kod", "kodu", "no", "numara",
-    "numarasi", "ad", "adi", "isim", "ismi", "yonetici", "yoneticisi", "yonetim", "yonetimi", "kullanici",
+    "cevabi", "hata", "hatasi", "durum", "durumu", "tipi", "turu", "kodu", "numara",
+    "numarasi", "isim", "ismi", "yonetici", "yoneticisi", "yonetim", "yonetimi", "kullanici",
     "kullanicisi", "veri", "verisi", "tablo", "tablosu", "alan", "alani", "deger", "degeri", "parametre",
     "parametresi", "ayar", "ayari", "ayarlari", "kural", "kurali", "rapor", "raporu", "dosya", "dosyasi",
-    "klasor", "dizin", "yol", "yolu", "adres", "adresi", "baglanti", "baglantisi", "oturum", "oturumu",
-    "yetki", "yetkisi", "rol", "rolu", "grup", "grubu", "sayfa", "sayfasi", "ekran", "ekrani", "mesaj",
+    "klasor", "dizin", "yolu", "adres", "adresi", "baglanti", "baglantisi", "oturum", "oturumu",
+    "yetki", "yetkisi", "rolu", "grup", "grubu", "sayfa", "sayfasi", "ekran", "ekrani", "mesaj",
     "mesaji", "bildirim", "bildirimi", "olay", "olayi", "gorev", "gorevi", "kuyruk", "kuyrugu", "onbellek",
     "gecmis", "gecmisi", "tarih", "tarihi", "zaman", "sure", "suresi", "sayi", "sayisi", "sayac", "toplam",
     "adet", "miktar", "tutar", "oran", "orani", "detay", "detayi", "ozet", "ozeti", "sonuc", "sonucu",
@@ -191,9 +191,9 @@ _GENERIC_PARTS_TR = {
     "icerigi", "metin", "metni", "anahtar", "anahtari", "kimlik", "kimligi", "sifre", "sifresi", "giris",
     "cikis", "dogrulama", "dogrulamasi", "kontrol", "kontrolu", "yapilandirma", "kategori", "kategorisi",
     # fiiller (kok ve yaygin bicimler)
-    "getir", "kaydet", "sil", "guncelle", "ekle", "bul", "al", "ver", "olustur", "oku", "yaz", "gonder",
-    "dogrula", "hesapla", "listele", "ara", "sorgula", "sec", "cevir", "donustur", "temizle", "baslat",
-    "durdur", "calistir", "yukle", "indir", "ata", "onayla", "reddet", "kapat", "ac", "iptal", "getirme",
+    "getir", "kaydet", "guncelle", "ekle", "olustur", "gonder",
+    "dogrula", "hesapla", "listele", "sorgula", "cevir", "donustur", "temizle", "baslat",
+    "durdur", "calistir", "yukle", "indir", "onayla", "reddet", "kapat", "iptal", "getirme",
     "kaydetme", "silme", "guncelleme", "ekleme", "bulma", "olusturma", "okuma", "yazma", "gonderme",
 }
 _TR_ASCII = str.maketrans("çğıöşüâîû", "cgiosuaiu")
@@ -203,9 +203,14 @@ def _fold_tr(text: str) -> str:
     return text.casefold().replace("i̇", "i").translate(_TR_ASCII)
 
 
-_GENERIC_PARTS_FOLDED = {_fold_tr(w) for w in _GENERIC_PARTS_EN | _GENERIC_PARTS_TR} | {
-    _fold_tr(w) for w in _COMMON_WORDS | _CODE_KEYWORDS_FOLDED
-}
+# Turkce parcalar en az 4 harf: kisa kokler (al, ac, ara, ata, sec, ver, kod,
+# tip, ad...) kisi ve kod adlarinin parcasi olabilir. Yanlis pozitif bir onaya,
+# yanlis negatif bir sizintiya mal olur; bu yuzden kisa Turkce kokler generic
+# sayilmaz (mevcut _COMMON_WORDS_TR'den gelenler dahil).
+_MIN_TR_PART_CHARS = 4
+_GENERIC_PARTS_FOLDED = {
+    _fold_tr(w) for w in _GENERIC_PARTS_EN | _COMMON_WORDS_EN | _CODE_KEYWORDS_FOLDED
+} | {_fold_tr(w) for w in _GENERIC_PARTS_TR | _COMMON_WORDS_TR if len(_fold_tr(w)) >= _MIN_TR_PART_CHARS}
 
 
 def _is_generic_part(part: str) -> bool:

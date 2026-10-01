@@ -50,7 +50,9 @@ def format_export_report(report: "ExportReport") -> str:
     status_label = _STATUS_DISPLAY_NAMES.get(report.status, report.status)
     lines = [
         f"Export raporu - run_id={report.run_id} durum={status_label}",
-        f"  Proje: {report.project_name} | sicil: {report.sicil_no} | Branch: {report.branch_name}",
+        # Kimlik degerleri de kok klasorlerle ayni yol maskelemesinden gecmis halleriyle.
+        f"  Proje: {report.display_project_name or _HIDDEN_PATH} | sicil: "
+        f"{report.display_sicil_no or _HIDDEN_PATH} | Branch: {report.display_branch_name or _HIDDEN_PATH}",
         # Kok klasorler ve dosyalar kaynak yolla degil, maskeli yolla yazilir
         # (kural 7): rapor metni CLI'den dosyaya/loga yonlendirilebilir.
         f"  Kaynak: {report.display_source_path or _HIDDEN_PATH}",
