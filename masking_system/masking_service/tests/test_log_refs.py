@@ -82,3 +82,54 @@ def test_detection_failure_keeps_source_path_out_of_logs_and_report(db_session, 
 
     assert "zeferan" not in caplog.text.casefold()
     assert "zeferan" not in report.summary_text().casefold()
+
+
+
+# --- Export'u durduran dogrulama hatalari (kullanici karari, Faz 2a) -----------
+# Yol cakismasi gibi hatalarin mesaji kaynak yolu ICERIR: operatorun sorunu
+# duzeltmesi icin gerekli, arayuz/CLI'ye aynen gider. Ama loga ASLA yazilmaz.
+
+def _collision_source(tmp_path):
+    source = tmp_path / "cakisma-kaynak"
+    source.mkdir()
+    # Buyuk/kucuk harf duyarsiz dosya sisteminde ayni hedefe dusen iki yol.
+    (source / "Zebrafin.txt").write_text("a\n", encoding="utf-8")
+    (source / "zebrafin.txt").write_text("b\n", encoding="utf-8")
+    return source
+
+
+def _collision_payload(tmp_path, monkeypatch, project):
+    from app.api.routers import export as router_module
+
+    monkeypatch.setattr(router_module, "ensure_path_allowed", lambda *a, **kw: None)
+    return dict(source_path=str(_collision_source(tmp_path)), target_path=str(tmp_path / "cakisma-cikti"),
+                project_name=project, sicil_no="P-LOGCHECK", branch_name="main", initiated_by="P-LOGCHECK")
+
+
+def _assert_not_logged(caplog) -> None:
+    assert "zebrafin" not in caplog.text.casefold()
+    assert all("zebrafin" not in str(record.args).casefold() for record in caplog.records)
+
+
+def test_validation_error_with_source_path_reaches_operator_but_not_logs(api_client, monkeypatch, tmp_path, caplog):
+    payload = _collision_payload(tmp_path, monkeypatch, "pytest-logcheck")
+    with caplog.at_level(logging.DEBUG):
+        resp = api_client.post("/export", json=payload)
+    assert resp.status_code == 400
+    assert "zebrafin.txt" in resp.json()["message"].casefold()
+    _assert_not_logged(caplog)
+
+
+def test_validation_error_in_background_job_is_not_logged(api_client, monkeypatch, tmp_path, caplog):
+    import time
+
+    payload = _collision_payload(tmp_path, monkeypatch, "pytest-logcheck-job")
+    with caplog.at_level(logging.DEBUG):
+        job_id = api_client.post("/export/jobs", json=payload).json()["job_id"]
+        for _ in range(400):
+            job = api_client.get(f"/export/jobs/{job_id}").json()
+            if job["status"] != "running":
+                break
+            time.sleep(0.05)
+    assert job["status"] == "failed" and "zebrafin.txt" in job["error_message"].casefold()
+    _assert_not_logged(caplog)

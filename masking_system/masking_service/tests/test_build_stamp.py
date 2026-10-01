@@ -20,23 +20,6 @@ SERVICE = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def client(db_session):
-    from fastapi.testclient import TestClient
-
-    from app.api.deps import get_request_db
-    from app.api.main import app
-
-    def _override():
-        yield db_session
-
-    app.dependency_overrides[get_request_db] = _override
-    try:
-        yield TestClient(app, raise_server_exceptions=False)
-    finally:
-        app.dependency_overrides.pop(get_request_db, None)
-
-
-@pytest.fixture
 def app_copy(tmp_path):
     target = tmp_path / "app"
     shutil.copytree(SERVICE / "app", target, ignore=shutil.ignore_patterns("__pycache__", build_info.STAMP_NAME))
@@ -99,7 +82,7 @@ def test_export_is_refused_when_code_changed_after_start(monkeypatch):
         ensure_export_allowed()
 
 
-def test_api_rejects_export_and_health_reports_only_degraded(client, monkeypatch, tmp_path, caplog):
+def test_api_rejects_export_and_health_reports_only_degraded(api_client, monkeypatch, tmp_path, caplog):
     import logging
 
     from app.api import main as api_main
@@ -110,12 +93,12 @@ def test_api_rejects_export_and_health_reports_only_degraded(client, monkeypatch
                    sicil_no="s", branch_name="b", initiated_by="s")
     with caplog.at_level(logging.WARNING, logger="uvicorn.error.build"):
         for url in ("/export", "/export/jobs"):
-            resp = client.post(url, json=payload)
+            resp = api_client.post(url, json=payload)
             assert resp.status_code == 503, (url, resp.text)
             assert "karisik surumde" in resp.json()["message"]
             assert "llm_runtime" not in resp.text and "abc123" not in resp.text
     assert "export_refused build_mismatch commit=abc123 files=services/llm_runtime.py" in caplog.text
-    health = client.get("/health")
+    health = api_client.get("/health")
     assert health.status_code == 200
     assert health.json() == {"status": "degraded"}
 
