@@ -1,0 +1,519 @@
+{
+  "llm_modu": "stub",
+  "stub_hata_orani": 0.02,
+  "stub_istek": 72,
+  "stub_enjekte_hata": 0,
+  "kosu_sayisi": 3,
+  "determinizm": {
+    "jaccard_min": 1.0,
+    "maskelenen_deger_sayisi": [
+      28,
+      28,
+      28
+    ],
+    "birebir_ayni_cikti_dosyasi": "9/9"
+  },
+  "kosular": [
+    {
+      "run_id": 1,
+      "durum": "completed_with_warnings",
+      "taranan_dosya": 10,
+      "hazir_dosya": 9,
+      "onay_kuyrugu_dosya": 1,
+      "onay_kuyrugu_orani": 0.1,
+      "disarida_kalan_dosya": 1,
+      "disarida_kalan_orani": 0.1,
+      "nedene_gore": {
+        "llm_denetimi": 1
+      },
+      "dosya_durumlari": {
+        "README.md": "llm_denetimi",
+        "db/schema.sql": "READY",
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/resources/application.properties": "READY",
+        "src/main/resources/musteri.json": "READY"
+      },
+      "llm": {
+        "files": 10,
+        "requests": 24,
+        "prompt_tokens": 21142,
+        "completion_tokens": 610,
+        "failed_scans": 0,
+        "scans_per_file": 2.4,
+        "requests_per_file": 2.4,
+        "llm_seconds_p50": 0.509,
+        "llm_seconds_p95": 0.838
+      },
+      "llm_dosya_basina": {
+        "README.md": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1624,
+          "completion_tokens": 93,
+          "llm_seconds": 0.2857323989996985,
+          "queue_seconds": 3.545099980328814e-05
+        },
+        "db/schema.sql": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1680,
+          "completion_tokens": 12,
+          "llm_seconds": 0.3018556170000011,
+          "queue_seconds": 0.01289302699979089
+        },
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 3120,
+          "completion_tokens": 65,
+          "llm_seconds": 0.5089332019997528,
+          "queue_seconds": 0.12551948300006188
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1901,
+          "completion_tokens": 12,
+          "llm_seconds": 0.3965152189998662,
+          "queue_seconds": 0.11943104900001345
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1658,
+          "completion_tokens": 12,
+          "llm_seconds": 0.5087276880003628,
+          "queue_seconds": 0.23199223000028724
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2978,
+          "completion_tokens": 143,
+          "llm_seconds": 0.7230899750006756,
+          "queue_seconds": 0.39475871900003767
+        },
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1792,
+          "completion_tokens": 39,
+          "llm_seconds": 0.6612580159999197,
+          "queue_seconds": 0.39378072699992117
+        },
+        "src/main/java/com/acme/karayel/musteri/UserService.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1674,
+          "completion_tokens": 40,
+          "llm_seconds": 0.7193234490000577,
+          "queue_seconds": 0.5016698170006748
+        },
+        "src/main/resources/application.properties": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2429,
+          "completion_tokens": 76,
+          "llm_seconds": 0.7753770849999455,
+          "queue_seconds": 0.37622650299999805
+        },
+        "src/main/resources/musteri.json": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2286,
+          "completion_tokens": 118,
+          "llm_seconds": 0.838488105000124,
+          "queue_seconds": 0.5288829059995805
+        }
+      },
+      "canary_sizintisi": {},
+      "terim_sizintisi": {
+        "tckimlik": {
+          "TC_KIMLIK_NO": 4,
+          "tc-kimlik": 1
+        }
+      },
+      "maskelenmemesi_gereken_ihlal": {
+        "UserService": {
+          "kaynakta": 3,
+          "ciktida": 0
+        }
+      },
+      "geri_alma": {
+        "karsilastirilan": 9,
+        "farkli": [],
+        "cozulemeyen_placeholder": 0
+      },
+      "derleme": {
+        "durum": "basarisiz",
+        "java_dosyasi": 6,
+        "beklenen_java_dosyasi": 6,
+        "eksik_java_dosyasi": 0,
+        "hata_sayisi": 2,
+        "ilk_hatalar": [
+          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
+          "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java"
+        ]
+      }
+    },
+    {
+      "run_id": 3,
+      "durum": "completed_with_warnings",
+      "taranan_dosya": 10,
+      "hazir_dosya": 9,
+      "onay_kuyrugu_dosya": 1,
+      "onay_kuyrugu_orani": 0.1,
+      "disarida_kalan_dosya": 1,
+      "disarida_kalan_orani": 0.1,
+      "nedene_gore": {
+        "llm_denetimi": 1
+      },
+      "dosya_durumlari": {
+        "README.md": "llm_denetimi",
+        "db/schema.sql": "READY",
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/resources/application.properties": "READY",
+        "src/main/resources/musteri.json": "READY"
+      },
+      "llm": {
+        "files": 10,
+        "requests": 24,
+        "prompt_tokens": 21142,
+        "completion_tokens": 610,
+        "failed_scans": 0,
+        "scans_per_file": 2.4,
+        "requests_per_file": 2.4,
+        "llm_seconds_p50": 0.54,
+        "llm_seconds_p95": 0.844
+      },
+      "llm_dosya_basina": {
+        "README.md": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1624,
+          "completion_tokens": 93,
+          "llm_seconds": 0.2538871189999554,
+          "queue_seconds": 4.3787999857158866e-05
+        },
+        "db/schema.sql": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1680,
+          "completion_tokens": 12,
+          "llm_seconds": 0.3203794139999445,
+          "queue_seconds": 0.012787538999873505
+        },
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 3120,
+          "completion_tokens": 65,
+          "llm_seconds": 0.5401945959997647,
+          "queue_seconds": 0.13819290900028136
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1901,
+          "completion_tokens": 12,
+          "llm_seconds": 0.4219548979999672,
+          "queue_seconds": 0.13411953199965865
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1658,
+          "completion_tokens": 12,
+          "llm_seconds": 0.5342349349998585,
+          "queue_seconds": 0.25715924599990103
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2978,
+          "completion_tokens": 143,
+          "llm_seconds": 0.7517658610004219,
+          "queue_seconds": 0.42236612099986814
+        },
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1792,
+          "completion_tokens": 39,
+          "llm_seconds": 0.6951836829998683,
+          "queue_seconds": 0.41523667900037253
+        },
+        "src/main/java/com/acme/karayel/musteri/UserService.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1674,
+          "completion_tokens": 40,
+          "llm_seconds": 0.6950096189998476,
+          "queue_seconds": 0.467442538999876
+        },
+        "src/main/resources/application.properties": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2429,
+          "completion_tokens": 76,
+          "llm_seconds": 0.7764842159999716,
+          "queue_seconds": 0.40270266899960916
+        },
+        "src/main/resources/musteri.json": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2286,
+          "completion_tokens": 118,
+          "llm_seconds": 0.8437464710000313,
+          "queue_seconds": 0.5130513380004231
+        }
+      },
+      "canary_sizintisi": {},
+      "terim_sizintisi": {
+        "tckimlik": {
+          "TC_KIMLIK_NO": 4,
+          "tc-kimlik": 1
+        }
+      },
+      "maskelenmemesi_gereken_ihlal": {
+        "UserService": {
+          "kaynakta": 3,
+          "ciktida": 0
+        }
+      },
+      "geri_alma": {
+        "karsilastirilan": 9,
+        "farkli": [],
+        "cozulemeyen_placeholder": 0
+      },
+      "derleme": {
+        "durum": "basarisiz",
+        "java_dosyasi": 6,
+        "beklenen_java_dosyasi": 6,
+        "eksik_java_dosyasi": 0,
+        "hata_sayisi": 2,
+        "ilk_hatalar": [
+          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
+          "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java"
+        ]
+      }
+    },
+    {
+      "run_id": 5,
+      "durum": "completed_with_warnings",
+      "taranan_dosya": 10,
+      "hazir_dosya": 9,
+      "onay_kuyrugu_dosya": 1,
+      "onay_kuyrugu_orani": 0.1,
+      "disarida_kalan_dosya": 1,
+      "disarida_kalan_orani": 0.1,
+      "nedene_gore": {
+        "llm_denetimi": 1
+      },
+      "dosya_durumlari": {
+        "README.md": "llm_denetimi",
+        "db/schema.sql": "READY",
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/resources/application.properties": "READY",
+        "src/main/resources/musteri.json": "READY"
+      },
+      "llm": {
+        "files": 10,
+        "requests": 24,
+        "prompt_tokens": 21142,
+        "completion_tokens": 610,
+        "failed_scans": 0,
+        "scans_per_file": 2.4,
+        "requests_per_file": 2.4,
+        "llm_seconds_p50": 0.521,
+        "llm_seconds_p95": 0.848
+      },
+      "llm_dosya_basina": {
+        "README.md": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1624,
+          "completion_tokens": 93,
+          "llm_seconds": 0.36986276800007545,
+          "queue_seconds": 5.313500014381134e-05
+        },
+        "db/schema.sql": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1680,
+          "completion_tokens": 12,
+          "llm_seconds": 0.4443257320003795,
+          "queue_seconds": 0.012290353999560466
+        },
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 3120,
+          "completion_tokens": 65,
+          "llm_seconds": 0.5208141449998038,
+          "queue_seconds": 0.12803243900043526
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1901,
+          "completion_tokens": 12,
+          "llm_seconds": 0.39388172400003896,
+          "queue_seconds": 0.12223222499960684
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1658,
+          "completion_tokens": 12,
+          "llm_seconds": 0.5080765680004333,
+          "queue_seconds": 0.23715791499944316
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2978,
+          "completion_tokens": 143,
+          "llm_seconds": 0.7356783519999226,
+          "queue_seconds": 0.4060191640000994
+        },
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1792,
+          "completion_tokens": 39,
+          "llm_seconds": 0.676553158999468,
+          "queue_seconds": 0.4046229910004513
+        },
+        "src/main/java/com/acme/karayel/musteri/UserService.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1674,
+          "completion_tokens": 40,
+          "llm_seconds": 0.6817638379998243,
+          "queue_seconds": 0.46054649600046105
+        },
+        "src/main/resources/application.properties": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2429,
+          "completion_tokens": 76,
+          "llm_seconds": 0.7731888169996637,
+          "queue_seconds": 0.40049880800006576
+        },
+        "src/main/resources/musteri.json": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2286,
+          "completion_tokens": 118,
+          "llm_seconds": 0.8479884240000501,
+          "queue_seconds": 0.513802496000153
+        }
+      },
+      "canary_sizintisi": {},
+      "terim_sizintisi": {
+        "tckimlik": {
+          "TC_KIMLIK_NO": 4,
+          "tc-kimlik": 1
+        }
+      },
+      "maskelenmemesi_gereken_ihlal": {
+        "UserService": {
+          "kaynakta": 3,
+          "ciktida": 0
+        }
+      },
+      "geri_alma": {
+        "karsilastirilan": 9,
+        "farkli": [],
+        "cozulemeyen_placeholder": 0
+      },
+      "derleme": {
+        "durum": "basarisiz",
+        "java_dosyasi": 6,
+        "beklenen_java_dosyasi": 6,
+        "eksik_java_dosyasi": 0,
+        "hata_sayisi": 2,
+        "ilk_hatalar": [
+          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
+          "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java"
+        ]
+      }
+    }
+  ]
+}

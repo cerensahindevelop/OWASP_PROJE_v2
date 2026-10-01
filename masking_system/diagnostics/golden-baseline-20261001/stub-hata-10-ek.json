@@ -1,0 +1,528 @@
+{
+  "llm_modu": "stub",
+  "stub_hata_orani": 0.1,
+  "stub_istek": 75,
+  "stub_enjekte_hata": 12,
+  "kosu_sayisi": 3,
+  "determinizm": {
+    "jaccard_min": 1.0,
+    "maskelenen_deger_sayisi": [
+      25,
+      25,
+      25
+    ],
+    "birebir_ayni_cikti_dosyasi": "7/7"
+  },
+  "kosular": [
+    {
+      "run_id": 1,
+      "durum": "completed_with_warnings",
+      "taranan_dosya": 10,
+      "hazir_dosya": 7,
+      "onay_kuyrugu_dosya": 3,
+      "onay_kuyrugu_orani": 0.3,
+      "disarida_kalan_dosya": 3,
+      "disarida_kalan_orani": 0.3,
+      "nedene_gore": {
+        "llm_denetimi": 2,
+        "llm_denetimi_tamamlanamadi": 1
+      },
+      "dosya_durumlari": {
+        "README.md": "llm_denetimi",
+        "db/schema.sql": "READY",
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "llm_denetimi",
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/resources/application.properties": "llm_denetimi_tamamlanamadi",
+        "src/main/resources/musteri.json": "READY"
+      },
+      "llm": {
+        "files": 10,
+        "requests": 25,
+        "prompt_tokens": 18766,
+        "completion_tokens": 530,
+        "failed_scans": 2,
+        "scans_per_file": 2.3,
+        "requests_per_file": 2.5,
+        "llm_seconds_p50": 0.491,
+        "llm_seconds_p95": 1.88
+      },
+      "llm_dosya_basina": {
+        "README.md": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1624,
+          "completion_tokens": 93,
+          "llm_seconds": 0.2797067089995835,
+          "queue_seconds": 3.2904000363487285e-05
+        },
+        "db/schema.sql": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1680,
+          "completion_tokens": 12,
+          "llm_seconds": 0.28941086599979826,
+          "queue_seconds": 0.011480255999686051
+        },
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 3120,
+          "completion_tokens": 65,
+          "llm_seconds": 0.4906087749996004,
+          "queue_seconds": 0.12441730400041706
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1901,
+          "completion_tokens": 12,
+          "llm_seconds": 0.381191014000251,
+          "queue_seconds": 0.11921625400009361
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1658,
+          "completion_tokens": 12,
+          "llm_seconds": 0.4911386170001606,
+          "queue_seconds": 0.228385709000122
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 1,
+          "requests": 4,
+          "prompt_tokens": 2063,
+          "completion_tokens": 135,
+          "llm_seconds": 1.7631173469994792,
+          "queue_seconds": 0.3930953819995011
+        },
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1792,
+          "completion_tokens": 39,
+          "llm_seconds": 0.654451348999828,
+          "queue_seconds": 0.39028220599948327
+        },
+        "src/main/java/com/acme/karayel/musteri/UserService.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1674,
+          "completion_tokens": 40,
+          "llm_seconds": 0.7157092729999022,
+          "queue_seconds": 0.4987677999997686
+        },
+        "src/main/resources/application.properties": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 1,
+          "requests": 3,
+          "prompt_tokens": 968,
+          "completion_tokens": 4,
+          "llm_seconds": 1.762172080000255,
+          "queue_seconds": 0.385892323999542
+        },
+        "src/main/resources/musteri.json": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2286,
+          "completion_tokens": 118,
+          "llm_seconds": 1.8804401009992944,
+          "queue_seconds": 1.600840160000189
+        }
+      },
+      "canary_sizintisi": {},
+      "terim_sizintisi": {
+        "tckimlik": {
+          "TC_KIMLIK_NO": 4,
+          "tc-kimlik": 1
+        }
+      },
+      "maskelenmemesi_gereken_ihlal": {
+        "UserService": {
+          "kaynakta": 1,
+          "ciktida": 0
+        }
+      },
+      "geri_alma": {
+        "karsilastirilan": 7,
+        "farkli": [],
+        "cozulemeyen_placeholder": 0
+      },
+      "derleme": {
+        "durum": "basarisiz",
+        "java_dosyasi": 5,
+        "beklenen_java_dosyasi": 6,
+        "eksik_java_dosyasi": 1,
+        "hata_sayisi": 4,
+        "ilk_hatalar": [
+          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
+          "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java",
+          "MusteriController.java:12: error: cannot find symbol",
+          "MusteriController.java:14: error: cannot find symbol"
+        ]
+      }
+    },
+    {
+      "run_id": 3,
+      "durum": "completed_with_warnings",
+      "taranan_dosya": 10,
+      "hazir_dosya": 7,
+      "onay_kuyrugu_dosya": 3,
+      "onay_kuyrugu_orani": 0.3,
+      "disarida_kalan_dosya": 3,
+      "disarida_kalan_orani": 0.3,
+      "nedene_gore": {
+        "llm_denetimi": 2,
+        "llm_denetimi_tamamlanamadi": 1
+      },
+      "dosya_durumlari": {
+        "README.md": "llm_denetimi",
+        "db/schema.sql": "READY",
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "llm_denetimi",
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/resources/application.properties": "llm_denetimi_tamamlanamadi",
+        "src/main/resources/musteri.json": "READY"
+      },
+      "llm": {
+        "files": 10,
+        "requests": 25,
+        "prompt_tokens": 18766,
+        "completion_tokens": 530,
+        "failed_scans": 2,
+        "scans_per_file": 2.3,
+        "requests_per_file": 2.5,
+        "llm_seconds_p50": 0.505,
+        "llm_seconds_p95": 1.819
+      },
+      "llm_dosya_basina": {
+        "README.md": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1624,
+          "completion_tokens": 93,
+          "llm_seconds": 0.2318827459998829,
+          "queue_seconds": 2.870700018320349e-05
+        },
+        "db/schema.sql": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1680,
+          "completion_tokens": 12,
+          "llm_seconds": 0.28992495400052576,
+          "queue_seconds": 0.011079870000230585
+        },
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 3120,
+          "completion_tokens": 65,
+          "llm_seconds": 0.5046653190001962,
+          "queue_seconds": 0.12461705999976402
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1901,
+          "completion_tokens": 12,
+          "llm_seconds": 0.38503828300008536,
+          "queue_seconds": 0.1213982260001103
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1658,
+          "completion_tokens": 12,
+          "llm_seconds": 0.49299001899998984,
+          "queue_seconds": 0.2339816610001435
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 1,
+          "requests": 4,
+          "prompt_tokens": 2063,
+          "completion_tokens": 135,
+          "llm_seconds": 1.8191410089998499,
+          "queue_seconds": 0.45209795299979305
+        },
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1792,
+          "completion_tokens": 39,
+          "llm_seconds": 0.6487853070002529,
+          "queue_seconds": 0.38698874399960914
+        },
+        "src/main/java/com/acme/karayel/musteri/UserService.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1674,
+          "completion_tokens": 40,
+          "llm_seconds": 0.7093562270001712,
+          "queue_seconds": 0.49713031900000715
+        },
+        "src/main/resources/application.properties": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 1,
+          "requests": 3,
+          "prompt_tokens": 968,
+          "completion_tokens": 4,
+          "llm_seconds": 1.6976759059998585,
+          "queue_seconds": 0.38246200900039184
+        },
+        "src/main/resources/musteri.json": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2286,
+          "completion_tokens": 118,
+          "llm_seconds": 1.811666072999742,
+          "queue_seconds": 1.5429189990004488
+        }
+      },
+      "canary_sizintisi": {},
+      "terim_sizintisi": {
+        "tckimlik": {
+          "TC_KIMLIK_NO": 4,
+          "tc-kimlik": 1
+        }
+      },
+      "maskelenmemesi_gereken_ihlal": {
+        "UserService": {
+          "kaynakta": 1,
+          "ciktida": 0
+        }
+      },
+      "geri_alma": {
+        "karsilastirilan": 7,
+        "farkli": [],
+        "cozulemeyen_placeholder": 0
+      },
+      "derleme": {
+        "durum": "basarisiz",
+        "java_dosyasi": 5,
+        "beklenen_java_dosyasi": 6,
+        "eksik_java_dosyasi": 1,
+        "hata_sayisi": 4,
+        "ilk_hatalar": [
+          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
+          "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java",
+          "MusteriController.java:12: error: cannot find symbol",
+          "MusteriController.java:14: error: cannot find symbol"
+        ]
+      }
+    },
+    {
+      "run_id": 5,
+      "durum": "completed_with_warnings",
+      "taranan_dosya": 10,
+      "hazir_dosya": 7,
+      "onay_kuyrugu_dosya": 3,
+      "onay_kuyrugu_orani": 0.3,
+      "disarida_kalan_dosya": 3,
+      "disarida_kalan_orani": 0.3,
+      "nedene_gore": {
+        "llm_denetimi": 2,
+        "llm_denetimi_tamamlanamadi": 1
+      },
+      "dosya_durumlari": {
+        "README.md": "llm_denetimi",
+        "db/schema.sql": "READY",
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "llm_denetimi",
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/resources/application.properties": "llm_denetimi_tamamlanamadi",
+        "src/main/resources/musteri.json": "READY"
+      },
+      "llm": {
+        "files": 10,
+        "requests": 25,
+        "prompt_tokens": 18766,
+        "completion_tokens": 530,
+        "failed_scans": 2,
+        "scans_per_file": 2.3,
+        "requests_per_file": 2.5,
+        "llm_seconds_p50": 0.5,
+        "llm_seconds_p95": 1.798
+      },
+      "llm_dosya_basina": {
+        "README.md": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1624,
+          "completion_tokens": 93,
+          "llm_seconds": 0.3557133769995744,
+          "queue_seconds": 3.130000004603062e-05
+        },
+        "db/schema.sql": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1680,
+          "completion_tokens": 12,
+          "llm_seconds": 0.41372611599990705,
+          "queue_seconds": 0.01117793600042205
+        },
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 3120,
+          "completion_tokens": 65,
+          "llm_seconds": 0.49560555900006875,
+          "queue_seconds": 0.12121760099944368
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1901,
+          "completion_tokens": 12,
+          "llm_seconds": 0.39134887700038234,
+          "queue_seconds": 0.1181439329998284
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1658,
+          "completion_tokens": 12,
+          "llm_seconds": 0.5001365729999634,
+          "queue_seconds": 0.22788246800018896
+        },
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 1,
+          "requests": 4,
+          "prompt_tokens": 2063,
+          "completion_tokens": 135,
+          "llm_seconds": 1.7739092439996966,
+          "queue_seconds": 0.39905275799992523
+        },
+        "src/main/java/com/acme/karayel/musteri/PoseidonGatewayClient.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1792,
+          "completion_tokens": 39,
+          "llm_seconds": 0.5932254240001384,
+          "queue_seconds": 0.3311741869997604
+        },
+        "src/main/java/com/acme/karayel/musteri/UserService.java": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 0,
+          "requests": 2,
+          "prompt_tokens": 1674,
+          "completion_tokens": 40,
+          "llm_seconds": 0.6520080350001081,
+          "queue_seconds": 0.4373025320001034
+        },
+        "src/main/resources/application.properties": {
+          "detection_scans": 1,
+          "audit_scans": 1,
+          "failed_scans": 1,
+          "requests": 3,
+          "prompt_tokens": 968,
+          "completion_tokens": 4,
+          "llm_seconds": 1.6849287099998946,
+          "queue_seconds": 0.37605184400035796
+        },
+        "src/main/resources/musteri.json": {
+          "detection_scans": 1,
+          "audit_scans": 2,
+          "failed_scans": 0,
+          "requests": 3,
+          "prompt_tokens": 2286,
+          "completion_tokens": 118,
+          "llm_seconds": 1.7980616519998875,
+          "queue_seconds": 1.533883909999986
+        }
+      },
+      "canary_sizintisi": {},
+      "terim_sizintisi": {
+        "tckimlik": {
+          "TC_KIMLIK_NO": 4,
+          "tc-kimlik": 1
+        }
+      },
+      "maskelenmemesi_gereken_ihlal": {
+        "UserService": {
+          "kaynakta": 1,
+          "ciktida": 0
+        }
+      },
+      "geri_alma": {
+        "karsilastirilan": 7,
+        "farkli": [],
+        "cozulemeyen_placeholder": 0
+      },
+      "derleme": {
+        "durum": "basarisiz",
+        "java_dosyasi": 5,
+        "beklenen_java_dosyasi": 6,
+        "eksik_java_dosyasi": 1,
+        "hata_sayisi": 4,
+        "ilk_hatalar": [
+          "PoseidonGatewayClient.java:7: error: class mask_proje_kod_adi_2 is public, should be declared in a file named mask_proje_kod_adi_2.java",
+          "UserService.java:6: error: class mask_ic_servis_adi_1 is public, should be declared in a file named mask_ic_servis_adi_1.java",
+          "MusteriController.java:12: error: cannot find symbol",
+          "MusteriController.java:14: error: cannot find symbol"
+        ]
+      }
+    }
+  ]
+}
