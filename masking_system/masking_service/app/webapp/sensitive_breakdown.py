@@ -12,14 +12,15 @@ import re
 from dataclasses import dataclass
 from typing import Mapping
 
+from app.services.runtime_params import RuntimeParam
+
 
 _CORPORATE_RULE_RE = re.compile(r"^kurumsal_terim_(?P<title>.+)_[0-9a-f]{12}$")
 
 _RULE_LABELS = {
-    "project_name": "Proje adı",
-    "sicil_no": "Sicil numarası",
-    "branch_name": "Branch adı",
-    "personnel_no": "Personel numarası",
+    RuntimeParam.PROJECT_NAME: "Proje adı",
+    RuntimeParam.SICIL_NO: "Sicil numarası",
+    RuntimeParam.BRANCH_NAME: "Branch adı",
     "contextual_personnel_id": "Personel / sicil bilgisi (bağlamsal)",
     "tc_kimlik_no": "T.C. kimlik numarası",
     "person_name": "Kişi adı",

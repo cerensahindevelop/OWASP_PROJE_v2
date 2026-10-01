@@ -1,0 +1,111 @@
+{
+  "llm_modu": "off",
+  "stub_hata_orani": null,
+  "stub_istek": null,
+  "stub_enjekte_hata": null,
+  "kosu_sayisi": 1,
+  "determinizm": {
+    "jaccard_min": 1.0,
+    "maskelenen_deger_sayisi": [
+      23
+    ],
+    "birebir_ayni_cikti_dosyasi": "12/12"
+  },
+  "kosular": [
+    {
+      "run_id": 1,
+      "durum": "completed_with_warnings",
+      "taranan_dosya": 12,
+      "hazir_dosya": 12,
+      "onay_kuyrugu_dosya": 0,
+      "onay_kuyrugu_orani": 0.0,
+      "disarida_kalan_dosya": 0,
+      "disarida_kalan_orani": 0.0,
+      "nedene_gore": {},
+      "yol_icerik_uyusmazligi": {
+        "dosya": 0,
+        "terim": 0
+      },
+      "dosya_durumlari": {
+        "README.md": "READY",
+        "db/schema.sql": "READY",
+        "docs/ekip/P-GOLDEN-0001/notlar.md": "READY",
+        "pom.xml": "READY",
+        "src/main/java/com/acme/karayel/musteri/Musteri.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriController.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriRepository.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/MusteriService.java": "READY",
+        "src/main/java/com/acme/karayel/musteri/UserService.java": "READY",
+        "src/main/java/com/acme/karayel/poseidon/PoseidonGatewayClient.java": "READY",
+        "src/main/resources/application.properties": "READY",
+        "src/main/resources/musteri.json": "READY"
+      },
+      "llm": {},
+      "llm_dosya_basina": {},
+      "canary_sizintisi": {
+        "canary_host_db": {
+          "cnry-db01/duz": [
+            "src/main/resources/application.properties"
+          ]
+        },
+        "canary_host_gw": {
+          "cnry-gw01/duz": [
+            "src/main/resources/application.properties"
+          ]
+        },
+        "canary_email": {
+          "hakan.yilmaz/duz": [
+            "src/main/java/com/acme/mask_kurumsal_ifade_1/musteri/Musteri.java"
+          ]
+        },
+        "sicil_kullanici": {
+          "P-GOLDEN-0001/duz": [
+            "docs/ekip/P-GOLDEN-0001/notlar.md"
+          ]
+        }
+      },
+      "terim_sizintisi": {
+        "tckimlik": {
+          "TC_KIMLIK_NO": 4,
+          "tc-kimlik": 1
+        },
+        "kod_adi_poseidon": {
+          "Poseidon": 7,
+          "poseidon": 9,
+          "PoseidonGatewayClient": 4,
+          "poseidonGatewayClient": 5
+        },
+        "kisi_ayse": {
+          "Ayse Demir": 2
+        },
+        "adres_cok_satirli": {
+          "Buyukdere Cad. No:1\nKat:7 Blok:B 34398": 1
+        }
+      },
+      "maskelenmemesi_gereken_ihlal": {
+        "Teknik sorumlu": {
+          "kaynakta": 1,
+          "ciktida": 0
+        },
+        "Veri merkezi": {
+          "kaynakta": 1,
+          "ciktida": 0
+        }
+      },
+      "geri_alma": {
+        "karsilastirilan": 12,
+        "farkli": [],
+        "cozulemeyen_placeholder": 0
+      },
+      "derleme": {
+        "durum": "basarili",
+        "java_dosyasi": 6,
+        "beklenen_java_dosyasi": 6,
+        "eksik_java_dosyasi": 0,
+        "hata_sayisi": 0,
+        "ilk_hatalar": []
+      },
+      "rapor_metni": "Export raporu - run_id=1 durum=Uyarili tamamlandi\n  Proje: golden-olcum | sicil: P-GOLDEN-0001 | Branch: golden-branch\n  Kaynak: /tmp/claude-0/-home-user-OWASP-PROJE-v2/52ec9cf4-b08e-54de-a9f9-d1747a0b2670/scratchpad/wt-nofix/masking_system/masking_service/tests/fixtures/golden/project\n  Hedef:  /tmp/mask_proje_adi_1-raxlle89/cikti_1\n\n  12 dosya tarandi -> 12 dosyada hassas veri bulunup maskelendi.\n  Durumlar: ✓ Hazır 12 | ⚠ İnceleme Gerekli 0 | ⛔ Güvenlik Karantinası 0 | ✕ Doğrulama Başarısız 0\n\n  (i) BILGI: LLM (Katman 3) bu calisma icin KAPALI (VLLM_ENABLED=false) - sadece kural/sozluk (Katman 1) ve Presidio (Katman 2) taramasi yapildi.\n\n  SOZDIZIMI DOGRULAMA UYARILARI:\n    README.md#de95da0f45a0: validation_mode=structural-only; Bu dosya turu icin parser yok; yalnizca metin/geri donus butunlugu kontrol edildi.\n    docs/ekip/P-GOLDEN-0001/notlar.md#639c4629007d: validation_mode=structural-only; Bu dosya turu icin parser yok; yalnizca metin/geri donus butunlugu kontrol edildi.\n    src/main/java/com/acme/mask_kurumsal_ifade_1/musteri/Musteri.java#355334764dc5: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/mask_kurumsal_ifade_1/musteri/MusteriController.java#59aaa6bc51f6: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/mask_kurumsal_ifade_1/musteri/MusteriRepository.java#0a399686e0c7: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/mask_kurumsal_ifade_1/musteri/MusteriService.java#ac5af85bd265: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/mask_kurumsal_ifade_1/musteri/UserService.java#dce2e807e760: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/java/com/acme/mask_kurumsal_ifade_1/poseidon/PoseidonGatewayClient.java#7c7d4648a866: validation_mode=bracket/quote-based; Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.\n    src/main/resources/application.properties#11833e0236fe: validation_mode=structural-only; Bu dosya turu icin parser yok; yalnizca metin/geri donus butunlugu kontrol edildi.\n\n  Bulunan hassas veri turleri (toplam 60 eslesme):\n    - kurumsal_terim_altin_kume_1ec062134286: 26\n    - kurumsal_terim_altin_kume_7f73a9893c23: 22\n    - llm_dynamic: 9\n    - Genel gizli bilgi (API anahtari/parola/token): 2\n    - tc_kimlik_no: 1\n"
+    }
+  ]
+}

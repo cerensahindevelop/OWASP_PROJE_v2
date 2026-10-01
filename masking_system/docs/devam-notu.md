@@ -1,14 +1,25 @@
 # Devam notu — LLM rolünün daraltılması ve onay kuyruğunun azaltılması
 
-Bu dosya, çalışmayı yeni bir sohbette sürdürecek asistan için yazıldı. Faz 0–1 1 Ekim 2026'da
-`claude/confident-edison-8uggpa` dalında tamamlandı ve merge edildi (PR #10). **Faz 2a aynı gün
-`claude/blissful-mccarthy-7qtl2x` dalında tamamlandı**; rapor:
-`diagnostics/faz2a-20261001/RAPOR.md`. Sıradaki iş: kullanıcının Faz 2a raporundaki onay
-noktalarını (test uyarlamaları, Türkçe generic liste, açık sorular) yanıtlaması ve intranet
-verisi; ardından Faz 2b planı (bkz. bölüm 4 ve 9).
+Bu dosya, çalışmayı yeni bir sohbette sürdürecek asistan için yazıldı. Son güncelleme:
+1 Ekim 2026.
 
-Yeni işe başlamadan önce Faz 2a dalının merge edilip edilmediğini kontrol edin. Merge edildiyse
-yeni iş güncel `main`'den açılan yeni bir dalda yapılır.
+**Durum özeti.**
+- Faz 0, Faz 1 ve Faz 2a tamamlandı ve `main`'de (PR #10, #11, #12).
+- Faz 2a sırasında bulunan **sicil sızıntısı** (alembic seed'inde `personnel_no`/`sicil_no`
+  kategori uyuşmazlığı) ayrı bir dalda düzeltildi: PR #13, `claude/sicil-kategori-duzeltme`.
+  Kullanıcı merge edecek. Bölüm 4 ve 6.
+- `app/db/seed_data.py` (ölü kod) aynı PR'da silindi.
+
+**Sıradaki iş.**
+1. PR #13 merge edildikten sonra kullanıcı intranette ölçüm yapacak: damgalı dağıtım, sicil
+   migrasyonu, Adım 0, 1 ve 1b (bölüm 8).
+2. Gelen gerçek `failed_check` dağılımıyla **Faz 2b planı kesinleştirilecek**. Taslak:
+   `docs/faz2b-taslak-plan.md`. Kesin plan kullanıcıya sunulup onay alınmadan kod yazılmaz.
+
+**Yeni sohbette ilk adımlar.**
+- `git fetch` ile `main`'i alın. PR #13'ün merge edilip edilmediğine bakın (bölüm 6).
+- Yeni iş, güncel `main`'den açılan yeni bir dalda yapılır. Oturumun size verdiği dal adını
+  kullanın.
 
 ---
 
@@ -71,10 +82,10 @@ kullanıcıya sor.
 7. Mevcut testleri silme veya gevşetme. Bir test yeni davranışla çelişiyorsa nedenini açıkla ve
    kullanıcıya sor.
 8. **(Güncel hali)** Her mantıklı adım için ayrı, açıklayıcı bir commit at. Push yalnızca o
-   oturuma ayrılan kendi dalına yapılabilir (Faz 2a: `claude/blissful-mccarthy-7qtl2x`) ve her
-   faz sonunda yapılır. `main`'e
-   veya başka bir dala push yok, force push yok. PR açılabilir ama merge edilmez; merge'ü
-   kullanıcı yapar.
+   oturuma ayrılan kendi dalına ya da kullanıcının açıkça istediği ayrı bir dala yapılır (örnek:
+   sicil düzeltmesi için `claude/sicil-kategori-duzeltme`). `main`'e ya da başka bir dala push
+   yok, force push yok. PR açılır ama merge edilmez; merge'ü kullanıcı yapar. Merge edilmiş bir
+   PR'ın dalına yeni iş eklenmez.
 9. **(K1 ile eklendi)** Bir dosyanın içeriğinde maskelenen her terim, o dosyanın ve üst
    dizinlerinin yolunda da maskelenmiş olmalı; sağlanamıyorsa dosya fail-closed engellenir.
    Tersi de geçerli: job sözlüğünde olmayan bir terim yolda maskelenmez. Faz 3'ten itibaren
@@ -84,7 +95,7 @@ Commit mesajlarının sonuna şu satırlar eklenir:
 
 ```
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01PNUqxPgaH8dAz5saECbHNY
+Claude-Session: <oturumun verdigi baglanti>
 ```
 
 Yeni oturumda sistem farklı bir oturum bağlantısı verirse onu kullanın.
@@ -148,39 +159,54 @@ Faz 0–1 sonunda test takımı:
 
 ---
 
-### Faz 2a — tamamlandı (`claude/blissful-mccarthy-7qtl2x`)
+### Faz 2a — tamamlandı ve merge edildi (PR #11 + #12, `claude/blissful-mccarthy-7qtl2x`)
 
-Ayrıntı ve commit listesi: `diagnostics/faz2a-20261001/RAPOR.md`. Kısaca:
-- a. LLM09: denetim alıntıları `llm_audit`, sezgisel, registry'de en fazla `weak`.
-  İnceleme ekranı (insan onayı) `dictionary` kalır.
-- b. Log ve rapor `maskeli/yol#<12 hex>` yazar (`app/services/log_refs.py`,
-  `app.cli dosya-kimligi`). Kök klasörler yol maskelemesinden geçer.
-- c. `yol_icerik_uyusmazligi`: `FailedCheck` içinde "yalnızca raporlanan" bölümde,
-  `REPORT_ONLY_CHECKS`. `ExportReport.path_content_mismatch` alanı var.
-- Ortak ayrıştırıcı: `app/services/identifier_parts.py` (Faz 3 bunu kullanacak).
-- d. `SCAN_GENERIC_COMPOUND_FILTER` (varsayılan kapalı). Türkçe liste kullanıcı incelemesinde.
-- e. `app/BUILD_STAMP.json` (`scripts/write_build_stamp.py`). Damga yoksa uyarı. Uyuşmazlıkta ya
-  da yeniden başlatılmamış backend'de export 503. `/health` alanı. Preflight'ta `build_stamp` ve
-  saf AST `signature_consistency` aşamaları.
+Ayrıntılı rapor (commit listesi, metrikler, kural kontrolleri, test uyarlamaları):
+`diagnostics/faz2a-20261001/RAPOR.md`. Onay sonrası değişiklikler raporun 8. bölümünde.
 
-Onay sonrası değişiklikler (RAPOR bölüm 8):
-- `/health` minimal
-- kısa Türkçe kökler generic listeden çıktı
-- rapor başlığında proje/sicil/branch maskeleniyor
-- kaynak yollu doğrulama hatalarının loga gitmediğine dair test
+| Madde | Ne yapıldı | Nerede |
+|---|---|---|
+| a | **LLM09:** denetim alıntıları `kaynak_motor="llm_audit"`, güven `orta`. Identifier'a genişletilmez; çakışmada sezgisel otorite; registry'de en fazla `weak`. İnceleme ekranında insanın onayladığı değerler `dictionary` kalır. | `review_masking.py`, `exporter._try_remediation`, `overlap_resolver`, `consistency_masking.registry_authority` |
+| b | Log ve export raporunda kaynak yol yerine `maskeli/yol#<12 hex>`. Kimlik job anahtarlı HMAC; sunucuda çözülür. Rapordaki Kaynak/Hedef kökleri ve proje/sicil/branch yalnızca görüntüleme için maskelenir (DB'ye eşleme yazılmaz; ham değer kalıyorsa `<gizlendi>`). | `app/services/log_refs.py`, `mapping_service.mask_display_path`, `python -m app.cli dosya-kimligi` |
+| c | `yol_icerik_uyusmazligi` yalnızca ölçülür; dosyayı engellemez. `FailedCheck` içinde ayrı "yalnızca raporlanan" bölümde, `REPORT_ONLY_CHECKS`. | `ExportReport.path_content_mismatch`, `failed_check_summary.py` |
+| – | Ortak identifier ayrıştırıcı. Faz 3 bunu kullanacak; ikinci bir ayrıştırıcı yazılmaz. | `app/services/identifier_parts.py` |
+| d | `SCAN_GENERIC_COMPOUND_FILTER`, varsayılan `false`. Tüm parçaları generic olan bileşik ad yalnızca sezgisel kaynaklarda (LLM, `llm_audit`, Presidio NER) maskelenmez. 3 harf ve daha kısa Türkçe kökler sayılmaz. | `term_classifier.is_generic_compound` |
+| e | `app/BUILD_STAMP.json`: commit + `app/` özetleri, CRLF normalize. Paketlemede üretilir, git'e girmez. Açılışta `build state=...` logu. Uyuşmazlıkta ya da yeniden başlatılmamış backend'de export 503. `/health` yalnızca `{"status": "ok"}` ya da `{"status": "degraded"}` döner. Preflight'ta `build_stamp` ve saf AST `signature_consistency` aşamaları var. | `app/core/build_info.py`, `scripts/write_build_stamp.py`, `scripts/signature_consistency.py` |
 
-PR `main`'e açıldı; merge kullanıcıda. Faz 2b taslağı: `docs/faz2b-taslak-plan.md`. Intranet
-verisi gelince kesinleşecek; dağılıma göre öncelik tablosu taslağın 3. bölümünde.
+**Önemli sonuç.**
+- Altın kümede (stub) onay kuyruğu %9'dan %36'ya çıktı.
+- Neden (a): denetim LLM'inin alıntıladığı identifier parçaları (`poseidon`, `cnry-db01`) artık
+  sözlük yetkisiyle genişletilip otomatik düzeltilmiyor. Dosyalar fail-closed olarak onaya
+  düşüyor.
+- `weak` yayılmasının bu artıştaki payı 0. Canary sızıntısı 0.
+- Azaltma Faz 2b'nin hedefi.
 
-**Açık hata (kapsam dışı, ayrı görev):** alembic seed verisindeki sicil kuralı
-`kategori="personnel_no"`, export ise `sicil_no` kullanıyor. Alembic DB'lerinde sicil
-maskelenmiyor.
+### Sicil sızıntısı düzeltmesi (PR #13, `claude/sicil-kategori-duzeltme`; merge kullanıcıda)
 
-Önemli sonuç: altın kümede onay kuyruğu %9'dan %36'ya çıktı. Neden: denetim alıntıları artık
-identifier'a genişletilemiyor. `weak` yayılmasının payı 0. Canary sızıntısı 0.
+Rapor: `diagnostics/sicil-kategori-20261001/RAPOR.md`.
 
-Test takımı: **1533 passed, 1 skipped, 5 xfailed** (3.11.15 ve 3.14.7). Kural 7 kabul testi
-geçiyor. Faz 3 yol testlerine "yol terimli dosyalar READY" ön koşulu eklendi.
+- **Sorun:** alembic seed (`9f21a6b8e4c3`) sicil kuralını `kategori='personnel_no'` ile kuruyordu.
+  Export ise `runtime_params['sicil_no']` veriyordu. Sonuç: alembic DB'lerinde sicil değeri
+  içerikte ve yolda hiç maskelenmiyordu. Kullanıcı gerçek DB'de doğruladı: etkileniyor.
+- **Migrasyon `f1c3a5e7b9d2`:** yalnızca seed imzasına birebir uyan kaydı `sicil_no` yapar.
+  - `aktif_mi` ve `oncelik` imzaya dahil değil ve değişmez (kullanıcı onayladı).
+  - id, önek `mask_personel_no` ve mevcut eşlemeler korunur.
+  - İdempotent; downgrade yalnızca düzeltilen kaydı geri çevirir.
+  - Uyuşmayan kayıt için uyarı yazar.
+- **Tek kaynak:** `app/services/runtime_params.py` (`RuntimeParam`, `build_runtime_params`).
+  Kural yönetimi bilinmeyen kategorili parametrik kuralı reddeder. Preflight'ta `runtime_rules`
+  aşaması var.
+- **Geçmiş etki:** `scripts/sicil_etki_raporu.py [--once TARIH] [--tara]`, salt okunur. Yalnızca
+  run kimliği, tarih, durum ve sayı yazar. DB'den kesin belirleme mümkün değil: eşlenmeyen değer
+  hiç kaydedilmedi. `--tara` kaynak ve hedef klasörleri sayar.
+- **Altın küme 12 dosyaya çıktı:** sicil senaryosu `docs/ekip/P-GOLDEN-0001/notlar.md`.
+  Migrasyon olmadan canary sızıntısı var, migrasyonla 0.
+- **`app/db/seed_data.py` silindi:** hiçbir yerden import edilmiyordu; alembic verisinin eskimiş
+  bir kopyasıydı ve bu uyuşmazlığa zemin hazırlamıştı. Taze kurulum verisinin tek kaynağı alembic
+  migrasyonlarıdır.
+
+**Güncel test takımı:** `main` + #13 → **1557 passed, 1 skipped, 5 xfailed** (Python 3.11.15).
+Faz 2a, Python 3.14.7'de de geçti.
 
 ## 5. Alınan kararlar
 
@@ -219,44 +245,51 @@ geçiyor. Faz 3 yol testlerine "yol terimli dosyalar READY" ön koşulu eklendi.
 
   Ayrıntı: bölüm 7'deki karar mesajı.
 
+**Faz 2a planı ve sonrası için verilen kararlar (kullanıcı):**
+- İnceleme ekranında insanın onayladığı değerler `dictionary` yetkisini korur. `llm_audit`
+  değerleri `weak` düzeyde yayılır, asla `authoritative` olmaz.
+- **Uyarlanan testler onaylandı.** Kaynak yolu bekleyen 4 test etikete geçti. Faz 3 yol
+  testlerine "yol terimli dosyalar READY" ön koşulu eklendi.
+- **`/health` minimal:**
+  - normalde `{"status": "ok"}`, damga uyuşmazlığında `{"status": "degraded"}`;
+  - commit ve modül adları yalnızca log ve preflight'ta;
+  - aynı gerekçeyle export 503 mesajında da ayrıntı yok;
+  - gerekçe: uç nokta kimlik doğrulamasız ve izleme araçları gövdeye bakabilir.
+- **Generic liste.**
+  - Yalnızca programlama ekleri, fiiller ve teknik terimler girer; genel isim/sıfat girmez (kod
+    adları bunlardan oluşabilir: KARAYEL).
+  - **3 harf ve daha kısa Türkçe kökler yok.** Gerekçe: yanlış negatif bir sızıntıya mal olur.
+  - Listenin geri kalanını kullanıcı gözden geçirecek.
+- **Sürüm koruması:** damga yoksa yalnızca WARNING. Damga uyuşmuyorsa backend açılır, export uç
+  noktaları fail-closed reddeder. İmza kontrolü saf AST; app modülleri import edilmez.
+- **Rapor başlığı:** Kaynak/Hedef kökleri ve proje/sicil/branch maskelenir. Rapor metni CLI'den
+  dosyaya yönlendirilebildiği için interaktif istisna sayılmadı.
+- **Kaynak yol içeren doğrulama hataları** (yol çakışması vb.) olduğu gibi kalır; operatörün
+  düzeltmesi için gerekli. Loga yazılmadıkları testle güvence altında.
+- **Sicil düzeltmesi:** ayrı dal ve PR; idempotent migrasyon, downgrade, yalnızca seed kaydı.
+  `aktif_mi`/`oncelik` yorumu onaylandı. `seed_data.py` silindi.
+
 ---
 
-## 6. Faz 2'nin bölünmesi
+## 6. Faz 2'nin durumu ve açık PR'lar
 
-- **Faz 2a** (gerçek veriye bağlı değil; TAMAMLANDI, bkz. bölüm 4):
-  - a. LLM09 düzeltmesi
-  - b. log ve raporda kaynak yol yerine maskeli yol + kısa dosya kimliği
-  - c. `yol_icerik_uyusmazligi` ölçümü (yalnızca raporlama)
-  - d. UserService generic filtresi (bayraklı)
-  - e. sürüm tutarlılığı koruması
+| PR | Dal | Durum |
+|---|---|---|
+| #10 | `claude/confident-edison-8uggpa` | Faz 0–1, merge edildi |
+| #11, #12 | `claude/blissful-mccarthy-7qtl2x` | Faz 2a, merge edildi; bu dala yeni iş eklenmez |
+| #13 | `claude/sicil-kategori-duzeltme` | Sicil düzeltmesi + `seed_data.py` silme + bu not; **açık, merge kullanıcıda** |
 
-  Şartlar bölüm 7'deki karar mesajında.
-- **Faz 2b** (kullanıcının gerçek `failed_check` dağılımı gelince planlanacak): denetimi kapıdan
-  aday kaynağına çevirmek ve `mask_known_values`'u hepsi-ya-da-hiç olmaktan çıkarmak. Orijinal
-  Faz 2 tanımı bölüm 11'de.
-
-Faz 2a planında ele alınması gereken, önceki oturumda fark edilen noktalar:
-- **c ve `failed_check` anlamı.** `failed_check` bugün "dosyayı çıktıdan alıkoyan kontrol"
-  demek (`ExportReport.blocked_by_check` yalnızca engellenen dosyaları sayar). Yalnızca
-  raporlanan, engellemeyen bir uyuşmazlık için ayrı bir rapor alanı ya da uyarı listesi
-  gerekebilir. Kodu `FailedCheck` enum'una eklerken bu ayrım planda netleştirilmeli.
-- **e ve intranette git olmaması (Varsayım).** Intranet kurulumu flash bellekten kopyalanıyor;
-  orada muhtemelen `.git` yok. "Çalışılan commit" bilgisinin paketleme sırasında üretilen bir
-  damga dosyasından gelmesi gerekebilir. Flash'ta daha önce `SOURCE_SHA256.json` kullanılmış
-  (bkz. `diagnostics/llm-typeerror-20260928/RAPOR.md`); `scripts/build_offline_bundle.py`
-  incelenmeli. Windows/PowerShell ortamı göz önünde tutulmalı.
-- **b'nin yeri.** Orijinal yolu yazan yerler:
-  - `llm_runtime.LLMScanMetrics` (`llm_request` / `llm_file ... file=...`)
-  - `detectors.DetectionOrchestrator.scan` (`detector_crash ... file=...`)
-  - export raporundaki sözdizimi doğrulama uyarıları (`validation_warnings`)
-  - export rapor metninde dosya listeleri (formatter)
-
-  Maskeli yol `prep.masked_rel` olarak zaten mevcut.
-- **d.** Generic kontrol bugün `term_classifier.is_generic_code_token` içinde; çağrıldığı yerler:
-  - `mapping_service.detect_matches` (yalnızca `kaynak_motor == "llm"`)
-  - `consistency_masking._weak_value_ok`
-
-  Presidio sonuçları bugün bu filtreden hiç geçmiyor.
+- **Faz 2a:** tamamlandı (bölüm 4).
+- **Faz 2b:** taslak hazır, kod yok: `docs/faz2b-taslak-plan.md`.
+  - İş kalemleri B1–B6 (bayraklar ve beklenen etki).
+  - Baskın `failed_check`'e göre öncelik tablosu (taslağın 3. bölümü). Kısaca:
+    - `TypeError` → dağıtım
+    - `llm_tespit`/zaman aşımı → Faz 1 ayarları ve Faz 4.4
+    - `llm_denetimi` + `cok_satirli_alinti` → satır bölme
+    - `llm_denetimi` + `maskeleme` → Faz 3 öne
+    - `acik_terim`/`sozdizimi` → Faz 3 önce
+  - Gerçek dağılım gelince kesinleştirilip onaya sunulacak.
+- Orijinal Faz 2 tanımı bölüm 11'de.
 
 ---
 
@@ -303,31 +336,46 @@ Faz 2a planında ele alınması gereken, önceki oturumda fark edilen noktalar:
 >
 > Faz 2a planıyla başla.
 
-Durum: madde 4 (kontrol listesi) önceki oturumda hazırlandı:
-`diagnostics/intranet-olcum-kontrol-listesi.md`. Madde 3'teki Faz 2a için henüz plan yazılmadı.
-Kullanıcı Faz 2a'nın yeni sohbette başlamasını istedi.
+Durum: bu mesajdaki her madde tamamlandı. Kontrol listesi
+`diagnostics/intranet-olcum-kontrol-listesi.md`, Faz 2a bölüm 4'te.
 
 ---
 
 ## 8. Kullanıcının intranette yapacakları ve beklenen veriler
 
-Kontrol listesi: `diagnostics/intranet-olcum-kontrol-listesi.md`.
+Kontrol listesi (adım adım komutlar ve "Getirin" maddeleri):
+`diagnostics/intranet-olcum-kontrol-listesi.md`. Sıra:
 
-1. **Adım 0.** Tek commit'ten dağıtım (`app/` klasörünün tamamı), `alembic upgrade head`
-   (öncesinde DB yedeği), backend'i yeniden başlatma, `check_llm_preflight.py`.
-   - Bekleniyor: commit kimliği, `RESULT=...`, Python sürümü.
-2. **Adım 1.** Mevcut `.env` ile 3/4 sonucunu veren gerçek projede export,
-   `failed_check_summary.py`, log sayıları, `measure_golden.py --llm real`.
-   - Bekleniyor: neden dağılımı. **Faz 2b'nin ve Faz 3'ün sırası buna göre belirlenecek.**
-3. **Adım 2.** Faz 1 ayarları + `benchmark_llm.py` + aynı ölçümlerin tekrarı.
-4. Intranetteki kod sürümü (TypeError olayının sürüp sürmediği). Analiz için bkz.
-   `diagnostics/faz1-llm-altyapi-onerileri.md` Ek A.
+1. **Hazırlık (git'in olduğu makine).** PR #13 merge edildikten sonra `main`'den temiz checkout
+   alınır ve `scripts/write_build_stamp.py` çalıştırılır.
+   - Commit `-dirty` ile bitmemeli.
+   - `app/` (damga dahil), `alembic/`, `scripts/` ve `tests/fixtures/golden/` eksiksiz kopyalanır.
+2. **Adım 0 + sicil migrasyonu.**
+   - DB yedeği, `alembic upgrade head` (çıktıda `sicil_kategori_duzeltme duzeltilen=1`), backend'i
+     yeniden başlatma.
+   - Kontroller:
+     - açılış logunda `build state=ok`
+     - `check_llm_preflight.py` → `RESULT=OFFLINE_OK` ve `PASS stage=runtime_rules`
+     - `/health` → `{"status": "ok"}`
+     - kural sorgusunda `('sicil_no','sicil_no',1)` var, `personnel_no` yok ("etkilenmiyor")
+     - `sicil_etki_raporu.py --once <tarih> --tara`
+   - Beklenen: commit/tree satırları, preflight satırları, sorgu çıktısı, etki raporu (yalnızca
+     id/tarih/sayı).
+3. **Adım 1.** Mevcut `.env` ile 3/4 sonucunu veren gerçek projede export,
+   `failed_check_summary.py`, log sayıları (artık `export_refused` dahil),
+   `measure_golden.py --llm real`.
+   - Beklenen: neden dağılımı, otomatik düzeltme başarısızlık nedenleri, `Yol/icerik uyusmazligi`
+     sayıları.
+   - **Faz 2b ve Faz 3'ün sırası buna göre belirlenecek.**
+   - Faz 2a'dan sonra `llm_denetimi` payının artması bekleniyor.
+4. **Adım 1b.** Aynı projede yalnızca `SCAN_GENERIC_COMPOUND_FILTER=true` ile tekrar export ve
+   altın küme ölçümü. Bayrak sonra geri alınır; kalıcı açılması ayrı bir karar.
+5. **Adım 2.** Faz 1 ayarları (`.env.example`'daki öneri bloğu) + `benchmark_llm.py` + aynı
+   ölçümlerin tekrarı.
 
-Yorumlama: `diagnostics/golden-baseline-20261001/RAPOR.md` bölüm 4.4.
-- `tespit_katmani` + `TypeError` → dağıtım sorunu
-- `llm_tespit` / `llm_denetimi_tamamlanamadi` → Faz 1 ayarları, Faz 4.4
-- `llm_denetimi` → Faz 2b
-- `acik_terim` / `sozdizimi` → Faz 3
+Yorumlama:
+- `diagnostics/golden-baseline-20261001/RAPOR.md` bölüm 4.4
+- `docs/faz2b-taslak-plan.md` bölüm 3
 
 ---
 
@@ -335,8 +383,14 @@ Yorumlama: `diagnostics/golden-baseline-20261001/RAPOR.md` bölüm 4.4.
 
 - **Gerçek dağılım bilinmiyor.** Stub senaryosundaki kuyruk oranı senaryonun yansımasıdır;
   mutlak oran için gerçek veri gerekir.
-- **Kural 7 testi Faz 2a'dan sonra** "kaynak yol" kontrolüyle geçecek; `poseidon` (LLM terimi)
-  maskeli yolda Faz 3'e kadar açık kalır.
+- **Faz 2a kuyruk artışı.** Altın kümede %9'dan %36'ya çıktı; gerçek projedeki etki
+  bilinmiyor (Adım 1).
+- **Generic listenin geri kalanı** kullanıcı incelemesinde. Ayrıca `no` İngilizce listeden
+  gelmeye devam ediyor.
+- **`poseidon` (LLM terimi)** maskeli yolda Faz 3'e kadar açık kalır. Kural 7 testi yalnızca
+  kaynak yolu kontrol eder.
+- **Geçmiş sicil sızıntısı.** Hangi eski export'ların sicili dışarı verdiği intranette
+  `sicil_etki_raporu.py --tara` ile görülecek. Etkilenen paketleri geri çekme kararı kullanıcıda.
 - **Faz E hatası yanlış kodla kaydediliyor.** Otomatik düzeltmenin yeniden denetimi hata verirse
   dosya `llm_denetimi_tamamlanamadi` değil `llm_denetimi` koduyla kaydediliyor; gerçek neden
   yalnızca AuditLog'da (`auto_remediation=failed check=...`). `failed_check_summary.py` bunu
@@ -350,7 +404,9 @@ Yorumlama: `diagnostics/golden-baseline-20261001/RAPOR.md` bölüm 4.4.
 - **Presidio yanlış pozitifleri.** Düz metinde "Teknik sorumlu", "Veri merkezi" PERSON
   sayılıyor. → Faz 4.2
 - **Ortam sınırları.** Windows + Python 3.14.3 test edilemedi (Linux'ta 3.14.7 test edildi).
-  Altın küme küçük (11 dosya).
+  Altın küme küçük (12 dosya).
+- **Presidio yanlış pozitifleri** altın kümenin yeni dosyasında da var (küçük harfli ifadeler
+  kişi/kurum sayılıyor). Faz 4.2.
 - Stub'ın %2 hata oranı parça hash'ine bağlı ve deterministik; parça seti değişince isabet eden
   parçalar değişir.
 
@@ -402,6 +458,15 @@ Diğer araçlar:
   `DB_PATH=... SECURITY_ENCRYPTION_KEY=... VLLM_ENABLED=true VLLM_HOST=http://127.0.0.1:9 VLLM_MODEL=x`,
   önce `alembic upgrade head`)
 - `scripts/benchmark_llm.py`
+- `scripts/write_build_stamp.py [--app-dir yol]`: sürüm damgası
+- `scripts/signature_consistency.py [--app-dir yol]`: saf AST imza kontrolü; temiz kodda 0 bulgu
+- `scripts/sicil_etki_raporu.py [--db yol] [--once TARIH] [--tara]`: salt okunur
+- `python -m app.cli dosya-kimligi --run-id N --id <12 hex>`: log/rapor etiketini kaynak yola eşler
+- Gerçek alembic migrasyon testi: `tests/test_sicil_category_migration.py` (alt süreçte geçici
+  DB'ye `alembic upgrade/downgrade/stamp`)
+
+`SECURITY_ENCRYPTION_KEY` geçerli bir Fernet anahtarı olmalı; bazı migrasyonlar crypto
+modülünü import ediyor.
 
 Kabul testlerindeki xfail'ler `strict=True`. Bir faz bir kabul testini geçirdiğinde test takımı
 kırılır; işaret kaldırılmalı ve `docs/faz3-tasarim-notu.md`'deki tablo güncellenmeli.
@@ -418,6 +483,10 @@ Belgeler (`masking_system/` altında):
   (TypeError), Ek B (UserService)
 - `diagnostics/intranet-olcum-kontrol-listesi.md`: kullanıcının intranet adımları
 - `diagnostics/llm-typeerror-20260928/RAPOR.md`: TypeError olayının orijinal teşhisi
+- `diagnostics/faz2a-20261001/RAPOR.md`: Faz 2a raporu, ölçümler (`once/`, `sonra/`), onay sonrası
+  değişiklikler
+- `diagnostics/sicil-kategori-20261001/RAPOR.md`: sicil düzeltmesi, kategori denetimi, geçmiş etki
+- `docs/faz2b-taslak-plan.md`: Faz 2b taslağı ve dağılıma göre öncelik
 
 Kalan fazların kullanıcının ilk mesajındaki tanımları (aynen; Faz 2'nin 2a/2b bölünmesi
 bölüm 6–7'de):

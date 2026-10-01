@@ -289,7 +289,7 @@ def test_generated_and_vendor_dirs_remain_excluded(export_files):
         assert not (target / path).exists()
 
     # .git IS a seeded default DB exclude pattern (directory-level, see
-    # seed_data.py "git_directory") - the whole subtree is pruned during the
+    # alembic seed 9f21a6b8e4c3 "git_directory") - the whole subtree is pruned during the
     # scan itself, so only the directory gets one outcome, not each file
     # under it (bkz. scanner.py module docstring).
     git_dir_outcome = _outcome(report, ".git")

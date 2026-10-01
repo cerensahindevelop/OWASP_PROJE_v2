@@ -4,8 +4,8 @@ Asama 2 / Adim 5: bu modulun eskiden var olan yazma/yonetim API'si
 (add_exclude_pattern/set_exclude_pattern_active/list_exclude_patterns)
 silindi - hicbir CLI komutu ya da webapp ekrani onlari cagirmiyordu (bkz.
 rule_admin.py'nin CLI'da tam karsiligi var, exclude_admin'in yoktu). Bu
-silmenin sonucu: exclude_patterns yonetimi artik SADECE migration/
-seed_data.py ile yapilabilir - "kural = veri, kod degisikligi gerekmez"
+silmenin sonucu: exclude_patterns yonetimi artik SADECE alembic
+migrasyonuyla yapilabilir - "kural = veri, kod degisikligi gerekmez"
 ilkesi bu tablo icin gecerliligini yitirdi (bilinen, kabul edilen trade-off).
 """
 

@@ -77,7 +77,8 @@ Faz 2a PR'ı `main`'e merge edildikten sonra yapılır.
      yazar. TypeError olayının deseni budur.
 
    `/health` yalnızca `{"status": "ok"}` ya da `{"status": "degraded"}` döner.
-6. Sicil kuralının kategorisi (salt okunur; bkz. "Bilinen sorun" notu aşağıda):
+6. Sicil kuralının kategorisi (salt okunur; 3. adımdaki `alembic upgrade head`'den sonra). Ayrıntı
+   ve beklenen sonuç: dosyanın sonundaki "Sicil düzeltmesi" bölümü.
    ```powershell
    .venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('file:../masking.db?mode=ro', uri=True); print(c.execute(\"SELECT kural_adi, kategori, aktif_mi FROM filtre_kurallari WHERE desen_tipi='parametric'\").fetchall())"
    ```
@@ -95,10 +96,12 @@ Faz 2a PR'ı `main`'e merge edildikten sonra yapılır.
 
 `build state=ok` ve `RESULT=OFFLINE_OK` gelmeden sonraki adıma geçmeyin.
 
-**Bilinen sorun (Faz 2a'da bulundu, henüz düzeltilmedi):** alembic seed verisi sicil kuralını
-`personnel_no` kategorisiyle oluşturuyor, export ise değeri `sicil_no` anahtarıyla veriyor. Böyle
-bir DB'de sicil değeri içerikte ve yolda maskelenmez. 6. adımın çıktısı, gerçek DB'nin bundan
-etkilenip etkilenmediğini gösterecek.
+**Sicil düzeltmesi (PR #13):** alembic seed verisi sicil kuralını `personnel_no` kategorisiyle
+oluşturuyordu. Bu yüzden sicil değeri içerikte ve yolda maskelenmiyordu. Düzeltme, 3. adımdaki
+`alembic upgrade head` ile uygulanan `f1c3a5e7b9d2` migrasyonudur. 6. adımın çıktısında
+`('sicil_no', 'sicil_no', 1)` görünmeli ve `personnel_no` geçmemeli. Kontrol ve geçmiş etki
+adımları için dosyanın sonundaki "Sicil düzeltmesi" bölümüne bakın; Adım 1'den önce
+tamamlanmalı.
 
 ---
 
@@ -216,3 +219,61 @@ Bkz. `golden-baseline-20261001/RAPOR.md` bölüm 4.4. Kısaca:
   düşmesi beklenir.
 - `llm_denetimi` → Faz 2b'nin hedefi.
 - `acik_terim`, `sozdizimi` → Faz 3 öne alınabilir.
+
+---
+
+## Sicil düzeltmesi (migrasyon `f1c3a5e7b9d2`) — ölçümden ÖNCE
+
+Alembic ile kurulan DB'lerde sicil kuralı `personnel_no` kategorisindeydi. Bu yüzden
+kullanıcının sicil değeri içerikte ve yolda maskelenmiyordu. Düzeltme bir alembic migrasyonudur
+ve Adım 0'ın parçası olarak çalışır. Adım 1'e bu bölümün kontrolleri geçmeden başlamayın.
+
+**Nerede çalışır:** Adım 0'da `app\`, `alembic\` ve `scripts\` kopyalandıktan sonra, **backend
+yeniden başlatılmadan önce**, DB yedeğinin hemen ardından:
+
+```powershell
+Copy-Item ..\masking.db ..\masking.db.yedek-sicil
+.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+- Çıktıda `sicil_kategori_duzeltme duzeltilen=1` görünmeli.
+- DB elle kurulduysa ya da zaten düzeltildiyse `duzeltilen=0` görünür; bu da normaldir.
+  Migrasyon idempotenttir, ikinci kez çalıştırmak bir şey değiştirmez.
+- `... DEGISTIRILMEDI` ya da `aktif 'sicil_no' parametrik kurali yok` uyarısı görünürse **durun**
+  ve aşağıdaki kontrollerin çıktısını getirin. Bu, kuralın elle değiştirilmiş olduğunu gösterir;
+  migrasyon böyle bir kurala bilerek dokunmaz.
+
+Ardından backend'i yeniden başlatın ve şu kontrolleri yapın:
+
+1. Kural sorgusu (salt okunur):
+   ```powershell
+   .venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('file:../masking.db?mode=ro', uri=True); print(c.execute(\"SELECT kural_adi, kategori, aktif_mi FROM filtre_kurallari WHERE desen_tipi='parametric'\").fetchall())"
+   ```
+   - **Beklenen ("etkilenmiyor"):** listede `('sicil_no', 'sicil_no', 1)` var ve `personnel_no`
+     hiç geçmiyor.
+   - Sıra farklı olabilir; `project_name` ve `branch_name` satırları da `1` ile görünmeli.
+2. Preflight çıktısında:
+   `PASS stage=runtime_rules project_name=aktif sicil_no=aktif branch_name=aktif`.
+3. Geçmiş etki raporu (salt okunur; değer ve yol yazmaz):
+   ```powershell
+   .venv\Scripts\python.exe scripts\sicil_etki_raporu.py --once <migrasyonu_calistirdiginiz_tarih> --tara
+   ```
+   - İlk satır `sicil_kurali=duzeltilmis export_sayisi=N` olmalı.
+   - Her export için bir `run_id=... sonuc=etkilenmedi|olasi` satırı yazılır.
+   - `--tara` ile `olasi` satırlarında `kaynakta=`/`ciktida=` dosya sayıları görünür:
+     - `kaynakta>0`: sicil o export'ta maskelenmeden çıktıya gitti.
+     - `ciktida>0`: hedef klasörde bugün hâlâ açık.
+     - `yok`: klasör artık sunucuda değil.
+
+**Getirin:**
+- [ ] `alembic upgrade head` çıktısındaki `sicil_kategori_duzeltme ...` satırı (ve varsa uyarılar)
+- [ ] 1. maddedeki sorgunun çıktısı
+- [ ] Preflight'taki `stage=runtime_rules` satırı
+- [ ] `sicil_etki_raporu.py` çıktısının tamamı (yalnızca run kimliği, tarih, durum ve sayılar
+      içerir)
+
+`ciktida>0` olan export'ların çıktıları dışarı verildiyse, onları yeniden export etmek ve eski
+paketi geri çekmek size kalmış bir karardır. Komut bu klasörlere yazmaz ve onları silmez.
+
+Geri dönüş gerekirse: `.venv\Scripts\python.exe -m alembic downgrade e3a7c1f9d2b5` yalnızca bu
+migrasyonun düzelttiği kaydı eski haline getirir. Önerilmez, çünkü sızıntı geri gelir.

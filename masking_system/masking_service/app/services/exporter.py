@@ -81,6 +81,7 @@ from app.services.mapping_service import (
     mask_relative_path,
 )
 from app.services.review_masking import NarrowedValueError, mask_known_values
+from app.services.runtime_params import build_runtime_params
 from app.services.log_refs import UNKNOWN_FILE_LABEL, file_label, file_ref, log_file_label
 from app.services.scanner import iter_project_files
 from app.services.syntax_validator import validate_masked_syntax
@@ -2515,11 +2516,7 @@ async def export_project(
         rule_names_by_id = {r.id: r.rule_name for r in active_rules}
         rules_by_name = {r.rule_name: r for r in active_rules}
         exclude_specs = load_active_exclude_specs(db)
-        runtime_params = {
-            "project_name": project_name,
-            "sicil_no": sicil_no,
-            "branch_name": branch_name,
-        }
+        runtime_params = build_runtime_params(project_name, sicil_no, branch_name)
         # Bir kere kurulur, tum dosyalar icin yeniden kullanilir (pahali kurulum).
         active_presidio_rules = load_active_presidio_rules(db)
         category_restrictions = load_file_category_restrictions(db)
