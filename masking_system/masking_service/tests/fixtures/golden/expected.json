@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "aciklama": "Altin test kumesi: tum degerler sentetiktir. project/ export edilir; stubs/ yalnizca maskeli Java ciktisini javac ile derlemek icindir, export edilmez. 'kaynak' alani degeri hangi katmanin bulmasi gerektigini belirtir: dictionary = kurumsal sozluk (dictionary_terms ile DB'ye yuklenir), llm = yalnizca LLM (stub LLM 'llm' alanina gore yanit verir). 'denetim': true ise stub denetim LLM'i deger maskeli metinde hala aciksa onu alintilar.",
+  "aciklama": "Altin test kumesi: tum degerler sentetiktir. project/ export edilir; stubs/ yalnizca maskeli Java ciktisini javac ile derlemek icindir, export edilmez. 'kaynak' alani degeri hangi katmanin bulmasi gerektigini belirtir: dictionary = kurumsal sozluk (dictionary_terms ile DB'ye yuklenir), llm = yalnizca LLM (stub LLM 'llm' alanina gore yanit verir). 'denetim': true ise stub denetim LLM'i deger ya da varyantlarindan maskeli metinde hala acik olanlari (kismi sizinti dahil) alintilar. Canary degerlerinin kendisi ve varyantlari (kismi sizinti: e-posta yerel kismi, host kisa adi) ciktida hicbir kodlamada (duz, base64, URL-encoded) gecmemelidir.",
   "project_dir": "project",
   "stubs_dir": "stubs",
   "java_source_root": "project/src/main/java",
@@ -54,7 +54,7 @@
     {
       "id": "adres_cok_satirli",
       "aciklama": "Kok neden 1: tespit kacirir, denetim cok satirli alinti dondurur (otomatik duzeltme bunu reddeder).",
-      "value": "Buyukdere Cad. No:1\nMaslak/Istanbul",
+      "value": "Buyukdere Cad. No:1\nKat:7 Blok:B 34398",
       "variants": [],
       "kaynak": "llm",
       "canary": false,
@@ -99,7 +99,7 @@
     {
       "id": "canary_email",
       "value": "hakan.yilmaz@karayel-bank.com.tr",
-      "variants": [],
+      "variants": ["hakan.yilmaz"],
       "kaynak": "llm",
       "canary": true,
       "llm": {"tip": "EMAIL", "guven": "yuksek"},
@@ -115,7 +115,8 @@
       "denetim": true
     }
   ],
-  "must_not_mask": ["UserService", "customerId", "getCustomerId", "getName", "MusteriController", "musteriService"],
+  "must_not_mask": ["UserService", "customerId", "getCustomerId", "getName", "MusteriController", "musteriService",
+                    "Teknik sorumlu", "Veri merkezi"],
   "stub_false_positives": [
     {
       "aciklama": "Generic ad: stub tespit LLM'i bunu 'orta' guvenle kurumsal servis adi sanar.",
