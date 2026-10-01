@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "aciklama": "Altin test kumesi: tum degerler sentetiktir. project/ export edilir; stubs/ yalnizca maskeli Java ciktisini javac ile derlemek icindir, export edilmez. 'kaynak' alani degeri hangi katmanin bulmasi gerektigini belirtir: dictionary = kurumsal sozluk (dictionary_terms ile DB'ye yuklenir), llm = yalnizca LLM (stub LLM 'llm' alanina gore yanit verir). 'denetim': true ise stub denetim LLM'i deger maskeli metinde hala aciksa onu alintilar.",
+  "project_dir": "project",
+  "stubs_dir": "stubs",
+  "java_source_root": "project/src/main/java",
+  "dictionary_terms": [
+    {"term": "KARAYEL", "title": "Altin Kume"},
+    {"term": "tckimlik", "title": "Altin Kume"}
+  ],
+  "sensitive": [
+    {
+      "id": "kod_adi_karayel",
+      "value": "KARAYEL",
+      "variants": ["karayel", "Karayel", "KARAYEL_MUSTERI"],
+      "kaynak": "dictionary",
+      "canary": false
+    },
+    {
+      "id": "tckimlik",
+      "value": "tckimlik",
+      "variants": ["tcKimlikNo", "getTcKimlikNo", "setTcKimlikNo", "findByTcKimlikNo", "TC_KIMLIK_NO", "tc-kimlik"],
+      "kaynak": "dictionary",
+      "canary": false
+    },
+    {
+      "id": "kod_adi_poseidon",
+      "value": "Poseidon",
+      "variants": ["poseidon", "PoseidonGatewayClient", "poseidonGatewayClient"],
+      "kaynak": "llm",
+      "canary": false,
+      "llm": {"tip": "PROJE_KOD_ADI", "guven": "yuksek"},
+      "denetim": true
+    },
+    {
+      "id": "kisi_hakan",
+      "value": "Hakan Yilmaz",
+      "variants": [],
+      "kaynak": "llm",
+      "canary": false,
+      "llm": {"tip": "PERSON", "guven": "orta"},
+      "denetim": true
+    },
+    {
+      "id": "kisi_ayse",
+      "aciklama": "Kok neden 2: tespit 'dusuk' doner (VLLM_LOW_CONFIDENCE_ACTION=ignore ile acik kalir), denetim yeniden yakalar.",
+      "value": "Ayse Demir",
+      "variants": [],
+      "kaynak": "llm",
+      "canary": false,
+      "llm": {"tip": "PERSON", "guven": "dusuk"},
+      "denetim": true
+    },
+    {
+      "id": "adres_cok_satirli",
+      "aciklama": "Kok neden 1: tespit kacirir, denetim cok satirli alinti dondurur (otomatik duzeltme bunu reddeder).",
+      "value": "Buyukdere Cad. No:1\nMaslak/Istanbul",
+      "variants": [],
+      "kaynak": "llm",
+      "canary": false,
+      "denetim": true
+    },
+    {
+      "id": "canary_parola",
+      "value": "Cnry-Pw-7Q2x9",
+      "variants": [],
+      "kaynak": "llm",
+      "canary": true,
+      "llm": {"tip": "PASSWORD", "guven": "yuksek"},
+      "denetim": true
+    },
+    {
+      "id": "canary_api_key",
+      "value": "cnry_ak_7Q2x9LmZ4pW8rT3v",
+      "variants": [],
+      "kaynak": "llm",
+      "canary": true,
+      "llm": {"tip": "API_KEY", "guven": "yuksek"},
+      "denetim": true
+    },
+    {
+      "id": "canary_host_db",
+      "value": "cnry-db01.karayel.intra",
+      "variants": ["cnry-db01"],
+      "kaynak": "llm",
+      "canary": true,
+      "llm": {"tip": "HOSTNAME", "guven": "yuksek"},
+      "denetim": true
+    },
+    {
+      "id": "canary_host_gw",
+      "value": "cnry-gw01.karayel.intra",
+      "variants": ["cnry-gw01"],
+      "kaynak": "llm",
+      "canary": true,
+      "llm": {"tip": "HOSTNAME", "guven": "yuksek"},
+      "denetim": true
+    },
+    {
+      "id": "canary_email",
+      "value": "hakan.yilmaz@karayel-bank.com.tr",
+      "variants": [],
+      "kaynak": "llm",
+      "canary": true,
+      "llm": {"tip": "EMAIL", "guven": "yuksek"},
+      "denetim": true
+    },
+    {
+      "id": "canary_tckn",
+      "value": "10000000146",
+      "variants": [],
+      "kaynak": "llm",
+      "canary": true,
+      "llm": {"tip": "KIMLIK_NO", "guven": "yuksek"},
+      "denetim": true
+    }
+  ],
+  "must_not_mask": ["UserService", "customerId", "getCustomerId", "getName", "MusteriController", "musteriService"],
+  "stub_false_positives": [
+    {
+      "aciklama": "Generic ad: stub tespit LLM'i bunu 'orta' guvenle kurumsal servis adi sanar.",
+      "value": "UserService",
+      "llm": {"tip": "IC_SERVIS_ADI", "guven": "orta"}
+    }
+  ]
+}
