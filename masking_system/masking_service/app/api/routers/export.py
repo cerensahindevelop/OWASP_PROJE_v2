@@ -34,6 +34,7 @@ from app.api import export_jobs
 from app.api.deps import get_request_db
 from app.api.errors import _status_for
 from app.api.schemas import ExportJobOut, ExportJobStartOut, ExportPathRequest, ExportReportOut, ExportResultOut
+from app.core.build_info import ensure_export_allowed
 from app.core.error_translation import friendly_error
 from app.db.session import SessionLocal
 from app.services.audit_warning_service import AuditWarningService
@@ -94,7 +95,7 @@ def _pending_and_quarantined_counts(
 
 
 # Sunucu uzerindeki bir klasor yolunu maskeleyip disa aktarir.
-@router.post("", response_model=ExportResultOut)
+@router.post("", response_model=ExportResultOut, dependencies=[Depends(ensure_export_allowed)])
 async def export_by_path(payload: ExportPathRequest, db: Session = Depends(get_request_db)) -> ExportResultOut:
     # WEB_ALLOWED_ROOTS disina cikan bir yol burada REDDEDILIR - path artik
     # ag uzerinden gelen guvenilmeyen bir girdi, istemci (Streamlit) tarafinda
@@ -129,7 +130,7 @@ async def export_by_path(payload: ExportPathRequest, db: Session = Depends(get_r
 
 
 # Yuklenen dosya/klasoru maskeleyip disa aktarir (tarayicidan dosya yukleme modu).
-@router.post("/upload", response_model=ExportResultOut)
+@router.post("/upload", response_model=ExportResultOut, dependencies=[Depends(ensure_export_allowed)])
 async def export_upload(
     project_name: str = Form(...),
     sicil_no: str = Form(...),
@@ -204,7 +205,8 @@ def _export_job_work(kwargs: dict, output_token: str | None):
 
 
 # Sunucu uzerindeki bir klasor icin arka planda export baslatir.
-@router.post("/jobs", response_model=ExportJobStartOut, status_code=202)
+@router.post("/jobs", response_model=ExportJobStartOut, status_code=202,
+             dependencies=[Depends(ensure_export_allowed)])
 def start_export_job_by_path(payload: ExportPathRequest) -> ExportJobStartOut:
     ensure_path_allowed(payload.source_path, label="Kaynak Klasör")
     ensure_path_allowed(payload.target_path, label="Hedef Klasör")
@@ -217,7 +219,8 @@ def start_export_job_by_path(payload: ExportPathRequest) -> ExportJobStartOut:
 
 
 # Yuklenen dosya/klasor icin arka planda export baslatir.
-@router.post("/upload/jobs", response_model=ExportJobStartOut, status_code=202)
+@router.post("/upload/jobs", response_model=ExportJobStartOut, status_code=202,
+             dependencies=[Depends(ensure_export_allowed)])
 async def start_export_job_upload(
     project_name: str = Form(...),
     sicil_no: str = Form(...),

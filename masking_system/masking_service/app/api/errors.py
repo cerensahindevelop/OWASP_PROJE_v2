@@ -16,7 +16,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.error_translation import friendly_error
-from app.core.exceptions import ExportInProgressError, MaskingSystemError, ReviewAlreadyProcessedError
+from app.core.exceptions import (
+    BuildMismatchError, ExportInProgressError, MaskingSystemError, ReviewAlreadyProcessedError,
+)
 from app.services.unmasker import ContextNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 # kendi temel sinifindan ONCE gelmeli (once yukaridan asagiya kontrol edilir).
 _STATUS_BY_EXCEPTION: tuple[tuple[type[Exception], int], ...] = (
     (ContextNotFoundError, 404),
+    (BuildMismatchError, 503),
     (ExportInProgressError, 409),
     (ReviewAlreadyProcessedError, 409),
     (MaskingSystemError, 400),

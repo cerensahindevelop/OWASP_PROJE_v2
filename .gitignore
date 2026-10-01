@@ -20,3 +20,6 @@ venv/
 .vscode/
 .idea/
 .claude/
+
+# Paketleme sirasinda uretilen surum damgasi (scripts/write_build_stamp.py)
+masking_system/masking_service/app/BUILD_STAMP.json

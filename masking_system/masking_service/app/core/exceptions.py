@@ -21,3 +21,7 @@ class ExportInProgressError(MaskingSystemError):
 
 class ReviewAlreadyProcessedError(MaskingSystemError):
     """A review queue item was already approved/rejected/ignored."""
+
+
+class BuildMismatchError(MaskingSystemError):
+    """Running code is a mixed version (stamp mismatch or files changed since start)."""

@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 # (ayarlar/sifreleme/DB modelleri, dosya siniflandirma/okuma/tur tespiti,
 # detection orchestrator, denetim/round-trip/sozdizimi dogrulama, tarayici
 # ve mapping servisi) tek bir akista birbirine baglar.
+from app.core.build_info import ensure_export_allowed
 from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.core.exceptions import ExportInProgressError
@@ -2435,6 +2436,9 @@ async def export_project(
     enable_path_masking: bool = DEFAULT_ENABLE_PATH_MASKING,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> ExportReport:
+    # Karisik surum (TypeError olayi) ya da yeniden baslatilmamis backend:
+    # hicbir DB/dosya yazmasindan once fail-closed (API, is ve CLI yollari).
+    ensure_export_allowed()
     source = Path(source_path).resolve()
     target = Path(target_path).resolve()
     _validate_paths(source, target)
