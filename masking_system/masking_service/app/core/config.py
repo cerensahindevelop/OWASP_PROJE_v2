@@ -368,6 +368,13 @@ class ScanSettings(BaseSettings):
         "base64 resim/ikon, hex dokum) Presidio ve LLM'e gonderilmez; okunabilir metne cozulen "
         "base64 gonderilmeye devam eder. Katman 1 (sozluk/regex) bloklari yine tarar. 0 = kapali.",
     )
+    generic_compound_filter: bool = Field(
+        False,
+        description="True: TUM parcalari genel programlama eki/fiili/teknik terim olan bilesik "
+        "identifier'lar (UserService, KayitSorguServisi) LLM, denetim alintisi ve Presidio NER "
+        "bulgularinda generic sayilir: maskelenmez ve projeye yayilmaz. Sozluk/alias/runtime "
+        "terimleri etkilenmez. Varsayilan kapali (mevcut davranis).",
+    )
 
 
 # Metin dosyasi kodlama tespitini yapilandiran ayarlar. On ek YOK: ortam

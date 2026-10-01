@@ -56,7 +56,8 @@ from app.services.overlap_resolver import OverlapConflict, OverlapResolver
 from app.services.presidio_detector import PresidioDetector, PresidioRuleSpec
 from app.services.rule_engine import JSON_BARE_INTEGER_RE, JSON_NUMERIC_COUNTER_NAMESPACE, Match, RuleSpec, find_matches, make_json_numeric_placeholder
 from app.services.string_literal_index import StringLiteralIndex
-from app.services.term_classifier import classify_term, is_generic_code_token
+from app.services.consistency_masking import PRESIDIO_STRUCTURED_TYPES
+from app.services.term_classifier import classify_term, is_generic_heuristic_value
 from app.services.placeholder_policy import (
     CORPORATE_PLACEHOLDER_PREFIX,
     is_corporate_rule,
@@ -531,6 +532,19 @@ def _llm_confidence_route(confidence: str) -> str:
     return "review" if getattr(vllm, "low_confidence_action", "ignore") == "review" else "ignore"
 
 
+# Presidio'nun NER (dogal dil) bulgusu mu ve bayrak acikken generic mi?
+# Yapisal tipler (e-posta, IP, IBAN, kart, kripto) ve DB'deki ozel Presidio
+# kurallari (pattern_type=presidio) deterministiktir; bu filtreden gecmez.
+def _is_generic_presidio_ner(result: DetectionResult) -> bool:
+    if not settings.scan.generic_compound_filter or result.kaynak_motor != "katman2_presidio":
+        return False
+    if (result.tip or "").upper() in PRESIDIO_STRUCTURED_TYPES:
+        return False
+    if result.rule is not None and result.rule.pattern_type == "presidio":
+        return False
+    return is_generic_heuristic_value(result.deger, compound=True)
+
+
 # Bir metni tum katmanlara (Rule/Presidio/LLM) karsi tarar, cakismalari cozer,
 # span sinirlarini dogrular - ama HICBIR DB yazmasi yapmaz (saf/DB'siz yari).
 async def detect_matches(
@@ -578,9 +592,14 @@ async def detect_matches(
         if suppression is not None:
             suppressed_results.append((result, suppression.id))
             continue
+        if _is_generic_presidio_ner(result):
+            # SCAN_GENERIC_COMPOUND_FILTER: Presidio NER'in UserService gibi
+            # tamamen genel parcalardan olusan bir adi ORGANIZATION sanmasi.
+            ignored_llm_results.append(result)
+            continue
         if result.kaynak_motor == "llm":
             route = _llm_confidence_route(result.guven_seviyesi)
-            if is_generic_code_token(result.deger):
+            if is_generic_heuristic_value(result.deger, compound=settings.scan.generic_compound_filter):
                 # `default`, `export`, `client` gibi genel/anahtar kelime
                 # degerler kodu bozar ve hassas degildir.
                 route = "ignore"
