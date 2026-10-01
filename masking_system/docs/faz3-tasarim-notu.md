@@ -40,9 +40,16 @@ injection ile keyfi yol yazdırma riski yok.
    - Büyük/küçük harf duyarsız dosya sistemlerinde çakışma (`MaskA` ↔ `maska`)
    - Yol uzunluğu ve geçersiz karakterler
    - Yola referans veren dosyalar: `pom.xml`, `build.gradle`, resource yolları, `import`'lar
-6. **Geri alma.** Yol eşlemesi imzalı manifestte tutulur (bkz. açık soru S1). Geri alma testi
-   dosya içerikleri kadar dosya ve dizin adlarını da kapsar (`diff -r`).
+6. **Geri alma.** Yol eşlemesi imzalı manifestte tutulur; manifestin içeriği K2'de tanımlıdır.
+   Geri alma testi dosya içerikleri kadar dosya ve dizin adlarını da kapsar (`diff -r`).
 7. **Loglama.** Rapor ve loglara orijinal yollar yazılmaz.
+   - **Kapsam:** log dosyaları, export raporu ve çıktı paketine giren her şey.
+   - **Kapsam dışı:** DB. `AuditLog`/`AuditWarning` ve inceleme ekranı orijinal yolla
+     çalışmaya devam eder; DB'ye dokunulmaz.
+   - **Uygulama:** Faz 2 içinde, bayraksız. Loglara orijinal yol yerine maskeli yol ile DB
+     kaydıyla eşleştirilebilecek kısa bir dosya kimliği yazılır, böylece hata ayıklama
+     zorlaşmaz. Bu düzeltmeden sonra `test_report_and_logs_do_not_contain_original_paths`
+     xfail'den çıkar.
 
 **Kabul testleri:** `masking_service/tests/test_golden_path_acceptance.py`
 
@@ -53,7 +60,7 @@ injection ile keyfi yol yazdırma riski yok.
 | `test_java_public_class_matches_file_name` | 5 | xfail |
 | `test_java_package_matches_directory` | 4, 5 | xfail |
 | `test_masked_java_project_compiles` | 5 | xfail |
-| `test_report_and_logs_do_not_contain_original_paths` | 7 | xfail |
+| `test_report_and_logs_do_not_contain_original_paths` | 7 | xfail (Faz 2'de kalkacak) |
 | `test_restore_recreates_file_and_directory_names_byte_for_byte` | 6 | geçiyor (regresyon) |
 | `test_output_paths_do_not_collide_even_case_insensitively` | 5 | geçiyor (regresyon) |
 | `test_output_paths_are_portable` | 5 | geçiyor (regresyon) |
@@ -75,27 +82,47 @@ biçimi Faz 3 notunda belirlenecek; desenler buna göre güncellenebilir.
   - `detectors.DetectionOrchestrator.scan` içindeki `detector_crash ... file=...`
   - Export raporundaki sözdizimi doğrulama uyarıları
 
-  Hepsinin maskeli yola geçmesi gerekir. Not: maskeli yol (`prep.masked_rel`) bugün de var;
-  yalnızca sözlük terimlerini gizliyor, bu yüzden bu değişiklik Faz 3'ten önce de yapılabilir
-  (bkz. S3).
+  Hepsinin maskeli yola geçmesi gerekir. Maskeli yol (`prep.masked_rel`) bugün de var ama
+  yalnızca sözlük terimlerini gizliyor; LLM kaynaklı terimler Faz 3'e kadar maskeli yolda da açık
+  kalır. Bu yüzden kural 7 testi Faz 2'den sonra da, yol maskelemesi Faz 3'te tamamlanana kadar,
+  LLM kaynaklı terimler için geçemeyebilir. Faz 2 planında bu ayrım netleştirilecek.
 
-## Açık sorular
+### K2 — Manifestte yol eşlemesi: maskeli yol + placeholder + HMAC (1 Ekim 2026, ürün sahibi kararı)
 
-- **S1 — Manifestte ne tutulacak?** `integrity_manifest.py` bilinçli olarak orijinal yol veya
-  değer içermiyor ve manifest çıktı paketiyle birlikte dışarı çıkıyor. Orijinal yolu manifeste
-  yazmak, maskelenmiş terimleri paketin içinde sızdırır.
+**Bağlam.** K1/6 yol eşlemesinin imzalı manifestte tutulmasını istiyor. Ancak manifest
+(`.masking-integrity.json`) çıktı paketiyle birlikte dışarı çıkıyor ve `integrity_manifest.py`
+bilinçli olarak hiçbir orijinal yol veya değer içermiyor. Orijinal yolu manifeste yazmak,
+maskelenmiş terimleri paketin içinde sızdırır.
 
-  Öneri: manifest her dosya için maskeli yolu, yolda kullanılan placeholder token'larını ve
-  orijinal göreli yolun job anahtarlı HMAC özetini imzalı tutsun. Orijinal değerler bugünkü gibi
-  yalnızca DB'deki eşlemede kalsın. Geri alma, DB'deki eşlemeyle çözdüğü yolu HMAC ile
-  doğrular; eşleşmezse fail-closed durur. Onayınız gerekiyor.
+**Karar.** Manifest her dosya için şunları imzalı olarak tutar:
+- maskeli göreli yol,
+- o yolda kullanılan placeholder token'ları,
+- orijinal göreli yolun **job anahtarlı HMAC özeti**.
 
-- **S2 — DB'deki kaynak yol.** `AuditLog.file_path` ve `AuditWarning.file_path` kaynak yolu
-  tutuyor; inceleme ekranı bu yolla çalışıyor ve `AuditWarning.output_path` maskeli yolu ayrıca
-  saklıyor. Kural 7 ("loglara orijinal yol yazılmaz") uygulama loglarını ve raporu mu kapsıyor,
-  yoksa DB'deki denetim kaydını da mı? DB'deki düz metin saklama bilinçli bir tasarım kararı
-  (değişmez kural 6) olduğu için, aksi belirtilmedikçe DB'ye dokunulmayacak.
+Kurallar:
+- Orijinal değerler yalnızca DB'deki eşlemede kalır.
+- **HMAC anahtarı hiçbir koşulda pakete, manifeste veya loglara girmez.** Manifestte yalnızca
+  özet bulunur.
+- Geri alma, DB eşlemesiyle çözdüğü orijinal yolun HMAC'ini yeniden hesaplar ve manifesttekiyle
+  karşılaştırır. Tutmazsa **fail-closed** durur: hedefe yazmaz, nedeni raporlar.
 
-- **S3 — Loglama düzeltmesinin zamanı.** Log ve rapordaki yolları maskeli yola çevirmek Faz 3'e
-  bağlı değil. Faz 2 ile birlikte (bayraksız, davranış değiştirmeyen bir düzeltme olarak)
-  yapılmasını öneriyorum.
+**Uygulama notu (Faz 3 tasarımında ayrıntılanacak).** Bugünkü imza ve kaynak özeti
+(`integrity_manifest._signature`, `source_tag`) zaten `core.crypto.hash_value` ile, sunucudaki
+`SECURITY_ENCRYPTION_KEY` ve bağlam kimliğiyle HMAC-SHA256 olarak üretiliyor. Yol özeti de aynı
+mekanizmayla, job kimliğini mesaja katarak üretilecek (örneğin
+`hash_value(context_id, "path-v1:" + job_id + ":" + orijinal_yol)`). Bu yeni bir anahtar
+dağıtımı gerektirmez; anahtar sunucudan hiç çıkmaz.
+
+Manifest sürümü yükseltilir. Eski sürüm manifestli paketler bugünkü davranışla geri alınmaya
+devam eder (geriye dönük uyumluluk).
+
+**Kabul kriterleri (Faz 3'te test olarak eklenecek):**
+- Manifestte hiçbir orijinal yol parçası ve anahtar materyali yok.
+- Manifestteki yol özeti değiştirilmiş bir pakette geri alma fail-closed duruyor.
+- DB'de eşleme değiştirilirse (yanlış orijinal) geri alma fail-closed duruyor.
+
+## Çözülen sorular
+
+- **S1** (manifestte ne tutulacak) → K2.
+- **S2** (DB'deki kaynak yol) → kural 7 DB'yi kapsamaz; bkz. K1/7.
+- **S3** (loglama düzeltmesinin zamanı) → Faz 2, bayraksız, kısa dosya kimliğiyle; bkz. K1/7.
