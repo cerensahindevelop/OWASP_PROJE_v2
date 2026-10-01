@@ -105,9 +105,20 @@ def test_pom_group_id_points_to_existing_package_directory(golden_run):
 
 # --- Faz 3 kabul kriterleri ----------------------------------------------------
 
+def _require_path_term_files_published(run) -> None:
+    """On kosul: yolunda maskelenmesi gereken terim gecen kaynak dosyalarin hepsi
+    ciktida (READY). Aksi halde yol testleri bos kumeye karsi gecer: dosya
+    karantinadaysa yolu ciktida hic olmaz ve kriter sinanmamis olur."""
+    terms = [t.casefold() for t in run["manifest"]["yol_beklentileri"]["yolda_gecmemeli"]]
+    sources = [p.relative_to(run["source"]).as_posix() for p in run["source"].rglob("*") if p.is_file()]
+    missing = [rel for rel in sources if any(t in rel.casefold() for t in terms) and rel not in _ready(run)]
+    assert missing == [], ("yol terimi iceren dosya ciktida degil; test sinanamaz", missing)
+
+
 @FAZ3
 def test_content_masked_terms_never_appear_in_output_paths(golden_run):
     """Yeni degismez kural: iceride maskelenen terim yolda da maskelenir."""
+    _require_path_term_files_published(golden_run)
     leaking = [(path, term) for path in golden_run["paths"]
                for term in golden_run["manifest"]["yol_beklentileri"]["yolda_gecmemeli"]
                if term.casefold() in path.casefold()]
@@ -117,6 +128,7 @@ def test_content_masked_terms_never_appear_in_output_paths(golden_run):
 @FAZ3
 def test_path_masks_preserve_naming_style(golden_run):
     """PoseidonGatewayClient.java -> Mask<..>GatewayClient.java; karayel/poseidon -> mask<..>."""
+    _require_path_term_files_published(golden_run)
     style = {name: re.compile(pattern) for name, pattern in golden_run["manifest"]["yol_beklentileri"]["stil"].items()}
     java_files = [path for path in golden_run["paths"] if path.endswith(".java")]
     source_names = {p.name for p in golden_run["source"].rglob("*.java")}
@@ -129,6 +141,7 @@ def test_path_masks_preserve_naming_style(golden_run):
 
 @FAZ3
 def test_java_public_class_matches_file_name(golden_run):
+    _require_path_term_files_published(golden_run)
     mismatched = []
     for path in golden_run["paths"]:
         if path.endswith(".java"):
@@ -141,6 +154,7 @@ def test_java_public_class_matches_file_name(golden_run):
 
 @FAZ3
 def test_java_package_matches_directory(golden_run):
+    _require_path_term_files_published(golden_run)
     java_root = golden_run["manifest"]["java_source_root"].split("/", 1)[1]
     mismatched = []
     for path in golden_run["paths"]:
