@@ -55,7 +55,7 @@ async def _lifespan(_app: FastAPI):
     else:
         logger.warning(status.line())
         if status.blocks_export:
-            logger.warning("build_mismatch files=%s", ",".join((*status.mismatched, *status.missing)[:20]))
+            logger.warning(status.detail_line())
     yield
 
 
@@ -79,8 +79,6 @@ app.include_router(downloads.router)
 @app.get("/health")
 def health(db: Session = Depends(get_request_db)) -> dict:
     db.execute(select(1))
-    build = current_build_status()
-    result = {"status": "ok", "build": build.as_dict()}
-    if build.blocks_export:
-        result["build_message"] = build.message()
-    return result
+    # Kimlik dogrulamasiz ve izleme araclarinca govdesiyle kontrol edilebilir:
+    # yalnizca durum. Surum ayrintilari (commit, modul adlari) log ve preflight'ta.
+    return {"status": "degraded" if current_build_status().blocks_export else "ok"}

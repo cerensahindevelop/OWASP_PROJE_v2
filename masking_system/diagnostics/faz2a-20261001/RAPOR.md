@@ -209,3 +209,28 @@ bugün tek parçalı değerler için zaten kullanılıyor.
    çıkardı; geri kazanım için doğrudan araç Faz 2b. Denetim alıntılarının, tespit bulgularıyla
    aynı hattan (OverlapResolver → TokenBoundaryValidator → politika) geçmesi en büyük etkiyi
    verecek.
+
+## 8. Onay sonrası değişiklikler (kullanıcı kararları)
+
+| Commit | Karar | Değişiklik |
+|---|---|---|
+| `3b5c1a5` | 1 | `/health` normalde `{"status": "ok"}` (test aslına döndü), damga uyuşmazlığında `{"status": "degraded"}`. Export 503 mesajında modül adı ve commit yok; ayrıntı `export_refused build_mismatch commit=... files=...` log satırında ve preflight'ta. |
+| `cd2c0e2` | 2 | 3 harf ve daha kısa Türkçe kökler generic listeden çıktı (18 giriş). Yeniden kullanılan `_COMMON_WORDS_TR`'deki kısa kökler (`ad`, `ana`, `kod`, `tip`, `yol`) de bileşik ad kuralında sayılmıyor. `no` İngilizce/kod anahtar kelimesi listelerinden gelmeye devam ediyor. |
+| `23457e4` | 3 | Rapor başlığında proje, sicil ve branch yol maskelemesinden geçiyor. Maskeli hal ham değeri hâlâ içeriyorsa fail-closed `<gizlendi>` yazılıyor (ör. `main`). |
+| `409a6b2` | 4 | Kaynak yollu export doğrulama hataları değişmedi. Senkron ve arka plan işinde mesajın operatöre ulaştığı ve hiçbir log kaydında olmadığı testle doğrulanıyor. |
+| `28d97a2` | – | **Düzeltme:** kök klasör ve başlık maskelemesi yalnızca görüntüleme içindir ama `mask_relative_path` ile DB'ye eşleme yazıp sayaç tüketiyordu (`38b1fe4`'ten beri). Mapping sayısını kontrol eden 5 test bunu yakaladı. Yeni `mask_display_path` aynı yol kurallarını kullanıyor ama DB'ye yazmıyor; eşleşen kısım `<önek>_*` olarak gösteriliyor. |
+
+Bu düzeltmeden sonra `sonra/` ölçümleri yeniden üretildi.
+- Bölüm 2'deki metrikler değişmedi.
+- Maskelenen değer sayısı stub'da 24, LLM kapalıyken 19, generic filtre açıkken 23. Önceki
+  sürümde fazladan sayılan, ölçüm betiğinin geçici hedef klasörünün adındaki proje adıydı.
+- LLM kapalıyken bu dalın çıktısı `main` ile bayt bayt aynı; eşlemeler de birebir aynı.
+
+Test takımı (son): **1542 passed, 1 skipped, 5 xfailed** (Python 3.11.15).
+
+**Bu sırada bulunan, kapsam dışı hata.** Alembic seed verisi sicil kuralını
+`kategori="personnel_no"` ile oluşturuyor. `app/db/seed_data.py` ve export ise `sicil_no`
+kullanıyor. Alembic ile kurulmuş bir DB'de sicil değeri içerikte, yolda ve başlıkta maskelenmez;
+başlık bu yüzden `<gizlendi>` yazıyor. Düzeltme bir veri migrasyonu ve davranış değişikliği
+gerektirdiği için ayrı bir görev olarak önerildi. Intranet kontrol listesi, gerçek DB'nin
+etkilenip etkilenmediğini salt okunur bir sorguyla soruyor.

@@ -52,6 +52,12 @@ def test_flag_defaults_to_off():
     ("MaviYildiz", False),
     ("MusteriService", False),
     ("CustomerRepository", False),
+    # 3 harf ve daha kisa Turkce kokler generic sayilmaz (kisi/kod adi parcasi olabilir)
+    ("AtaServisi", False),
+    ("SecIslemi", False),
+    ("KodServisi", False),
+    ("AnaSayfa", False),
+    ("VerGetir", False),
     # tek parca ve bosluklu degerler bu kuralin konusu degil
     ("Service", False),
     ("User Service", False),
@@ -137,3 +143,10 @@ def test_dictionary_term_is_never_filtered(db_session, tmp_path, monkeypatch, fl
 
     assert report.outcomes[0].final_state == "READY"
     assert "UserService" not in (tmp_path / "cikti" / "notlar.md").read_text(encoding="utf-8")
+
+
+def test_turkish_generic_parts_are_at_least_four_letters():
+    from app.services.term_classifier import _GENERIC_PARTS_TR, _MIN_TR_PART_CHARS
+
+    assert _MIN_TR_PART_CHARS == 4
+    assert [w for w in _GENERIC_PARTS_TR if len(w) < _MIN_TR_PART_CHARS] == []

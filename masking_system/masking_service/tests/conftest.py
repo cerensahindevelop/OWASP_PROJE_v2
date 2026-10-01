@@ -40,3 +40,23 @@ def db_session():
         session.close()
         outer_transaction.rollback()
         connection.close()
+
+
+# FastAPI TestClient; DB bagimliligi transaction-scoped `db_session`'a baglanir.
+# raise_server_exceptions=False: hata yakalayicinin (app/api/errors.py) urettigi
+# status/govde test edilir.
+@pytest.fixture()
+def api_client(db_session):
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_request_db
+    from app.api.main import app
+
+    def _override():
+        yield db_session
+
+    app.dependency_overrides[get_request_db] = _override
+    try:
+        yield TestClient(app, raise_server_exceptions=False)
+    finally:
+        app.dependency_overrides.pop(get_request_db, None)
