@@ -214,6 +214,27 @@ def _dedupe_terms(terms: list[str]) -> list[str]:
     return result
 
 
+# Ortak DB'de silinmemis tum kurumsal terimleri BASLIKTAN BAGIMSIZ, _dedupe_terms
+# ile ayni anahtarla (casefold) dondurur. Ayni ifade baska bir baslik altinda
+# zaten kayitliysa yeniden eklenmez: kural adi basligi icerdiginden kural adi
+# kontrolu tek basina yetmez. Terimler Fernet ile (deterministik olmayan)
+# sifreli tutuldugu icin karsilastirma cozulmus deger uzerinden yapilir.
+def _registered_terms(db: Session) -> dict[str, FilterRule]:
+    rows = db.scalars(
+        select(FilterRule)
+        .where(
+            FilterRule.rule_name.like(f"{_RULE_NAME_PREFIX}%"),
+            FilterRule.corporate_term_deleted_at.is_(None),
+            FilterRule.corporate_term_encrypted.is_not(None),
+        )
+        .order_by(FilterRule.id)
+    ).all()
+    registered: dict[str, FilterRule] = {}
+    for row in rows:
+        registered.setdefault(decrypt_value(row.corporate_term_encrypted).casefold(), row)
+    return registered
+
+
 # Onizlemede/rapor da tek bir terimi, varsa gerekcesiyle (suspicious/rejected
 # nedeni) birlikte tasiyan kucuk yardimci nesne.
 @dataclass(frozen=True)
@@ -290,11 +311,13 @@ def preview_term_upload(
             ).all()
         )
 
+    registered = _registered_terms(db) if checkable else {}
+
     new_valid: list[str] = []
     new_suspicious: list[TermPreviewItem] = []
     already_registered: list[str] = []
     for term, status, reason in checkable:
-        if rule_name_by_term[term] in existing_rule_names:
+        if rule_name_by_term[term] in existing_rule_names or term.casefold() in registered:
             already_registered.append(term)
         elif status == "suspicious":
             new_suspicious.append(TermPreviewItem(term=term, reason=reason))
@@ -346,6 +369,11 @@ def commit_term_upload(db: Session, *, filename: str, content: bytes, category: 
         added_count = 0
         suspicious_added_count = 0
         skipped_count = 0
+
+        if candidates:
+            registered = _registered_terms(db)
+            skipped_count += sum(1 for term, _status in candidates if term.casefold() in registered)
+            candidates = [(term, status) for term, status in candidates if term.casefold() not in registered]
 
         if candidates:
             base_priority = (db.scalar(select(func.max(FilterRule.priority))) or 0) + 10
@@ -556,16 +584,23 @@ def add_single_corporate_term(
             f"Kurumsal ifade eklenemedi: {classification.reason or 'gecersiz ifade'}"
         )
 
-    commit_term_upload(
-        db,
-        filename="tek-kurumsal-ifade.txt",
-        content=f"{clean_term}\n".encode("utf-8"),
-        category=normalized_category,
-    )
-    rule_name = rule_name_for_term(normalized_category, clean_term)
-    row = db.scalar(select(FilterRule).where(FilterRule.rule_name == rule_name))
+    row = _registered_terms(db).get(classification.term.casefold())
+    if row is not None and row.is_active:
+        raise TermUploadValidationError(
+            f"'{clean_term}' ifadesi '{row.category}' başlığı altında zaten kayıtlı; tekrar eklenmedi"
+        )
     if row is None:
-        raise TermUploadValidationError("Kurumsal ifade veritabanina eklenemedi")
+        commit_term_upload(
+            db,
+            filename="tek-kurumsal-ifade.txt",
+            content=f"{clean_term}\n".encode("utf-8"),
+            category=normalized_category,
+        )
+        rule_name = rule_name_for_term(normalized_category, clean_term)
+        row = db.scalar(select(FilterRule).where(FilterRule.rule_name == rule_name))
+        if row is None:
+            raise TermUploadValidationError("Kurumsal ifade veritabanina eklenemedi")
+    # Pasif kayitli ayni ifade yeni satir acilmadan, kendi basligiyla aktif edilir.
 
     # Tekil formdaki acik hassaslik onayi, toplu yuklemedeki "suspicious"
     # sinifinin gerektirdigi insan onayinin kendisidir. Reddedilen ifadeler

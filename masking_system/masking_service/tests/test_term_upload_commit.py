@@ -219,3 +219,67 @@ def test_single_term_add_rejects_multiple_lines(db_session):
             title="pytest single line",
             confirmed_sensitive=True,
         )
+
+
+def _rows_for_term(db_session, term: str) -> list[FilterRule]:
+    return [
+        row for row in db_session.scalars(
+            select(FilterRule).where(FilterRule.rule_name.like("kurumsal_terim_%"))
+        ).all()
+        if row.corporate_term_encrypted and decrypt_value(row.corporate_term_encrypted).casefold() == term.casefold()
+    ]
+
+
+def test_same_term_under_another_title_is_not_inserted_again(db_session):
+    first = commit_term_upload(
+        db_session, filename="a.txt", content="Kxqvorn Platformu\n".encode(), category="pytest_dup_a",
+    )
+    assert first.added_count == 1
+
+    second = commit_term_upload(
+        db_session, filename="b.txt", content="KXQVORN PLATFORMU\nZyphrax\n".encode(), category="pytest_dup_b",
+    )
+    assert second.added_count == 1
+    assert second.skipped_count == 1
+    assert [row.category for row in _rows_for_term(db_session, "Kxqvorn Platformu")] == ["pytest_dup_a"]
+
+
+def test_preview_lists_term_registered_under_another_title(db_session):
+    from app.services.term_upload import preview_term_upload
+
+    commit_term_upload(db_session, filename="a.txt", content=b"Vranoqel\n", category="pytest_dup_c")
+    preview = preview_term_upload(
+        db_session, filename="b.txt", content=b"vranoqel\nQuildomer\n", category="pytest_dup_d",
+    )
+    assert preview.already_registered == ["vranoqel"]
+    assert preview.new_valid == ["Quildomer"]
+
+
+def test_single_add_refuses_term_active_under_another_title(db_session):
+    commit_term_upload(db_session, filename="a.txt", content=b"Brontexa\n", category="pytest_dup_e")
+    with pytest.raises(TermUploadValidationError, match="pytest_dup_e"):
+        add_single_corporate_term(
+            db_session, term="brontexa", title="pytest dup f", confirmed_sensitive=True,
+        )
+    assert len(_rows_for_term(db_session, "Brontexa")) == 1
+
+
+def test_single_add_activates_existing_passive_term_without_new_row(db_session):
+    if _rows_for_term(db_session, "data"):
+        pytest.skip("ortak DB'de 'data' zaten kayitli")
+    commit_term_upload(db_session, filename="a.txt", content=b"data\n", category="pytest_dup_g")
+    passive = next(row for row in _rows_for_term(db_session, "data") if row.category == "pytest_dup_g")
+    before = len(_rows_for_term(db_session, "data"))
+    assert passive.is_active is False
+
+    created = add_single_corporate_term(db_session, term="data", title="pytest dup h", confirmed_sensitive=True)
+    assert created.is_active is True
+    assert len(_rows_for_term(db_session, "data")) == before
+
+
+def test_deleted_term_can_be_added_under_another_title(db_session):
+    commit_term_upload(db_session, filename="a.txt", content=b"Morvatex\n", category="pytest_dup_i")
+    delete_corporate_term(db_session, _rule_row(db_session, "pytest_dup_i", "Morvatex").id)
+
+    result = commit_term_upload(db_session, filename="b.txt", content=b"Morvatex\n", category="pytest_dup_j")
+    assert result.added_count == 1
