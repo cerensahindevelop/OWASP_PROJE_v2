@@ -51,7 +51,7 @@ localhost example com org net http https www api v1 v2 id ids name names value v
 """.split())
 
 # verify_audit_findings davranisi degistiginde artirilir (bkz. audit_record_key).
-_VERIFIER_VERSION = 2
+_VERIFIER_VERSION = 3
 
 _AUDIT_PROMPT_PATH = Path(__file__).with_name("audit_prompt.txt")
 
@@ -179,6 +179,15 @@ def _is_substantive(segment: str) -> bool:
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Alinti "anahtar = deger" / "anahtar: deger" bicimindeyse hassas olan degerdir.
 _KEY_VALUE_RE = re.compile(r"^[\"']?([A-Za-z_][\w.]*)[\"']?\s*(?:=(?![=>])|:)\s*[@$]?[\"']?(.+)$")
+# dr["kimlikNo"], row['eMail'] gibi bir alan/sutun erisimi veri degil, verinin
+# okundugu yerin adidir (model alintiyi kapanis tirnagindan once kesebilir).
+FIELD_ACCESS_RE = re.compile(r"^[A-Za-z_]\w*\s*\[\s*[\"']?([\w.\- ]+?)[\"']?\s*\]?$")
+# Kod ifadesi: row["kisiAdi"].ToString(), dr["kimlikNo"], obj.Text - en az bir
+# indeks/cagri/PascalCase uye erisimi icerir (srv01.corp.local bir ifade degildir).
+_CODE_EXPRESSION_RE = re.compile(r"[A-Za-z_]\w*(?:\s*\[[^\]\n]*\]?|\s*\.\s*[A-Za-z_]\w*|\s*\([^)\n]*\)?)+")
+_CODE_MARKER_RE = re.compile(r"[\[(]|\.\s*[A-Z][a-z]")
+# camelCase/snake_case hörgücü: kod sembolu adlarinin tipik bicimi.
+_CAMEL_HUMP_RE = re.compile(r"[a-z0-9][A-Z]|[A-Za-z0-9]_[A-Za-z0-9]")
 # Satir sonu atamasinda deger kod degil duz veri olmali (orn. .env, .properties).
 _CODE_PUNCTUATION = frozenset("()[]{};")
 
@@ -188,6 +197,31 @@ def _clean_values(text: str, raw: str) -> list[str]:
         segment for segment in _placeholder_free_segments(raw)
         if segment in text and _is_substantive(segment)
     ]
+
+
+def _is_code_expression(segment: str) -> bool:
+    segment = segment.strip()
+    return bool(_CODE_EXPRESSION_RE.fullmatch(segment)) and bool(_CODE_MARKER_RE.search(segment))
+
+
+def _is_code_symbol(text: str, name: str) -> bool:
+    """`musteriKimlikNoTextBox.Location`, `this.anaMusteriAd`, `GetMusteri(` gibi
+    kodda uye erisimi/cagri olarak kullanilan camelCase bir ad - veri degil."""
+    if not _IDENTIFIER_RE.fullmatch(name) or not _CAMEL_HUMP_RE.search(name):
+        return False
+    escaped = re.escape(name)
+    return re.search(
+        rf"(?<!\w){escaped}\s*(?:\.\s*[A-Za-z_]|\(|\[)|\.\s*{escaped}(?!\w)", text,
+    ) is not None
+
+
+def code_symbol_name(excerpt: str) -> str:
+    """Ekranda gosterilecek kisa ad: dr["kimlikNo"] -> kimlikNo."""
+    key = re.search(r"\[\s*[\"']([^\"'\]]+)", excerpt)
+    if key:
+        return key.group(1)
+    first = _IDENTIFIER_RE.search(excerpt)
+    return first.group(0) if first else excerpt
 
 
 def _identifier_assignments(text: str, name: str) -> list[re.Match] | None:
@@ -217,7 +251,11 @@ def resolve_audit_values(text: str, quote: str) -> list[str]:
     """
     values: list[str] = []
     for segment in _clean_values(text, quote):
+        if FIELD_ACCESS_RE.match(segment) or _is_code_expression(segment):
+            continue
         pair = _KEY_VALUE_RE.match(segment)
+        if pair and _is_code_expression(pair.group(2)):
+            continue  # adTextBox.Text = row["kisiAdi"].ToString: kod, veri degil
         if pair and _identifier_assignments(text, pair.group(1)) is not None:
             narrowed = _clean_values(text, pair.group(2))
             if narrowed:
@@ -225,7 +263,8 @@ def resolve_audit_values(text: str, quote: str) -> list[str]:
                 continue
         assignments = _identifier_assignments(text, segment)
         if assignments is None:
-            values.append(segment)
+            if not _is_code_symbol(text, segment):
+                values.append(segment)
             continue
         for match in assignments:
             literal, bare = match.group(2), match.group(3)
@@ -298,7 +337,7 @@ async def audit_masked_text(
                     # Icerik degil, sadece sayilar loglanir.
                     logger.info(
                         "llm_audit_unverified file=%r chunk=%d model_risky=%s dropped_findings=%d kept_findings=%d",
-                        metrics.file_path, index, verdict.risky, dropped, len(verified),
+                        metrics.log_label, index, verdict.risky, dropped, len(verified),
                     )
                 return verified
 

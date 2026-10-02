@@ -69,11 +69,11 @@ def test_llm_location_is_verified_against_actual_content():
     detail = describe_audit_warning(warning(
         "Olası kurum adı (ilgili bolum: 'secret-section')", "first\nsecret-section\nsecret-section"
     ), None)
-    assert detail["summary"] == "Olası kurum adı"
-    assert detail["location"] == "Satır 2, sütun 1; Satır 3, sütun 1"
+    assert detail["summary"] == "Bu dosyada gizlenmemiş görünen 1 bilgi var: kurum adı."
+    assert detail["location"] == "2 satırda: 2, 3"
     assert detail["evidence"][0] == {
         "line": 2, "column": 1, "found_value": "secret-section",
-        "excerpt": "⟦secret-section⟧",
+        "excerpt": "⟦secret-section⟧", "label": "Kurum adı",
     }
     missing = describe_audit_warning(warning("Risk (ilgili bolum: 'absent')", "other"), None)
     assert "belirlenemedi" in missing["location"]
@@ -84,7 +84,8 @@ def test_variable_name_evidence_shows_assigned_value():
     detail = describe_audit_warning(warning("Kisi adi (ilgili bolum: 'anaMusteriAd')", content), None)
     assert [e["found_value"] for e in detail["evidence"]] == ["Ayşe Yılmaz"]
     assert detail["evidence"][0]["excerpt"] == 'string anaMusteriAd = "⟦Ayşe Yılmaz⟧";'
-    assert detail["location"] == "Satır 1, sütun 24"
+    assert detail["evidence"][0]["line"] == 1
+    assert detail["location"] == "1 satırda: 1"
 
 
 def test_variable_name_without_clear_value_is_reported_as_likely_false_alarm():
@@ -93,3 +94,32 @@ def test_variable_name_without_clear_value_is_reported_as_likely_false_alarm():
     assert detail["evidence"] == []
     assert "anaMusteriAd" in detail["summary"]
     assert "yanlış alarm" in detail["next_step"]
+
+
+def test_code_expressions_are_not_reported_as_leaked_values():
+    content = (
+        'detay += $"TCKN : {dr["kimlikNo"]}\\n";\n'
+        'adTextBox.Text = row["kisiAdi"].ToString();\n'
+        "this.musteriKimlikNoTextBox.Location = new Point(1, 2);\n"
+    )
+    reason = (
+        "Maskelenmemis kimlik no (ilgili bolum: 'dr[\"kimlikNo') | "
+        "Maskelenmemis kisi adi (ilgili bolum: 'adTextBox.Text = row[\"kisiAdi\"].ToString') | "
+        "Maskelenmemis kimlik no (ilgili bolum: 'musteriKimlikNoTextBox')"
+    )
+    detail = describe_audit_warning(warning(reason, content), None)
+    assert detail["evidence"] == []
+    assert "kimlikNo, kisiAdi, musteriKimlikNoTextBox" in detail["summary"]
+
+
+def test_findings_are_labelled_in_plain_language():
+    content = 'ad = "Ayşe Yılmaz"\ntel = "05321234567"\n'
+    reason = (
+        "Maskelenmemis kisi adi (ilgili bolum: 'Ayşe Yılmaz') | "
+        "Maskelenmemis telefon numarasi (ilgili bolum: '05321234567')"
+    )
+    detail = describe_audit_warning(warning(reason, content), None)
+    assert [(e["label"], e["found_value"]) for e in detail["evidence"]] == [
+        ("Kişi adı", "Ayşe Yılmaz"), ("Telefon numarası", "05321234567"),
+    ]
+    assert detail["summary"] == "Bu dosyada gizlenmemiş görünen 2 bilgi var: kişi adı, telefon numarası."

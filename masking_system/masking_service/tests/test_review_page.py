@@ -25,18 +25,20 @@ def test_review_page_shows_file_location_reason_and_separate_actions(monkeypatch
             id=7, run_id=42, file_path="sql/query.sql", audit_failed=False,
             reasoning="Technical detail", summary="Maskelenmeden kalan kurumsal terim: proje.",
             location="Satır 9, sütun 20", next_step="Projeyi yeniden dışa aktarın.",
-            evidence=[SimpleNamespace(line=9, column=20, found_value="T_PROJE", excerpt="FROM X.⟦T_PROJE⟧")],
+            evidence=[SimpleNamespace(line=9, column=20, found_value="T_PROJE", excerpt="FROM X.⟦T_PROJE⟧",
+                                      label="Kurumsal terim")],
         ),
     ])
     monkeypatch.setattr(review_page.api_client, "list_pending_reviews", lambda **_: [])
     monkeypatch.setattr(review_page.api_client, "list_runs", lambda **_: [])
     app = _review_app().run()
     assert not app.exception
-    assert any("sql/query.sql" in markdown.value for markdown in app.markdown)
-    assert any("Satır 9, sütun 20" in markdown.value for markdown in app.markdown)
-    assert any("T_PROJE" in markdown.value for markdown in app.markdown)
+    assert any("query.sql" in markdown.value for markdown in app.markdown)
+    assert any("sql/query.sql" in caption.value for caption in app.caption)
+    assert any("Satır 9" in caption.value for caption in app.caption)
+    assert any("Kurumsal terim:** `T_PROJE` — satır 9" in markdown.value for markdown in app.markdown)
     assert [button.label for button in app.button] == [
-        "Risk gerçek — dosyayı beklet", "Düzenle", "Yanlış alarm — yeniden doğrula",
+        "Maskele ve çıktıya ekle", "Sorun yok, çıktıya ekle", "Çıktıya ekleme",
     ]
 
 

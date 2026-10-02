@@ -17,6 +17,7 @@ from app.webapp.api_client import ApiError
 from app.webapp.common import CONFIDENCE_COLORS, CONFIDENCE_LABELS, page_intro, show_error
 # get_identity: sadece aktif kimlige ait onay kuyrugu kayitlarini listelemek icin.
 from app.webapp.identity import get_identity
+from app.services.audit_action_labels import CONFIRM_ACTION_LABEL, DISMISS_ACTION_LABEL, MASK_ACTION_LABEL
 from app.services.learned_decisions import normalize_value, security_scope
 
 _APPROVE_NOTE = (
@@ -239,60 +240,69 @@ def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> Non
         return
 
     st.markdown("### ⛔ Güvenlik Karantinası")
-    st.warning("Maskelenmemiş olabilecek hassas veri bulundu. Bu dosyalar çıktıya alınmadı.")
+    st.warning(
+        "Bu dosyalar maskelendikten sonra yapılan son kontrolde gizlenmemiş bilgi içeriyor olabilir. "
+        "Siz karar verene kadar çıktıya eklenmedi."
+    )
 
     for row in quarantine_rows:
-        with st.expander(f"{row['file_path']} · İşlem #{row['run_id']} — İncele ve karar ver"):
+        file_name = row["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
+        with st.expander(f"📄 {file_name} — İncele ve karar ver"):
             header_col, badge_col = st.columns([4, 1.4])
             with header_col:
-                st.markdown(f"**📄 {row['file_path']}**")
+                st.markdown(f"**📄 {file_name}**")
+                st.caption(f"{row['file_path']} · İşlem #{row['run_id']}")
             with badge_col:
                 if row["audit_failed"]:
                     st.badge("Denetim Yapılamadı", color="orange")
                 else:
                     st.badge("İnceleme gerekli", color="red")
 
-            st.markdown("**Neden durduruldu?**")
+            st.markdown("**Ne bulundu?**")
             st.write(row["summary"])
-            st.markdown("**Nerede?**")
-            st.write(row["location"])
+            values_with_lines: dict[str, dict] = {}
+            for evidence in row["evidence"]:
+                value = getattr(evidence, "found_value", "")
+                if not value:
+                    continue
+                item = values_with_lines.setdefault(
+                    value, {"label": getattr(evidence, "label", "") or "Hassas bilgi", "lines": []},
+                )
+                if getattr(evidence, "line", None):
+                    item["lines"].append(str(evidence.line))
+            for value, item in values_with_lines.items():
+                where = f" — satır {', '.join(dict.fromkeys(item['lines']))}" if item["lines"] else ""
+                st.markdown(f"- **{item['label']}:** `{value}`{where}")
             if row["evidence"]:
-                st.markdown("**Bulunan kanıt**")
-                for evidence in row["evidence"]:
-                    found_value = getattr(evidence, "found_value", "")
-                    excerpt = getattr(evidence, "excerpt", "")
-                    line = getattr(evidence, "line", None)
-                    column = getattr(evidence, "column", None)
-                    st.caption(f"Satır {line}, sütun {column}" if line else "Dosya geneli")
-                    if found_value:
-                        st.write(f"Bulunan değer: `{found_value}`")
-                    if excerpt:
-                        st.code(excerpt, language=None)
+                with st.expander("Dosyada nerede geçtiğini göster"):
+                    for evidence in row["evidence"]:
+                        line = getattr(evidence, "line", None)
+                        st.caption(f"Satır {line}" if line else "Dosya geneli")
+                        excerpt = getattr(evidence, "excerpt", "")
+                        if excerpt:
+                            st.code(excerpt, language=None)
+
+            st.markdown("**Ne yapmalıyım?**")
             if row["next_step"]:
-                st.info(f"Ne yapılmalı? {row['next_step']}")
-            with st.popover("Teknik denetim ayrıntısını göster"):
-                st.text(row["reasoning"])
-
-            st.caption(
-                "Yanlış alarm seçimi dosyayı yeniden denetler; kontrolleri geçen dosya çıktıya eklenir."
+                st.info(row["next_step"])
+            st.markdown(
+                f"- **{MASK_ACTION_LABEL}:** Bulunan değerleri sistem gizler, dosyayı yeniden kontrol edip çıktıya ekler.\n"
+                f"- **{DISMISS_ACTION_LABEL}:** Bunlar gerçek veri değilse seçin. Dosya yeniden kontrol edilip çıktıya eklenir.\n"
+                f"- **{CONFIRM_ACTION_LABEL}:** Dosya dışarı çıkmaz. Maskeleme kurallarını düzeltip projeyi yeniden dışa aktarmanız gerekir."
             )
-
-            st.caption("Düzenle: bulunan riskli ifadeleri sistem maskeler, veritabanına kaydeder ve dosyayı yeniden doğrular.")
             action_col1, action_col2, action_col3 = st.columns(3)
             with action_col1:
-                if st.button(
-                    "Risk gerçek — dosyayı beklet", key=f"audit_confirm_{row['id']}", type="primary", width="stretch"
-                ):
-                    _run_single_audit_action("confirm", row["id"])
-            with action_col2:
-                if st.button("Düzenle", key=f"audit_mask_{row['id']}", width="stretch",
-                             disabled=not any(getattr(e, "found_value", "") for e in row["evidence"])):
+                if st.button(MASK_ACTION_LABEL, key=f"audit_mask_{row['id']}", type="primary", width="stretch",
+                             disabled=not values_with_lines):
                     _run_single_audit_action("mask", row["id"])
-            with action_col3:
-                if st.button(
-                    "Yanlış alarm — yeniden doğrula", key=f"audit_dismiss_{row['id']}", width="stretch"
-                ):
+            with action_col2:
+                if st.button(DISMISS_ACTION_LABEL, key=f"audit_dismiss_{row['id']}", width="stretch"):
                     _run_single_audit_action("dismiss", row["id"])
+            with action_col3:
+                if st.button(CONFIRM_ACTION_LABEL, key=f"audit_confirm_{row['id']}", width="stretch"):
+                    _run_single_audit_action("confirm", row["id"])
+            with st.popover("Teknik ayrıntı"):
+                st.text(row["reasoning"])
 
     st.divider()
 

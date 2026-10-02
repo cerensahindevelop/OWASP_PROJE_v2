@@ -78,6 +78,8 @@ class BoundaryRejection:
     reason: str
 
 
+_ESCAPE_SEQUENCE_RE = re.compile(r"\\.")
+
 # Verilen karakterin bir identifier/kelime karakteri (harf/rakam/alt cizgi) olup olmadigini bildirir.
 def _is_word_char(ch: str | None) -> bool:
     return ch is not None and (ch == "_" or ch.isalnum())
@@ -236,7 +238,17 @@ class TokenBoundaryValidator:
                 # unmask sirasinda yanlis deger geri donerdi.
                 accepted.append(replace(result, start=new_start, end=new_end, deger=text[new_start:new_end]))
 
-        return accepted, rejections
+        # Son guvence: sinira genisletme/daraltma sonucu yalnizca noktalama
+        # kalan bir span (orn. ayristirilamayan bir string'den `]}\n`) hicbir
+        # hassas degeri temsil etmez; maskelenirse kodu bozar. Kacis dizileri
+        # (\n, \t) harf sayilmaz.
+        kept: list[DetectionResult] = []
+        for result in accepted:
+            if any(char.isalnum() for char in _ESCAPE_SEQUENCE_RE.sub("", text[result.start:result.end])):
+                kept.append(result)
+            else:
+                rejections.append(BoundaryRejection(result=result, reason="harf/rakam icermeyen deger maskelenmez"))
+        return kept, rejections
 
     def is_exact_span_allowed(
         self,

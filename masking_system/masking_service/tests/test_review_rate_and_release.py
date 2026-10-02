@@ -459,3 +459,26 @@ def test_background_export_job_failure_is_reported(monkeypatch):
         assert client.get("/export/jobs/doesnotexist").status_code == 404
     finally:
         _cleanup(project)
+
+
+def test_csharp_interpolation_holes_are_code_not_string_content():
+    from app.services.string_literal_index import StringLiteralIndex
+
+    text = 'detay += $"TCKN : {dr["kimlikNo"]}\\n";\nx = $@"C:\\yol ""a"" {ad}";\ny = $"{{lit}} {v:N2} son";\n'
+    spans = [text[a:b] for a, b, _, _ in StringLiteralIndex(text, "a.cs").spans]
+    assert spans == ["TCKN : ", "\\n", 'C:\\yol ""a"" ', "{{lit}} ", " son"]
+
+
+@pytest.mark.parametrize("path", ["Rezervasyon.cs", "notes.txt"])
+@pytest.mark.parametrize("value", ['"]}\\n"', ']}\\n', 'dr["kimlikNo"]}\\n'])
+def test_punctuation_only_detection_is_never_masked(path, value):
+    from app.services.detectors import DetectionResult
+    from app.services.token_boundary_validator import TokenBoundaryValidator
+
+    text = 'detay += $"TCKN : {dr["kimlikNo"]}\\n";\n'
+    start = text.find(value)
+    result = DetectionResult(deger=value, tip="KIMLIK_NO", guven_seviyesi="yuksek", kaynak_motor="llm",
+                             gerekce="", start=start, end=start + len(value))
+    accepted, rejected = TokenBoundaryValidator().validate(text, [result], file_path=path)
+    assert accepted == []
+    assert rejected

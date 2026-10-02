@@ -75,6 +75,13 @@ class StringLiteralIndex:
                 # the surrounding template literal. See _scan_template_literal.
                 i = self._scan_template_literal(text, i, suffix)
                 continue
+            if quote == '"' and suffix == "cs" and not text.startswith('"""', i):
+                prefix = text[max(0, i - 2):i]
+                if prefix.endswith("$") or prefix == "$@":
+                    # $"..{expr}.." / $@"..": {expr} canli koddur, string
+                    # icerigi degildir (bkz. _scan_cs_interpolated).
+                    i = self._scan_cs_interpolated(text, i, verbatim="@" in prefix)
+                    continue
             if quote not in "\"'" and not (quote == "`" and suffix == "go"):
                 i += 1
                 continue
@@ -135,6 +142,43 @@ class StringLiteralIndex:
             self.spans.append((seg_start, i, seg_start, i))
         return i
 
+    def _scan_cs_interpolated(self, text: str, start: int, *, verbatim: bool) -> int:
+        """Index one C# interpolated string ($"..", $@"..", @$"..") as static
+        text spans around its {expr} holes. Without this, the quotes inside a
+        hole ($"TCKN: {dr["kimlikNo"]}\\n") are read as string boundaries and
+        code such as `]}\\n` is mistaken for string content. `{{`/`}}` are
+        literal braces; verbatim strings escape a quote as `""`.
+        """
+        i = start + 1
+        seg_start = i
+        while i < len(text):
+            ch = text[i]
+            if ch == "\\" and not verbatim:
+                i += 2
+                continue
+            if ch == '"':
+                if verbatim and text.startswith('""', i):
+                    i += 2
+                    continue
+                if seg_start < i:
+                    self.spans.append((seg_start, i, seg_start, i))
+                return i + 1
+            if ch in "{}" and text.startswith(ch * 2, i):
+                i += 2
+                continue
+            if ch == "{":
+                if seg_start < i:
+                    self.spans.append((seg_start, i, seg_start, i))
+                i = self._skip_interpolation(text, i + 1, "cs")
+                seg_start = i
+                continue
+            if ch == "\n" and not verbatim:
+                break
+            i += 1
+        if seg_start < i:
+            self.spans.append((seg_start, i, seg_start, i))
+        return i
+
     def _skip_interpolation(self, text: str, pos: int, suffix: str) -> int:
         """Skip a ${...} expression body starting right after '${'.
 
@@ -153,7 +197,7 @@ class StringLiteralIndex:
             if ch in "\"'":
                 i = self._skip_simple_string(text, i)
                 continue
-            if ch == "`":
+            if ch == "`" and suffix != "cs":
                 i = self._scan_template_literal(text, i, suffix)
                 continue
             if ch == "{":

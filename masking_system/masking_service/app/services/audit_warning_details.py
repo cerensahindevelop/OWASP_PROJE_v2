@@ -8,8 +8,30 @@ import re
 from sqlalchemy.orm import Session
 
 from app.db.models import AuditWarning
-from app.services.audit_reviewer import resolve_audit_values
+from app.services.audit_action_labels import DISMISS_ACTION_LABEL, MASK_ACTION_LABEL
+from app.services.audit_reviewer import code_symbol_name, resolve_audit_values
 from app.services.term_upload import find_leaked_terms
+
+
+# Model aciklamalari ASCII Turkce gelir ("Maskelenmemis kimlik no"); ekranda
+# kullanicinin okuyacagi etikete cevrilir ("Kimlik numarası").
+_LABEL_PREFIXES = frozenset({"maskelenmemis", "maskelenmemiş", "acik", "açık", "olasi", "olası"})
+_LABEL_WORDS = {
+    "kisi": "kişi", "adi": "adı", "soyadi": "soyadı", "numarasi": "numarası", "no": "numarası",
+    "sifre": "şifre", "sifresi": "şifresi", "anahtari": "anahtarı", "ic": "iç", "musteri": "müşteri",
+    "sirket": "şirket", "ozgu": "özgü", "kullanici": "kullanıcı", "baglanti": "bağlantı",
+    "degeri": "değeri", "adi/soyadi": "adı/soyadı",
+}
+
+
+def friendly_label(description: str) -> str:
+    words = description.strip().rstrip(".").split()
+    while words and words[0].casefold() in _LABEL_PREFIXES:
+        words.pop(0)
+    if not words:
+        return "Hassas bilgi"
+    text = " ".join(_LABEL_WORDS.get(word.casefold(), word) for word in words)
+    return ("İ" if text[0] == "i" else text[0].upper()) + text[1:]
 
 
 def _line_excerpt(content: str, line_number: int, value: str = "") -> str:
@@ -128,6 +150,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
                 "column": column_no,
                 "found_value": value,
                 "excerpt": _line_excerpt(warning.masked_content, line_no, value),
+                "label": "Kurumsal terim",
             })
         return {
             "summary": "Maskelenmeden kalan kurumsal terim: " + ", ".join(categories[:4]) + ".",
@@ -142,12 +165,14 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
     evidence: list[dict[str, object]] = []
     seen: set[tuple[int, str]] = set()
     names_without_value: list[str] = []
-    for excerpt in re.findall(r"\(ilgili bolum: '(.*?)'\)", reason, re.DOTALL):
+    for match in re.finditer(r"([^|]*?)\s*\(ilgili bolum: '(.*?)'\)", reason, re.DOTALL):
+        description, excerpt = match.group(1), match.group(2)
         if not excerpt:
             continue
+        label = friendly_label(description)
         values = resolve_audit_values(content, excerpt)
         if not values and excerpt in content:
-            names_without_value.append(excerpt)
+            names_without_value.append(code_symbol_name(excerpt))
         for value in values:
             offset = 0
             while (offset := content.find(value, offset)) >= 0:
@@ -159,25 +184,52 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
                         "column": offset - content.rfind("\n", 0, offset),
                         "found_value": value,
                         "excerpt": _line_excerpt(content, line_number, value),
+                        "label": label,
                     })
                     seen.add(key)
                 offset += len(value)
-    if not evidence and names_without_value:
+    auto_fix_note = (
+        " Sistem dosyayı otomatik düzeltmeyi denedi, ancak dosya son kontrolden geçemedi."
+        if "otomatik düzeltme denendi" in reason else ""
+    )
+    if evidence:
+        values = list(dict.fromkeys(str(item["found_value"]) for item in evidence))
+        labels = list(dict.fromkeys(str(item["label"]).casefold() for item in evidence))
+        lines = list(dict.fromkeys(int(item["line"]) for item in evidence))
+        location = f"{len(lines)} satırda: " + ", ".join(str(line) for line in lines[:6])
+        if len(lines) > 6:
+            location += f" ve {len(lines) - 6} satır daha"
+        return {
+            "summary": (
+                f"Bu dosyada gizlenmemiş görünen {len(values)} bilgi var: {', '.join(labels[:4])}."
+                + auto_fix_note
+            ),
+            "location": location,
+            "next_step": (
+                f"Listelenen değerler gerçek kişisel veya kurumsal bilgiyse “{MASK_ACTION_LABEL}” seçin. "
+                f"Örnek/test verisi ya da zararsız bir ifadeyse “{DISMISS_ACTION_LABEL}” seçin."
+            ),
+            "evidence": evidence[:evidence_limit],
+        }
+    if names_without_value:
         names = ", ".join(dict.fromkeys(names_without_value))
         return {
             "summary": (
-                f"Denetim yalnızca ad gösterdi ({names}); dosyada bu ada atanmış açık bir değer yok."
+                f"Yapay zekâ denetimi yalnızca alan veya değişken adlarına takıldı ({names}). "
+                "Bu adların yanında dosyada gerçek bir kişisel veya kurumsal veri yok." + auto_fix_note
             ),
-            "location": "Açık hassas değer bulunamadı.",
-            "next_step": "Büyük olasılıkla yanlış alarm. 'Yanlış alarm — yeniden doğrula' ile dosyayı yeniden denetleyin.",
+            "location": "Gizlenmemiş bir değer bulunamadı.",
+            "next_step": (
+                f"Büyük olasılıkla yanlış alarm. “{DISMISS_ACTION_LABEL}” ile dosyayı yeniden kontrol ettirebilirsiniz."
+            ),
             "evidence": [],
         }
-    summary = " ".join(reason.split(" (ilgili bolum:", 1)[0].split())
     return {
-        "summary": summary[:180] + ("…" if len(summary) > 180 else "") if summary else "Denetim olası hassas bilgi bildirdi.",
-        "location": ("; ".join(
-            f"Satır {item['line']}, sütun {item['column']}" for item in evidence[:6]
-        )) if evidence else "Konum belirlenemedi — denetim ayrıntısını inceleyin.",
-        "next_step": "Bulguyu inceleyin. Risk gerçekse kuralları düzeltip yeniden dışa aktarın.",
-        "evidence": evidence[:evidence_limit],
+        "summary": (
+            "Yapay zekâ denetimi olası bir hassas bilgi bildirdi, ancak bildirdiği ifade dosyada bulunamadı."
+            + auto_fix_note
+        ),
+        "location": "Konum belirlenemedi.",
+        "next_step": "Teknik ayrıntıyı inceleyin; emin değilseniz dosyayı çıktıya eklemeyin.",
+        "evidence": [],
     }

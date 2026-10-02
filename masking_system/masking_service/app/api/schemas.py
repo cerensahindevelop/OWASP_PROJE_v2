@@ -135,6 +135,7 @@ class AuditEvidenceOut(BaseModel):
     column: int | None = None
     found_value: str = ""
     excerpt: str = ""
+    label: str = ""
 
 
 class AuditWarningOut(BaseModel):
