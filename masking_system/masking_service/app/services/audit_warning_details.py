@@ -8,6 +8,7 @@ import re
 from sqlalchemy.orm import Session
 
 from app.db.models import AuditWarning
+from app.services.audit_reviewer import resolve_audit_values
 from app.services.term_upload import find_leaked_terms
 
 
@@ -136,24 +137,41 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
         }
 
     # Only report line numbers when the model's cited excerpt actually exists.
+    # A cited variable name is shown as the clear value assigned to it.
+    content = warning.masked_content
     evidence: list[dict[str, object]] = []
     seen: set[tuple[int, str]] = set()
+    names_without_value: list[str] = []
     for excerpt in re.findall(r"\(ilgili bolum: '(.*?)'\)", reason, re.DOTALL):
         if not excerpt:
             continue
-        offset = 0
-        while (offset := warning.masked_content.find(excerpt, offset)) >= 0:
-            line_number = warning.masked_content.count("\n", 0, offset) + 1
-            key = (line_number, excerpt)
-            if key not in seen:
-                evidence.append({
-                    "line": line_number,
-                    "column": offset - warning.masked_content.rfind("\n", 0, offset),
-                    "found_value": excerpt,
-                    "excerpt": _line_excerpt(warning.masked_content, line_number, excerpt),
-                })
-                seen.add(key)
-            offset += len(excerpt)
+        values = resolve_audit_values(content, excerpt)
+        if not values and excerpt in content:
+            names_without_value.append(excerpt)
+        for value in values:
+            offset = 0
+            while (offset := content.find(value, offset)) >= 0:
+                line_number = content.count("\n", 0, offset) + 1
+                key = (line_number, value)
+                if key not in seen:
+                    evidence.append({
+                        "line": line_number,
+                        "column": offset - content.rfind("\n", 0, offset),
+                        "found_value": value,
+                        "excerpt": _line_excerpt(content, line_number, value),
+                    })
+                    seen.add(key)
+                offset += len(value)
+    if not evidence and names_without_value:
+        names = ", ".join(dict.fromkeys(names_without_value))
+        return {
+            "summary": (
+                f"Denetim yalnızca ad gösterdi ({names}); dosyada bu ada atanmış açık bir değer yok."
+            ),
+            "location": "Açık hassas değer bulunamadı.",
+            "next_step": "Büyük olasılıkla yanlış alarm. 'Yanlış alarm — yeniden doğrula' ile dosyayı yeniden denetleyin.",
+            "evidence": [],
+        }
     summary = " ".join(reason.split(" (ilgili bolum:", 1)[0].split())
     return {
         "summary": summary[:180] + ("…" if len(summary) > 180 else "") if summary else "Denetim olası hassas bilgi bildirdi.",

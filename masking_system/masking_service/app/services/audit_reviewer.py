@@ -50,6 +50,9 @@ if else for while try catch except finally raise throw throws select from where 
 localhost example com org net http https www api v1 v2 id ids name names value values key keys todo fixme
 """.split())
 
+# verify_audit_findings davranisi degistiginde artirilir (bkz. audit_record_key).
+_VERIFIER_VERSION = 2
+
 _AUDIT_PROMPT_PATH = Path(__file__).with_name("audit_prompt.txt")
 
 _AUDIT_SCHEMA = {
@@ -173,27 +176,88 @@ def _is_substantive(segment: str) -> bool:
     return any(word.casefold() not in _GENERIC_TOKENS for word in words)
 
 
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Alinti "anahtar = deger" / "anahtar: deger" bicimindeyse hassas olan degerdir.
+_KEY_VALUE_RE = re.compile(r"^[\"']?([A-Za-z_][\w.]*)[\"']?\s*(?:=(?![=>])|:)\s*[@$]?[\"']?(.+)$")
+# Satir sonu atamasinda deger kod degil duz veri olmali (orn. .env, .properties).
+_CODE_PUNCTUATION = frozenset("()[]{};")
+
+
+def _clean_values(text: str, raw: str) -> list[str]:
+    return [
+        segment for segment in _placeholder_free_segments(raw)
+        if segment in text and _is_substantive(segment)
+    ]
+
+
+def _identifier_assignments(text: str, name: str) -> list[re.Match] | None:
+    """`name` kodda atanan/anahtar olarak kullanilan bir tanimlayiciysa atama
+    eslesmelerini dondurur; tanimlayici olarak kullanilmiyorsa None."""
+    if not _IDENTIFIER_RE.fullmatch(name):
+        return None
+    escaped = re.escape(name)
+    assignments = list(re.finditer(
+        rf"(?:(?<![\w\"'.]){escaped}[ \t]*=(?![=>])"            # anaMusteriAd = ...
+        rf"|[\"']{escaped}[\"'][ \t]*:"                         # "anaMusteriAd": ...
+        rf"|^[ \t]*(?:export[ \t]+)?{escaped}[ \t]*[=:](?!=))"  # anaMusteriAd: ... (YAML/.env)
+        rf"[ \t]*(?:[@$]?([\"'])((?:\\.|(?!\1).)*)\1|([^\n]*))",
+        text, re.MULTILINE,
+    ))
+    return assignments or None
+
+
+def resolve_audit_values(text: str, quote: str) -> list[str]:
+    """Modelin alintisini metinde ACIK duran somut degerlere cevirir.
+
+    Hassas olan degisken/alan adi degil, ona atanan degerdir: model
+    `anaMusteriAd` gosterirse metindeki `anaMusteriAd = "Ayse Yilmaz"`
+    atamasindan `Ayse Yilmaz` dondurulur. Tanimlayiciya acik bir deger
+    atanmamissa (bos, yer tutucu, calisma aninda okunan) bos liste doner -
+    yalnizca bir ad, sizinti degildir.
+    """
+    values: list[str] = []
+    for segment in _clean_values(text, quote):
+        pair = _KEY_VALUE_RE.match(segment)
+        if pair and _identifier_assignments(text, pair.group(1)) is not None:
+            narrowed = _clean_values(text, pair.group(2))
+            if narrowed:
+                values.extend(narrowed)
+                continue
+        assignments = _identifier_assignments(text, segment)
+        if assignments is None:
+            values.append(segment)
+            continue
+        for match in assignments:
+            literal, bare = match.group(2), match.group(3)
+            if literal is not None:
+                values.extend(_clean_values(text, literal))
+            elif bare is not None:
+                bare = bare.split(" #", 1)[0].split(" //", 1)[0].strip()
+                # Baska bir degiskene/ifadeye atama (x = y; x = f()) deger degildir.
+                if bare and not _CODE_PUNCTUATION.intersection(bare) \
+                        and _identifier_assignments(text, bare) is None:
+                    values.extend(_clean_values(text, bare))
+    return list(dict.fromkeys(values))
+
+
 def verify_audit_findings(text: str, findings: list[AuditFinding]) -> tuple[list[AuditFinding], int]:
     """Keep only findings whose cited clear-text value really exists in `text`.
 
     Tespit katmanindaki ilkenin aynisi: modelin soyledigine degil, metinde
     birebir dogrulanabilen alintiya guvenilir. Yer tutucular alintidan
-    cikarilir (onlar zaten guvenli); geriye anlamli, metinde gecen bir parca
+    cikarilir (onlar zaten guvenli); degisken adlari atanan degere cevrilir
+    (bkz. resolve_audit_values). Geriye anlamli, metinde gecen bir deger
     kalmazsa bulgu "somut sizinti" sayilmaz. Donus: (dogrulanan, atilan_sayisi).
     """
     verified: list[AuditFinding] = []
     dropped = 0
     for finding in findings:
-        quote = finding.ilgili_bolum or ""
-        kept = [
-            segment for segment in _placeholder_free_segments(quote)
-            if segment in text and _is_substantive(segment)
-        ]
+        kept = resolve_audit_values(text, finding.ilgili_bolum or "")
         if not kept:
             dropped += 1
             continue
-        for segment in kept:
-            verified.append(AuditFinding(aciklama=finding.aciklama, ilgili_bolum=segment))
+        for value in kept:
+            verified.append(AuditFinding(aciklama=finding.aciklama, ilgili_bolum=value))
     return verified, dropped
 
 
@@ -282,6 +346,8 @@ def audit_record_key(content: str, file_path: str, vllm_settings, blob_min_chars
         "disable_thinking": getattr(vllm_settings, "disable_thinking", False),
         "presence_penalty": getattr(vllm_settings, "presence_penalty", 0.0),
         "blob_min_chars": blob_min_chars,
+        # Bulgu dogrulama mantigi degisince eski kayitlar yeniden kullanilmaz.
+        "verifier": _VERIFIER_VERSION,
     }
     return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 

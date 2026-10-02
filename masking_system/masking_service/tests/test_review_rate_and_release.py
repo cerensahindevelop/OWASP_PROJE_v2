@@ -238,6 +238,36 @@ def test_verify_audit_findings_trims_placeholders():
     assert dropped == 2
 
 
+_CS_SOURCE = (
+    'string anaMusteriAd = "{value}";\n'
+    'anaMusteriAd = dr["MusteriAd"].ToString(); // Musteri adini aldik\n'
+    'detay += $"- {{anaMusteriAd}} (Rezervasyon Sahibi)\\n";\n'
+)
+
+
+@pytest.mark.parametrize("text,quote,expected", [
+    # Degisken adi degil, ona atanan acik deger hassastir.
+    (_CS_SOURCE.format(value="Ayşe Yılmaz"), "anaMusteriAd", ["Ayşe Yılmaz"]),
+    (_CS_SOURCE.format(value="Ayşe Yılmaz"), 'anaMusteriAd = "Ayşe Yılmaz"', ["Ayşe Yılmaz"]),
+    ('{"anaMusteriAd": "Ayşe Yılmaz"}', "anaMusteriAd", ["Ayşe Yılmaz"]),
+    ("owner: Hakan Yilmaz\n", "owner", ["Hakan Yilmaz"]),
+    ("DB_PASSWORD=Sup3rS3cret\n", "DB_PASSWORD", ["Sup3rS3cret"]),
+    ("WHERE MusteriAd = 'Ayşe Yılmaz'", "MusteriAd", ["Ayşe Yılmaz"]),
+    # Atanan deger yoksa (bos, maskeli, calisma aninda okunan) sizinti yoktur.
+    (_CS_SOURCE.format(value=""), "anaMusteriAd", []),
+    (_CS_SOURCE.format(value="mask_kisi_adi_1"), "anaMusteriAd", []),
+    ('ad = musteri_adi\nmusteri_adi = row["x"]\n', "ad", []),
+    # Tanimlayici olarak kullanilmayan degerler oldugu gibi kalir.
+    ("// sahibi Hakan Yilmaz\n", "Hakan Yilmaz", ["Hakan Yilmaz"]),
+    ("host = srvprod01\n", "srvprod01", ["srvprod01"]),
+    ("// TODO Hakan: duzelt\n", "Hakan", ["Hakan"]),
+])
+def test_audit_finding_resolves_variable_name_to_assigned_value(text, quote, expected):
+    kept, dropped = verify_audit_findings(text, [AuditFinding("kisi adi", quote)])
+    assert [f.ilgili_bolum for f in kept] == expected
+    assert dropped == (0 if expected else 1)
+
+
 @pytest.mark.parametrize("raw,expected", [
     ("PERSON", "PERSON"),
     ("person name", "PERSON"),

@@ -77,3 +77,19 @@ def test_llm_location_is_verified_against_actual_content():
     }
     missing = describe_audit_warning(warning("Risk (ilgili bolum: 'absent')", "other"), None)
     assert "belirlenemedi" in missing["location"]
+
+
+def test_variable_name_evidence_shows_assigned_value():
+    content = 'string anaMusteriAd = "Ayşe Yılmaz";\nprint(anaMusteriAd);\n'
+    detail = describe_audit_warning(warning("Kisi adi (ilgili bolum: 'anaMusteriAd')", content), None)
+    assert [e["found_value"] for e in detail["evidence"]] == ["Ayşe Yılmaz"]
+    assert detail["evidence"][0]["excerpt"] == 'string anaMusteriAd = "⟦Ayşe Yılmaz⟧";'
+    assert detail["location"] == "Satır 1, sütun 24"
+
+
+def test_variable_name_without_clear_value_is_reported_as_likely_false_alarm():
+    content = 'string anaMusteriAd = "";\nanaMusteriAd = dr["MusteriAd"].ToString();\n'
+    detail = describe_audit_warning(warning("Kisi adi (ilgili bolum: 'anaMusteriAd')", content), None)
+    assert detail["evidence"] == []
+    assert "anaMusteriAd" in detail["summary"]
+    assert "yanlış alarm" in detail["next_step"]
