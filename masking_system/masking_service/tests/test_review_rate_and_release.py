@@ -482,3 +482,24 @@ def test_punctuation_only_detection_is_never_masked(path, value):
     accepted, rejected = TokenBoundaryValidator().validate(text, [result], file_path=path)
     assert accepted == []
     assert rejected
+
+
+def test_csharp_verbatim_string_with_doubled_quotes_is_one_literal():
+    from app.services.string_literal_index import StringLiteralIndex
+
+    text = 'string sql = @"SELECT k.""kimlikNo""\n  FROM x ORDER BY k.""kisiAdi""";\nvar y = "a";\n'
+    spans = [text[a:b] for a, b, _, _ in StringLiteralIndex(text, "a.cs").spans]
+    assert spans == ['SELECT k.""kimlikNo""\n  FROM x ORDER BY k.""kisiAdi""', "a"]
+
+
+def test_llm_finding_is_not_widened_to_a_multiline_string():
+    from app.services.detectors import DetectionResult
+    from app.services.token_boundary_validator import TokenBoundaryValidator
+
+    text = 'string sql = @"SELECT k.""kimlikNo""\n  FROM ""Kisi"" k";\nreturn sql;\n'
+    start = text.find("kimlikNo")
+    result = DetectionResult(deger="kimlikNo", tip="KIMLIK_NO", guven_seviyesi="yuksek", kaynak_motor="llm",
+                             gerekce="", start=start, end=start + len("kimlikNo"))
+    accepted, rejected = TokenBoundaryValidator().validate(text, [result], file_path="a.cs")
+    assert accepted == []
+    assert "cok satirli" in rejected[0].reason

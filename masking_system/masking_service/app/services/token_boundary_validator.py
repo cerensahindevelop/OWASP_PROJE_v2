@@ -229,6 +229,18 @@ class TokenBoundaryValidator:
                 continue
 
             new_start, new_end = span
+            if (
+                not is_authoritative_result(result)
+                and "\n" in text[new_start:new_end]
+                and "\n" not in text[result.start:result.end]
+            ):
+                # Tahmine dayali tek satirlik bir bulgu (orn. SQL icindeki bir
+                # kolon adi) cok satirli bir string'in tamamina genisletilmez:
+                # butun sorgu/blok tek yer tutucu olur, dosya okunamaz hale gelir.
+                rejections.append(BoundaryRejection(
+                    result=result, reason="tek satirlik bulgu cok satirli string'in tamamina genisletilmez",
+                ))
+                continue
             if (new_start, new_end) == (result.start, result.end) and result.deger == text[new_start:new_end]:
                 accepted.append(result)
             else:

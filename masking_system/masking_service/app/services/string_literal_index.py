@@ -82,6 +82,13 @@ class StringLiteralIndex:
                     # icerigi degildir (bkz. _scan_cs_interpolated).
                     i = self._scan_cs_interpolated(text, i, verbatim="@" in prefix)
                     continue
+                if prefix.endswith("@"):
+                    # @"..": cok satirli olabilir, tirnak "" ile kacirilir ve
+                    # ters bolu kacis karakteri degildir. Aksi halde @"..""a""..""" 
+                    # sonundaki """ uc tirnakli string sanilip dosyanin geri
+                    # kalanini yutar.
+                    i = self._scan_cs_verbatim(text, i)
+                    continue
             if quote not in "\"'" and not (quote == "`" and suffix == "go"):
                 i += 1
                 continue
@@ -140,6 +147,18 @@ class StringLiteralIndex:
             i += 1
         if seg_start < i:
             self.spans.append((seg_start, i, seg_start, i))
+        return i
+
+    def _scan_cs_verbatim(self, text: str, start: int) -> int:
+        i = start + 1
+        while i < len(text):
+            if text[i] == '"':
+                if text.startswith('""', i):
+                    i += 2
+                    continue
+                self.spans.append((start + 1, i, start, i + 1))
+                return i + 1
+            i += 1
         return i
 
     def _scan_cs_interpolated(self, text: str, start: int, *, verbatim: bool) -> int:
