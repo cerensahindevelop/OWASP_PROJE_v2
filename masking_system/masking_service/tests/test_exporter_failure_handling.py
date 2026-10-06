@@ -477,6 +477,14 @@ def test_degraded_presidio_marks_run_as_completed_with_warnings(tmp_path, monkey
         _cleanup_identity(project)
 
 
+def _letters(n, width):
+    # Satir kimligi harflerle: yalnizca rakamlari farkli satirlar LLM icin ayni sayilir.
+    out = ""
+    for _ in range(width):
+        n, r = divmod(n, 26)
+        out = "abcdefghijklmnopqrstuvwxyz"[r] + out
+    return out
+
 @pytest.mark.parametrize('failed_phase', ['detection', 'audit'])
 def test_later_llm_chunk_failure_is_quarantined_not_published(tmp_path, monkeypatch, failed_phase):
     """Exercise real chunk runners all the way through the publication gate."""
@@ -489,7 +497,7 @@ def test_later_llm_chunk_failure_is_quarantined_not_published(tmp_path, monkeypa
     try:
         source = tmp_path / 'source'
         source.mkdir()
-        (source / 'big.txt').write_text('public text\n' * 1500, encoding='utf-8')
+        (source / 'big.txt').write_text(''.join(f'public text {_letters(i, 4)}\n' for i in range(1500)), encoding='utf-8')
         target = tmp_path / 'target'
         s = exporter_module.settings.vllm
         monkeypatch.setattr(s, 'enabled', True)
@@ -585,5 +593,61 @@ def test_malformed_llm_confidence_quarantines_even_when_audit_succeeds(tmp_path,
         assert "TypeError" not in outcomes["bad.txt"].error
         assert "SYNTHETIC_VALUE" not in outcomes["bad.txt"].error
         assert not (target / "bad.txt").exists()
+    finally:
+        _cleanup_identity(project)
+
+
+def test_audit_finding_in_collapsed_lines_remediates_every_digit_variant(tmp_path, monkeypatch):
+    """Tespit kod adini kacirsa bile denetim tek varyanti gordugunde, atlanan
+    benzer satirlardaki tum varyantlar otomatik duzeltilir; insan onayi gerekmez."""
+    import json
+    from app.services import llm_recognizer, audit_reviewer
+    from app.services.llm_detector import LLMDetector
+
+    project = f'{_IDENTITY_PREFIX}-digit-variants'
+    try:
+        source = tmp_path / 'source'
+        source.mkdir()
+        lines = ''.join(
+            f'2026-10-05 08:{(i // 60) % 60:02d}:{i % 60:02d} INFO deploy PRJ-ALFA-{i % 13} tamam\n'
+            for i in range(1500)
+        )
+        (source / 'app.log').write_text(lines, encoding='utf-8')
+        target = tmp_path / 'target'
+        s = exporter_module.settings.vllm
+        monkeypatch.setattr(s, 'enabled', True)
+        monkeypatch.setattr(s, 'host', 'http://fake-llm')
+        monkeypatch.setattr(s, 'model', 'fake-model')
+        monkeypatch.setattr(s, 'transient_retries', 0)
+        monkeypatch.setattr(s, 'max_file_chars', 6000)
+        monkeypatch.setattr(s, 'max_concurrent_requests', 1)
+        audit_calls = []
+
+        async def fake(host, timeout, payload, api_key=None):
+            chunk = payload['messages'][-1]['content']
+            if payload['response_format']['json_schema']['name'] != 'denetim_semasi':
+                data = {'bulgular': []}  # tespit kod adini kaciriyor
+            else:
+                audit_calls.append(chunk)
+                line = next((l for l in chunk.splitlines() if 'PRJ-ALFA-' in l), None)
+                code = line.split('deploy ')[1].split(' ')[0] if line else None
+                data = {'risk_var': bool(code),
+                        'bulgular': [{'ilgili_bolum': code, 'aciklama': 'kod adi'}] if code else []}
+            return {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(data)}}]}
+
+        class DetectorOrchestrator:
+            async def scan(self, text, metadata=None):
+                return await LLMDetector(s).detect(text, metadata)
+
+        monkeypatch.setattr(exporter_module, 'build_orchestrator', lambda *a, **k: DetectorOrchestrator())
+        monkeypatch.setattr(llm_recognizer, 'call_vllm', fake)
+        monkeypatch.setattr(audit_reviewer, 'call_vllm', fake)
+        report = _run_export(source, target, project)
+
+        assert report.files_quarantined_pending_audit == 0
+        assert report.outcomes[0].final_state == 'READY'
+        output = (target / 'app.log').read_text(encoding='utf-8')
+        assert 'PRJ-ALFA' not in output  # hicbir varyant acik kalmadi
+        assert len(audit_calls) <= 4  # 1500 satir her turda tek parca denetlendi
     finally:
         _cleanup_identity(project)

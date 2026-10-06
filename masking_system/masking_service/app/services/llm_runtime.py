@@ -1,6 +1,6 @@
 """Shared detection/audit admission and content-free timing records.
 
-The gate is shared by jobs on one event loop, not by independent workers.
+Admission is shared across loops, threads and workers using OS file locks.
 The HTTP timeout starts AFTER admission. Only the failed request itself is
 retried, and only for transient transport failures (timeout, connection,
 HTTP 429/5xx) - never for parse/schema/truncation errors. Completed chunks are
@@ -21,6 +21,7 @@ from time import monotonic
 from uuid import uuid4
 
 from app.services.log_refs import current_file_label
+from app.services.llm_admission import admission_pool
 
 # Inherits Uvicorn's configured INFO handler; CLI can configure this logger too.
 logger = logging.getLogger("uvicorn.error.llm")
@@ -125,20 +126,9 @@ def usage_summary(by_file: dict[str, LLMFileUsage]) -> dict[str, float]:
 
 
 def _gate(settings):
-    loop = asyncio.get_running_loop()
-    gates = getattr(loop, "_masking_llm_gates", None)
-    if gates is None:
-        gates = {}
-        loop._masking_llm_gates = gates
     key = settings.host.rstrip("/")
     limit = max(1, getattr(settings, "max_concurrent_requests", 1))
-    if key not in gates:
-        gates[key] = (limit, asyncio.Semaphore(limit))
-    configured, semaphore = gates[key]
-    if configured != limit:
-        # Runtime configuration is immutable: changing it requires a restart.
-        raise ValueError("Ayni endpoint icin eszamanlilik ayarlari tutarsiz; servisi yeniden baslatin")
-    return semaphore
+    return admission_pool("llm:" + key, limit).lease()
 
 
 _RETRY_BASE_DELAY_SECONDS = 1.0
@@ -190,71 +180,84 @@ class LLMScanMetrics:
         )
 
     async def request(self, settings, payload, caller, parser, chunk_index):
-        queued = monotonic()
-        async with _gate(settings):
-            queue_seconds = monotonic() - queued
-            self.queue_seconds += queue_seconds
-            started = monotonic()
-            self.requests += 1
-            error = "none"
-            status = "ok"
-            usage = {}
-            finish = None
-            stage = "http"
-            try:
-                retries = max(0, int(getattr(settings, "transient_retries", 0) or 0))
-                attempt = 0
-                while True:
-                    try:
+        started = monotonic()
+        queued = started
+        queue_seconds = 0.0
+        error = "none"
+        status = "ok"
+        usage = {}
+        finish = None
+        stage = "admission"
+        # Kapasite alinamadan (ayar hatasi, kuyrukta iptal) biten cagri model
+        # istegi degildir: llm_request satiri yalnizca gonderilen istek icin yazilir.
+        sent = False
+        try:
+            retries = max(0, int(getattr(settings, "transient_retries", 0) or 0))
+            attempt = 0
+            while True:
+                try:
+                    queued = monotonic()
+                    stage = "admission"
+                    async with _gate(settings):
+                        waited = monotonic() - queued
+                        queue_seconds += waited
+                        self.queue_seconds += waited
+                        stage = "http"
+                        sent = True
+                        self.requests += 1
                         raw = await caller(settings.host, settings.timeout_seconds, payload,
                                            getattr(settings, "api_key", None))
-                        break
-                    except Exception as exc:
-                        if attempt >= retries or not is_transient_llm_error(exc):
-                            raise
-                        attempt += 1
-                        self.requests += 1
-                        logger.info(
-                            "llm_retry scan_id=%s file=%r phase=%s chunk=%d attempt=%d error_type=%s",
-                            self.scan_id, self.log_label, self.phase, chunk_index, attempt,
-                            type(exc.__cause__ or exc).__name__,
-                        )
-                        await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * attempt)
-                if isinstance(raw, dict):
-                    usage = raw.get("usage") or {}
-                    if not isinstance(usage, dict):
-                        usage = {}
-                    choices = raw.get("choices")
-                    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-                        finish = choices[0].get("finish_reason")
-                        if finish not in (None, "stop", "length", "content_filter", "tool_calls"):
-                            finish = "other"
-                # Include parsing in the result status; HTTP 200 != completed scan.
-                stage = "parse"
-                result = parser(raw)
-                self.completed += 1
-                return result
-            except BaseException as exc:
-                cause = exc.__cause__ or exc
-                error = type(cause).__name__
-                status = "timeout" if isinstance(cause, (TimeoutError,)) or "Timeout" in error else "error"
-                if hasattr(cause, "response"):
-                    status += "_http_" + str(cause.response.status_code)
-                raise
-            finally:
-                input_tokens = usage.get("prompt_tokens")
-                output_tokens = usage.get("completion_tokens")
-                input_tokens = input_tokens if isinstance(input_tokens, int) else None
-                output_tokens = output_tokens if isinstance(output_tokens, int) else None
-                if input_tokens is not None and output_tokens is not None:
-                    self.prompt_tokens += input_tokens
-                    self.completion_tokens += output_tokens
-                    self.usage_responses += 1
+                    break
+                except Exception as exc:
+                    if attempt >= retries or not is_transient_llm_error(exc):
+                        raise
+                    attempt += 1
+                    logger.info(
+                        "llm_retry scan_id=%s file=%r phase=%s chunk=%d attempt=%d error_type=%s",
+                        self.scan_id, self.log_label, self.phase, chunk_index, attempt,
+                        type(exc.__cause__ or exc).__name__,
+                    )
+                    # Backoff owns no model slot: other users can make progress.
+                    await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * attempt)
+            if isinstance(raw, dict):
+                usage = raw.get("usage") or {}
+                if not isinstance(usage, dict):
+                    usage = {}
+                choices = raw.get("choices")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                    finish = choices[0].get("finish_reason")
+                    if finish not in (None, "stop", "length", "content_filter", "tool_calls"):
+                        finish = "other"
+            stage = "parse"
+            result = parser(raw)
+            self.completed += 1
+            return result
+        except BaseException as exc:
+            if stage == "admission":
+                waited = monotonic() - queued
+                queue_seconds += waited
+                self.queue_seconds += waited
+            cause = exc.__cause__ or exc
+            error = type(cause).__name__
+            status = "timeout" if isinstance(cause, (TimeoutError,)) or "Timeout" in error else "error"
+            if hasattr(cause, "response"):
+                status += "_http_" + str(cause.response.status_code)
+            raise
+        finally:
+            input_tokens = usage.get("prompt_tokens")
+            output_tokens = usage.get("completion_tokens")
+            input_tokens = input_tokens if isinstance(input_tokens, int) else None
+            output_tokens = output_tokens if isinstance(output_tokens, int) else None
+            if input_tokens is not None and output_tokens is not None:
+                self.prompt_tokens += input_tokens
+                self.completion_tokens += output_tokens
+                self.usage_responses += 1
+            if sent:
                 logger.info(
                     "llm_request scan_id=%s file=%r phase=%s chunk=%d chunks=%d "
                     "request=%d queue_seconds=%.3f elapsed_seconds=%.3f status=%s "
                     "error_type=%s error_stage=%s finish_reason=%r prompt_tokens=%s completion_tokens=%s",
                     self.scan_id, self.log_label, self.phase, chunk_index, self.chunk_count,
-                    self.requests, queue_seconds, monotonic() - started, status, error,
+                    self.requests, queue_seconds, max(0.0, monotonic() - started - queue_seconds), status, error,
                     stage if status != "ok" else "none", finish, input_tokens, output_tokens,
                 )

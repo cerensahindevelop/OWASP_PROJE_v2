@@ -237,7 +237,8 @@ def download_run_output(run_id: int) -> bytes:
 
 
 def unmask_by_path(
-    *, source_path: str, target_path: str, project_name: str, sicil_no: str, branch_name: str, initiated_by: str, job_id: int | None = None
+    *, source_path: str, target_path: str, sicil_no: str, initiated_by: str,
+    project_name: str | None = None, branch_name: str | None = None, job_id: int | None = None,
 ):
     return _post_json(
         "/unmask",
@@ -257,20 +258,21 @@ def unmask_upload(
     uploaded_files: list,
     *,
     is_directory_upload: bool,
-    project_name: str,
     sicil_no: str,
-    branch_name: str,
     initiated_by: str,
+    project_name: str | None = None,
+    branch_name: str | None = None,
     job_id: int | None = None,
 ):
     files = [("files", (uf.name, uf.getvalue(), "application/octet-stream")) for uf in uploaded_files]
     data = {
-        "project_name": project_name,
         "sicil_no": sicil_no,
-        "branch_name": branch_name,
         "initiated_by": initiated_by,
         "is_directory_upload": "true" if is_directory_upload else "false",
     }
+    # Proje/branch yalnizca islem kaydi olmayan eski paketler icin gonderilir.
+    if project_name and branch_name:
+        data.update(project_name=project_name, branch_name=branch_name)
     if job_id is not None:
         data["job_id"] = str(job_id)
     return _post_json("/unmask/upload", data=data, files=files)
@@ -281,11 +283,13 @@ def unmask_upload(
 # --------------------------------------------------------------------------
 
 
-def list_pending_reviews(*, project_name: str, sicil_no: str, branch_name: str) -> list:
-    return _get_json(
-        "/reviews",
-        params={"project_name": project_name, "sicil_no": sicil_no, "branch_name": branch_name},
-    )
+def _sicil_scope(sicil_no: str, project_name: str | None, branch_name: str | None) -> dict:
+    params = {"sicil_no": sicil_no, "project_name": project_name, "branch_name": branch_name}
+    return {key: value for key, value in params.items() if value}
+
+
+def list_pending_reviews(*, sicil_no: str, project_name: str | None = None, branch_name: str | None = None) -> list:
+    return _get_json("/reviews", params=_sicil_scope(sicil_no, project_name, branch_name))
 
 
 def list_reviews_for_run(run_id: int) -> list:
@@ -300,11 +304,18 @@ def reject_review(review_id: int):
     return _post_json(f"/reviews/{review_id}/reject")
 
 
-def list_pending_audit_warnings(*, project_name: str, sicil_no: str, branch_name: str) -> list:
-    return _get_json(
-        "/audit-warnings",
-        params={"project_name": project_name, "sicil_no": sicil_no, "branch_name": branch_name},
-    )
+def list_pending_audit_warnings(*, sicil_no: str, project_name: str | None = None, branch_name: str | None = None) -> list:
+    return _get_json("/audit-warnings", params=_sicil_scope(sicil_no, project_name, branch_name))
+
+
+def revalidate_pending_audit_warnings(*, sicil_no: str, project_name: str | None = None, branch_name: str | None = None):
+    return _post_json("/audit-warnings/revalidate-pending", json=_sicil_scope(sicil_no, project_name, branch_name))
+
+
+# Sicilin daha once calistigi proje/branch ciftleri, en son kullanilan once.
+def list_project_branches(sicil_no: str) -> list[tuple[str, str]]:
+    rows = _get_json("/identities/project-branches", params={"sicil_no": sicil_no})
+    return [(row.project_name, row.branch_name) for row in rows]
 
 
 def list_audit_warnings_for_run(run_id: int) -> list:
@@ -324,11 +335,8 @@ def dismiss_audit_warning(warning_id: int):
 # --------------------------------------------------------------------------
 
 
-def list_runs(*, project_name: str, sicil_no: str, branch_name: str, limit: int = 200) -> list:
-    return _get_json(
-        "/runs",
-        params={"project_name": project_name, "sicil_no": sicil_no, "branch_name": branch_name, "limit": limit},
-    )
+def list_runs(*, sicil_no: str, project_name: str | None = None, branch_name: str | None = None, limit: int = 200) -> list:
+    return _get_json("/runs", params={**_sicil_scope(sicil_no, project_name, branch_name), "limit": limit})
 
 
 def get_run_audit_entries(run_id: int) -> list:

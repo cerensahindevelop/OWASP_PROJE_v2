@@ -95,6 +95,10 @@ VLLM_PROFILES: dict[str, dict[str, object]] = {
         "max_file_chars": 6000,
         "max_tokens": 512,
         "timeout_seconds": 200.0,
+        # Ollama chat_template_kwargs'i yok sayar; Qwen3.x thinking'i yalnizca
+        # reasoning_effort=none kapatir.
+        "disable_thinking": True,
+        "reasoning_effort": "none",
     },
     # Kurum ici vLLM (continuous batching): paralel istek, thinking kapali.
     "vllm-intra": {
@@ -163,6 +167,12 @@ class VLLMSettings(BaseSettings):
         "{enable_thinking: false} ekler (vLLM). Acikken model max_tokens'i <think> ile "
         "tuketip yanit kesilebilir; kesilen yanit basarisiz sayilir.",
     )
+    reasoning_effort: Literal["", "none", "low", "medium", "high"] = Field(
+        "",
+        description="Bos degilse isteklere reasoning_effort eklenir. Ollama chat_template_kwargs'i "
+        "yok saydigindan Qwen3.x thinking'i Ollama'da yalnizca 'none' kapatir. vLLM 'none' "
+        "degerini reddedebilir; vLLM'de bos birakip VLLM_DISABLE_THINKING kullanin.",
+    )
     seed: int = Field(
         42,
         description="OpenAI-uyumlu istekteki seed degeri. Temperature=0 ile birlikte tekrar "
@@ -170,9 +180,15 @@ class VLLMSettings(BaseSettings):
     )
     max_concurrent_requests: int = Field(
         1, gt=0,
-        description="Ayni event loop ve LLM endpoint'i icin ortak HTTP istek siniri. "
+        description="Ayni LLM endpoint'i icin event loop, thread ve worker'lar arasi ortak HTTP istek siniri. "
         "Ollama Parallel:1 icin 1; vLLM icin benchmark ile belirlenir. "
-        "Ayri process/worker/CLI sinirlari toplanir; dagitik kota degildir.",
+        "Tum worker'lar ayni admission_dir ve limiti kullanmalidir.",
+    )
+    admission_dir: Path | None = Field(
+        None,
+        description="Worker/CLI LLM kapasite kilitlerinin ortak dizini (VLLM_ADMISSION_DIR). "
+        "Varsayilan ayni kullanicinin sistem gecici dizinidir. Farkli container/host'lar "
+        "icin OS dosya kilitlerini destekleyen ortak mount veya model gateway kotasi gerekir.",
     )
     presence_penalty: float = Field(
         0.0, ge=0.0, le=2.0,
@@ -319,6 +335,18 @@ class PresidioSettings(BaseSettings):
         True,
         description="Presidio'nun hazir taniticilarini kullanir. False ise sadece DB kaynakli pattern kurallari calisir.",
     )
+    disabled_entities: str = Field(
+        "ORGANIZATION,LOCATION,NRP",
+        description="Virgulle ayrilmis, Presidio'nun yerlesik tespitinden atilacak kategoriler. "
+        "Ingilizce spaCy modeli Turkce metinde siradan kelimeleri (Ogrenci, SQLite, telefon) "
+        "ORGANIZATION/LOCATION/NRP sanir; kurum/yer adlarini sozluk ve LLM yakalar. DB'de tanimli "
+        "ozel Presidio kurallari bu ayardan etkilenmez. Bos = hicbir kategori atilmaz.",
+    )
+
+    @property
+    def disabled_entity_set(self) -> frozenset[str]:
+        return frozenset(part.strip().upper() for part in self.disabled_entities.split(",") if part.strip())
+
     entropy_threshold: float = Field(
         3.5,
         description="PERSON/ORGANIZATION/DATE_TIME/LOCATION/NRP gibi dogal-dil kategorileri icin "
@@ -361,6 +389,17 @@ class ValidationSettings(BaseSettings):
 # Tespit katmanlarinin ortak tarama ayarlari - SCAN_* on ekli ortam degiskenleri.
 class ScanSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SCAN_", env_file=_ENV_FILE, extra="ignore")
+
+    max_file_mb: int = Field(
+        50, gt=0,
+        description="Dosya basina tarama siniri (MB). Bunu asan dosya taranmaz, ciktiya alinmaz ve "
+        "uyari olarak raporlanir. Yukseltirken LLM suresini hesaba katin: her ~6000 karakter bir "
+        "LLM istegidir.",
+    )
+
+    @property
+    def max_file_bytes(self) -> int:
+        return self.max_file_mb * 1024 * 1024
 
     encoded_blob_min_chars: int = Field(
         512, ge=0,

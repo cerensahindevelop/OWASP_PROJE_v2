@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.core.exceptions import MaskingSystemError
 from app.services import reporting
 from app.services.exclude_admin import load_active_exclude_specs
-from app.services.exporter import DEFAULT_MAX_INLINE_SIZE, ExportValidationError, export_project
+from app.services.exporter import ExportValidationError, export_project
 from app.services.llm_workload import estimate_project
 from app.services.rule_admin import RuleValidationError, add_rule, list_rules, set_rule_active
 from app.services.unmasker import ContextNotFoundError, unmask_project
@@ -198,7 +198,7 @@ def llm_is_yuku(
         exclude_specs = load_active_exclude_specs(db)
     workloads = estimate_project(
         Path(kaynak), exclude_specs, settings.vllm,
-        blob_min_chars=settings.scan.encoded_blob_min_chars, max_inline_size=DEFAULT_MAX_INLINE_SIZE,
+        blob_min_chars=settings.scan.encoded_blob_min_chars, max_inline_size=settings.scan.max_file_bytes,
         legacy_encodings=settings.encoding.legacy_text_encoding_list,
     )
     total_requests = sum(workload.requests for workload in workloads)
@@ -227,13 +227,13 @@ def llm_is_yuku(
 def unmask(
     kaynak: str = typer.Option(..., "--kaynak", help="Maskelenmis proje klasoru"),
     hedef: str = typer.Option(..., "--hedef", help="Geri donusturulmus kopyanin yazilacagi klasor"),
-    proje: str = typer.Option(..., "--proje"),
     sicil: str = typer.Option(..., "--sicil"),
-    branch: str = typer.Option(..., "--branch"),
+    proje: Optional[str] = typer.Option(None, "--proje", help="Yalnizca islem kaydi olmayan eski paketler icin"),
+    branch: Optional[str] = typer.Option(None, "--branch", help="Yalnizca islem kaydi olmayan eski paketler icin"),
     job_id: Optional[int] = typer.Option(None, "--job-id", min=1, help="Kaynak maskeleme islem numarasi; paket kaydindan otomatik okunur"),
 ) -> None:
-    """Maskelenmis proje klasorunu proje/sicil/branch uclusune ait
-    eslemelerle geri donusturur."""
+    """Maskelenmis proje klasorunu, paketi maskeleyen sicilin eslemeleriyle
+    geri donusturur; proje/branch paketin islem kaydindan okunur."""
     with session_scope() as db:
         try:
             report = unmask_project(

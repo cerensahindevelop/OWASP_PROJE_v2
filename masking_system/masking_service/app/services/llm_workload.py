@@ -22,7 +22,7 @@ from app.services.encoded_blobs import ENCODED_BLOB_CATEGORY, find_encoded_blobs
 from app.services.file_pipeline import ReadStatus, read_scanned_file
 from app.services.llm_input_view import LLMInputStats, build_redacted_view
 from app.services.scanner import iter_project_files
-from app.services.text_chunking import chunk_text
+from app.services.text_chunking import chunk_text, dedupe_for_llm
 
 MINIFIED_LINE_CHARS = 2000
 
@@ -53,7 +53,9 @@ class FileWorkload:
 def estimate_text(path: str, text: str, vllm_settings, blob_min_chars: int) -> FileWorkload:
     blobs = find_encoded_blobs(text, blob_min_chars)
     view = build_redacted_view(text, [(start, end, ENCODED_BLOB_CATEGORY) for start, end in blobs])
-    chunks = chunk_text(view.text, vllm_settings.max_file_chars, getattr(vllm_settings, "chunk_overlap_chars", 500))
+    deduped = dedupe_for_llm(view.text, vllm_settings.max_file_chars, normalize_digits=True)
+    scan_text = deduped.text if deduped is not None else view.text
+    chunks = chunk_text(scan_text, vllm_settings.max_file_chars, getattr(vllm_settings, "chunk_overlap_chars", 500))
     stats = LLMInputStats()
     stats.record(text, view, len(chunks) if view.text.strip() else 0)
     longest = max((len(line) for line in view.text.splitlines()), default=0)

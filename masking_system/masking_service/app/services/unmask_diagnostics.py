@@ -108,11 +108,18 @@ class IdentityMismatchAdvisor:
     def _best_matching_other_context(
         self, current_context_id: int, unresolved_tokens: list[str]
     ) -> tuple[int | None, int]:
+        # Yalnizca ayni sicilin diger proje/branch kayitlari onerilir: baska
+        # bir kullanicinin kimligini gostermek onun kayitlarini ifsa eder.
+        current = self._db.get(MaskingContext, current_context_id)
+        if current is None:
+            return None, 0
+        same_owner = select(MaskingContext.id).where(MaskingContext.sicil_no == current.sicil_no)
         row = self._db.execute(
             select(ValueMapping.context_id, func.count().label("matched"))
             .where(
                 ValueMapping.placeholder_value.in_(unresolved_tokens),
                 ValueMapping.context_id != current_context_id,
+                ValueMapping.context_id.in_(same_owner),
                 ValueMapping.run_id.is_(None),
             )
             .group_by(ValueMapping.context_id)

@@ -65,10 +65,10 @@ async def unmask_by_path(payload: UnmaskPathRequest, db: Session = Depends(get_r
 # Yuklenen maskelenmis dosya/klasoru geri donusturur ve sonucu indirilebilir olarak dondurur.
 @router.post("/upload", response_model=UnmaskUploadResultOut)
 async def unmask_upload(
-    project_name: str = Form(...),
     sicil_no: str = Form(...),
-    branch_name: str = Form(...),
     initiated_by: str = Form(...),
+    project_name: str | None = Form(None),
+    branch_name: str | None = Form(None),
     is_directory_upload: bool = Form(False),
     job_id: int | None = Form(None, ge=1),
     files: list[UploadFile] = File(...),

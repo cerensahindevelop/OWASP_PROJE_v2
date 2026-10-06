@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.services import audit_reviewer, llm_recognizer
+from app.services import audit_reviewer, llm_recognizer, llm_transport
 from app.services.llm_detector import LLMDetector
 from app.services.llm_runtime import LLMScanMetrics, llm_file_context
 from app.services.log_refs import log_file_label
@@ -157,11 +157,11 @@ def test_single_runner_queue_can_timeout_above_one(monkeypatch, limit, service_s
             async with runner:
                 await asyncio.sleep(service_seconds)
                 return httpx.Response(200, json=response(), request=request)
-        monkeypatch.setattr(llm_recognizer.httpx, 'AsyncClient',
-                            lambda: real_client(transport=httpx.MockTransport(handler)))
+        monkeypatch.setattr(llm_transport.httpx, 'AsyncClient',
+                            lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
         s = settings(max_concurrent_requests=limit, timeout_seconds=.15)
         results = await asyncio.gather(*(LLMDetector(s).detect('test') for _ in range(4)))
-        monkeypatch.setattr(llm_recognizer.httpx, 'AsyncClient', real_client)
+        monkeypatch.setattr(llm_transport.httpx, 'AsyncClient', real_client)
         return sum(bool(out.errors) for out in results)
     assert asyncio.run(run(limit)) >= 1
     assert asyncio.run(run(1)) == 0  # Local queue does not consume HTTP deadline.
@@ -172,8 +172,8 @@ def test_deadline_cancels_http_request_and_releases_gate(monkeypatch, caplog):
     async def handler(request):
         await asyncio.sleep(.1)
         return httpx.Response(200, json=response(), request=request)
-    monkeypatch.setattr(llm_recognizer.httpx, 'AsyncClient',
-                        lambda: real_client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(llm_transport.httpx, 'AsyncClient',
+                        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
     async def run():
         s = settings(timeout_seconds=.01)
         return await asyncio.gather(*(LLMDetector(s).detect('private') for _ in range(2)))

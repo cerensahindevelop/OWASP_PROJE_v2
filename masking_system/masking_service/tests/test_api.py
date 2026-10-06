@@ -154,7 +154,7 @@ def test_upload_reports_unsupported_content_without_release_request(client, monk
     assert body["validation_failed_count"] == body["quarantined_count"] == body["pending_count"] == 0
     assert body["report"]["files_skipped_unsupported"] == 1
     assert body["report"]["files_ready"] == 0
-    assert body["report"]["status"] == "completed_with_warnings"
+    assert body["report"]["status"] == "completed"
     assert not list((tmp_path / body["output_token"]).rglob("*.bin"))
 
 

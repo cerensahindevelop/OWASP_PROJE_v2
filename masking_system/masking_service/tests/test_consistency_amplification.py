@@ -231,3 +231,23 @@ def test_ner_noise_in_markdown_does_not_break_code_files(tmp_path, monkeypatch):
         assert "&&" in (target / "docs" / "plan.md").read_text(encoding="utf-8")
     finally:
         _cleanup(project)
+
+
+def test_reasoning_effort_is_sent_only_when_configured():
+    # Ollama chat_template_kwargs'i yok sayar; Qwen3.x thinking'i reasoning_effort=none kapatir.
+    from app.services.audit_reviewer import build_audit_request
+    from app.services.llm_recognizer import build_detection_request
+
+    assert "reasoning_effort" not in build_detection_request("t", "m", 1)
+    assert "reasoning_effort" not in build_audit_request("t", "m", 1)
+    assert build_detection_request("t", "m", 1, reasoning_effort="none")["reasoning_effort"] == "none"
+    assert build_audit_request("t", "m", 1, reasoning_effort="none")["reasoning_effort"] == "none"
+
+
+def test_ollama_dev_profile_disables_thinking():
+    from app.core.config import VLLMSettings
+
+    settings = VLLMSettings(_env_file=None, profile="ollama-dev")
+    assert settings.disable_thinking is True
+    assert settings.reasoning_effort == "none"
+    assert VLLMSettings(_env_file=None, profile="ollama-dev", reasoning_effort="").reasoning_effort == ""

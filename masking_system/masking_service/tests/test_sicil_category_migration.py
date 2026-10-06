@@ -68,7 +68,8 @@ def test_fix_preserves_id_prefix_and_operational_settings(migrate):
 
 
 def test_running_twice_and_downgrade_round_trip(migrate):
-    migrate("upgrade", "head")
+    # FIX'e kadar: sonraki migrasyonlar stamp ile geri sarilamaz (kolonlari kalir).
+    migrate("upgrade", FIX)
     fixed = _rules(migrate.path)
     migrate("stamp", BEFORE)  # ayni migrasyonun duzeltilmis DB'de ikinci kez calismasi
     migrate("upgrade", FIX)

@@ -8,11 +8,39 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import AuditLog, AuditWarning, MaskingContext, MaskingRun
 from app.services.log_refs import file_ref
+
+
+# Bir sicilin daha once calistigi proje/branch ciftleri, en son kullanilan
+# once: maskeleme formundaki oneriler ve liste filtreleri icin.
+def list_project_branches(db: Session, sicil_no: str) -> list[tuple[str, str]]:
+    last_used = func.max(MaskingRun.started_at)
+    rows = db.execute(
+        select(MaskingContext.project_name, MaskingContext.branch_name)
+        .outerjoin(MaskingRun, MaskingRun.context_id == MaskingContext.id)
+        .where(MaskingContext.sicil_no == sicil_no)
+        .group_by(MaskingContext.id)
+        .order_by(last_used.desc().nulls_last(), MaskingContext.id.desc())
+    ).all()
+    return [(project, branch) for project, branch in rows]
+
+
+# Liste kayitlarinin (inceleme, denetim uyarisi) hangi proje/branch'e ait
+# oldugunu tek sorguda bulur: run_id -> (proje, branch).
+def run_project_branch(db: Session, run_ids) -> dict[int, tuple[str, str]]:
+    ids = {run_id for run_id in run_ids if run_id is not None}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(MaskingRun.id, MaskingContext.project_name, MaskingContext.branch_name)
+        .join(MaskingContext, MaskingRun.context_id == MaskingContext.id)
+        .where(MaskingRun.id.in_(ids))
+    ).all()
+    return {run_id: (project, branch) for run_id, project, branch in rows}
 
 
 # Bir masking_run kaydini, ait oldugu context bilgileriyle (proje/sicil/

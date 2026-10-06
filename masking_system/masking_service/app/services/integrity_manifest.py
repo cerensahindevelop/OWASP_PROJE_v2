@@ -17,6 +17,7 @@ import threading
 import time
 
 from app.core.crypto import hash_value
+from app.services.file_locks import try_lock as _try_lock, unlock as _unlock
 
 MANIFEST_NAME = ".masking-integrity.json"
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
@@ -30,34 +31,6 @@ MANIFEST_LOCK_TIMEOUT_SECONDS = 30.0
 _LOCK_POLL_SECONDS = 0.05
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[str, threading.Lock] = {}
-
-if os.name == "nt":
-    import msvcrt
-
-    def _try_lock(handle) -> bool:
-        handle.seek(0)
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            return True
-        except OSError:
-            return False
-
-    def _unlock(handle) -> None:
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-else:
-    import fcntl
-
-    def _try_lock(handle) -> bool:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except BlockingIOError:
-            return False
-
-    def _unlock(handle) -> None:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
 
 def manifest_lock_path(root: Path) -> Path:
     """Kilit dosyasi hedefin ICINDE degil YANINDA durur: indirilen ciktiya
@@ -128,6 +101,20 @@ def _replace_with_retry(src: str, dst: Path) -> None:
             if attempt == 4:
                 raise
             time.sleep(0.2 * (attempt + 1))
+
+
+# Imzayi DOGRULAMADAN yalnizca paketin maskeleme islem kimligini okur:
+# geri almada proje/branch bu islemden bulunur. Sonuc yetki kaniti degildir;
+# imza, islemin baglamiyla read_manifest'te ayrica dogrulanir.
+def peek_manifest_job_id(root: Path) -> int | None:
+    path = root / MANIFEST_NAME
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MANIFEST_BYTES:
+            return None
+        job_id = json.loads(path.read_bytes())["payload"].get("job_id")
+    except (ValueError, KeyError, TypeError, AttributeError, OSError, RecursionError):
+        return None
+    return job_id if type(job_id) is int and job_id >= 1 else None
 
 
 def read_manifest(root: Path, context_id: int) -> dict | None:

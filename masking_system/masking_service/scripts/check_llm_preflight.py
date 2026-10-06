@@ -156,7 +156,10 @@ def check_version_consistency():
         findings = check_signatures(ROOT / "app", stats)
         for finding in findings:
             print(finding.line())
-        print(("FAIL" if findings else "PASS") + f" stage=signature_consistency checked_calls={stats.get('checked', 0)}")
+        print(("FAIL" if findings else "PASS") +
+              f" stage=signature_consistency checked_calls={stats.get('checked', 0)}"
+              f" checked_methods={stats.get('checked_methods', 0)}"
+              f" skipped_decorated_calls={stats.get('skipped_decorated', 0)}")
         failures += bool(findings)
     except Exception as exc:
         failures += 1
@@ -185,7 +188,7 @@ def main(argv=None):
         if not settings.enabled:
             print("FAIL stage=settings reason=VLLM_ENABLED_false; use the backend environment")
             return 1
-        for key in ("max_concurrent_requests", "max_file_chars", "max_tokens", "disable_thinking"):
+        for key in ("max_concurrent_requests", "max_file_chars", "max_tokens", "disable_thinking", "reasoning_effort"):
             value = getattr(settings, key, None)
             print(f"setting={key} type={type(value).__name__}")
     except Exception as exc:

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import AuditWarning
 from app.services.audit_action_labels import DISMISS_ACTION_LABEL, MASK_ACTION_LABEL
-from app.services.audit_reviewer import code_symbol_name, resolve_audit_values
+from app.services.audit_reviewer import AuditFindingVerifier, code_symbol_name
 from app.services.term_upload import find_leaked_terms
 
 
@@ -162,6 +162,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
     # Only report line numbers when the model's cited excerpt actually exists.
     # A cited variable name is shown as the clear value assigned to it.
     content = warning.masked_content
+    verifier = AuditFindingVerifier(content, warning.file_path)
     evidence: list[dict[str, object]] = []
     seen: set[tuple[int, str]] = set()
     names_without_value: list[str] = []
@@ -170,7 +171,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
         if not excerpt:
             continue
         label = friendly_label(description)
-        values = resolve_audit_values(content, excerpt)
+        values = verifier.resolve(excerpt)
         if not values and excerpt in content:
             names_without_value.append(code_symbol_name(excerpt))
         for value in values:

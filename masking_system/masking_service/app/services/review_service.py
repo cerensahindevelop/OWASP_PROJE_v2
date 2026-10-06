@@ -19,6 +19,11 @@ from app.services.learned_decisions import remember_decision
 # Gozden gecirme (review) kuyrugundaki dusuk/orta guvenli LLM bulgularini
 # listeleme, onaylama, reddetme ve yok sayma islemlerini yoneten servis.
 class ReviewService:
+    """Synchronous unit of work; HTTP callers execute it in FastAPI's threadpool.
+
+    Final model validation uses a private async loop after releasing the write
+    lock. There is no async facade that runs synchronous DB work on an API loop.
+    """
     # DB oturumunu ve review_queue repository'sini saklar.
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -26,7 +31,7 @@ class ReviewService:
 
     # Verilen proje/sicil/branch kimligine ait bekleyen (pending) review kayitlarini listeler.
     def list_pending_for_identity(
-        self, *, project_name: str, sicil_no: str, branch_name: str
+        self, *, sicil_no: str, project_name: str | None = None, branch_name: str | None = None
     ) -> list[ReviewQueue]:
         return self.review_queue.list_pending_for_identity(
             project_name=project_name, sicil_no=sicil_no, branch_name=branch_name
@@ -39,7 +44,7 @@ class ReviewService:
     # Bulguyu onaylar, degeri kalici bir placeholder'a baglar ve dosyanin
     # kalan kararlari bittiyse yeniden dogrulama akisini tetikler.
     def approve(self, review_id: int, *, finalize: bool = True) -> ReviewQueue:
-        item = self.review_queue.transition_pending(review_id, status="approved")
+        item, count = self.review_queue.transition_equivalent_pending(review_id, status="approved")
         if item.run_id is not None and item.found_value:
             run = self.db.get(MaskingRun, item.run_id)
             if run is not None:
@@ -53,7 +58,7 @@ class ReviewService:
                 self.db.add(AuditLog(
                     run_id=item.run_id, file_path=item.file_path, action="matched",
                     detail=(f"review_id={item.id} user_decision=approve finding={item.entity_type} "
-                            f"ai_confidence={item.confidence_level} learned_rule_id={learned.id}"),
+                            f"ai_confidence={item.confidence_level} learned_rule_id={learned.id} resolved_count={count}"),
                 ))
                 if created:
                     self.db.add(
@@ -70,6 +75,11 @@ class ReviewService:
 
     def mask_file(self, review_id: int) -> dict:
         """One user action approves and masks all pending findings in this file."""
+        item, hold = self._approve_file(review_id)
+        self._finalize_file_when_complete(item)
+        return self._mask_file_result(item, hold)
+
+    def _approve_file(self, review_id: int) -> tuple[ReviewQueue, AuditWarning]:
         from app.core.exceptions import ReviewAlreadyProcessedError
         item = self.db.get(ReviewQueue, review_id)
         if item is None or item.status != "pending":
@@ -89,10 +99,12 @@ class ReviewService:
         )).all())
         with self.db.begin_nested():
             for pending_id in ids:
-                self.approve(pending_id, finalize=False)
-        # Son dogrulama savepoint disinda bir kez calisir: kararlari commit edip
-        # LLM denetimini yazma kilidi tutmadan yapar (bkz. finalize_review_hold).
-        self._finalize_file_when_complete(item)
+                # A previous group decision may have resolved this occurrence.
+                if self.db.get(ReviewQueue, pending_id).status == "pending":
+                    self.approve(pending_id, finalize=False)
+        return item, hold
+
+    def _mask_file_result(self, item: ReviewQueue, hold: AuditWarning) -> dict:
         self.db.refresh(hold)
         written = hold.status == "dismissed"
         return {"run_id": item.run_id, "file_path": item.file_path, "written": written,
@@ -100,8 +112,8 @@ class ReviewService:
                             if written else "İfadeler maskelendi ve kaydedildi; dosya son doğrulamadan geçemedi. " + hold.reasoning)}
 
     # Bulguyu reddeder ve yalnizca ayni context+varlik tipi+dosya kapsami icin suppression ogrenilir.
-    def reject(self, review_id: int) -> ReviewQueue:
-        item = self.review_queue.transition_pending(review_id, status="rejected")
+    def reject(self, review_id: int, *, finalize: bool = True) -> ReviewQueue:
+        item, count = self.review_queue.transition_equivalent_pending(review_id, status="rejected")
         if item.run_id is not None and item.found_value:
             run = self.db.get(MaskingRun, item.run_id)
             if run is not None:
@@ -113,12 +125,21 @@ class ReviewService:
                 self.db.add(AuditLog(
                     run_id=item.run_id, file_path=item.file_path, action="skipped",
                     detail=(f"review_id={item.id} user_decision=reject finding={item.entity_type} "
-                            f"ai_confidence={item.confidence_level} suppression_rule_id={learned.id}"),
+                            f"ai_confidence={item.confidence_level} suppression_rule_id={learned.id} resolved_count={count}"),
                 ))
-        self._finalize_file_when_complete(item)
+        if finalize:
+            self._finalize_file_when_complete(item)
         return item
 
     def _finalize_file_when_complete(self, item: ReviewQueue) -> None:
+        """Compatibility adapter for synchronous callers outside an event loop."""
+        hold = self._completed_hold(item)
+        if hold is not None:
+            from app.services.audit_warning_service import AuditWarningService
+            asyncio.run(AuditWarningService(self.db).finalize_review_hold(hold))
+            self.db.flush()
+
+    def _completed_hold(self, item: ReviewQueue) -> AuditWarning | None:
         if item.run_id is None:
             return
         self.db.flush()
@@ -128,17 +149,14 @@ class ReviewService:
         ).limit(1))
         if pending is not None:
             return
-        hold = self.db.scalar(select(AuditWarning).where(
+        return self.db.scalar(select(AuditWarning).where(
             AuditWarning.run_id == item.run_id, AuditWarning.file_path == item.file_path,
             AuditWarning.status == "pending",
             AuditWarning.reasoning.like("INCELEME_GEREKLI:%"),
         ))
-        if hold is None:
-            return
-        from app.services.audit_warning_service import AuditWarningService
-        asyncio.run(AuditWarningService(self.db).finalize_review_hold(hold))
-        self.db.flush()
 
     # Bulguyu yok sayar (ne onaylanir ne reddedilir, durumu 'ignored' olur).
     def ignore(self, review_id: int) -> ReviewQueue:
-        return self.review_queue.transition_pending(review_id, status="ignored")
+        item, _count = self.review_queue.transition_equivalent_pending(review_id, status="ignored")
+        self._finalize_file_when_complete(item)
+        return item

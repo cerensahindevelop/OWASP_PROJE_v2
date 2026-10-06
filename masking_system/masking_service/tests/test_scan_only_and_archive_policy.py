@@ -200,7 +200,7 @@ def test_binary_and_office_formats_are_unscanned_not_clean(export_files, name):
     assert outcome.final_state == "SKIPPED"
     assert not (target / name).exists()
     assert (source / name).read_bytes() == payload  # source untouched
-    assert report.status == "completed_with_warnings"
+    assert report.status == "completed"
 
 
 def test_office_document_with_plain_ascii_bytes_still_not_masked(export_files):

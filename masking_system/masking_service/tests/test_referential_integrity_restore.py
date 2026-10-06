@@ -244,8 +244,8 @@ def test_parametric_case_variants_use_exact_mappings_and_restore_paths_and_conte
         )
     )
 
-    assert report.status == "completed_with_warnings"
-    assert any("parser yok" in warning for warning in report.validation_warnings)
+    assert report.status == "completed"
+    assert any("parser yok" in notice for notice in report.validation_notices)
     masked_files = list(masked.rglob("identity.properties"))
     assert len(masked_files) == 1
     masked_path_placeholder = masked_files[0].parent.name

@@ -81,7 +81,7 @@ def test_approved_numeric_json_uses_numeric_mapping(db_session, tmp_path):
 
 
 def test_audit_auto_masks_all_evidence_including_beyond_ui_limit(db_session, tmp_path):
-    values = tuple(f"PrivateValue{i}" for i in range(8))
+    values = tuple(f"Apollo{i}Orion" for i in range(8))  # genel bilesik ad degil
     text = "\n".join(f"KEY{i}={value}" for i, value in enumerate(values))
     run, warning, _ = make_file(db_session, tmp_path, text, audit=True, values=values)
     asyncio.run(AuditWarningService(db_session).mask(warning.id))

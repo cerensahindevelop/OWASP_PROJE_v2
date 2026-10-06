@@ -8,7 +8,9 @@ sorgulayıp "işlenen/toplam dosya" ilerleme çubuğu gösterir. Böylece uzun
 
 from __future__ import annotations
 
+import io
 import time
+import zipfile
 from pathlib import Path
 
 # streamlit: form/spinner/sonuc gosterimi gibi tum ekran bilesenleri icin.
@@ -20,8 +22,17 @@ from app.webapp import api_client
 from app.webapp.api_client import ApiError
 # page_intro/show_error: ortak baslik ve hata gosterimi yardimcilari.
 from app.webapp.common import page_intro, show_error
-# get_identity: aktif proje/sicil/branch kimligini okumak icin.
-from app.webapp.identity import get_identity
+# get_identity: aktif kullanicinin (sicil) kimligi; proje/branch bu ekranda
+# her islem icin secilir (render_project_branch_inputs).
+from app.webapp.identity import get_identity, render_project_branch_inputs, validate_project_branch
+# Hizli metin modu ve yan yana karsilastirma Geri Donustur ekraniyla ortak.
+from app.webapp.quick_text import (
+    QUICK_TEXT_TYPES, InMemoryUpload, quick_text_file_name, render_side_by_side,
+)
+
+_MODE_UPLOAD = "📦 Dosya / .ZIP Yükle"
+_MODE_TEXT = "📝 Hızlı Metin / Kod"
+_MODE_PATH = "📁 Klasör Yolu (sunucuda)"
 
 # Sozdizimi/round-trip/consistency disindaki VALIDATION_FAILED durumlari icin
 # yedek (fallback) aciklama - SADECE outcome.error bos oldugunda kullanilir
@@ -80,15 +91,15 @@ def _wait_for_export_job(job_id: str):
         bar.empty()
 
 
-def _run_export(source_path: str, target_path: str) -> None:
+def _run_export(source_path: str, target_path: str, *, project_name: str, branch_name: str) -> None:
     identity = get_identity()
     try:
         job_id = api_client.start_export_job_by_path(
             source_path=source_path,
             target_path=target_path,
-            project_name=identity["project_name"],
+            project_name=project_name,
             sicil_no=identity["sicil_no"],
-            branch_name=identity["branch_name"],
+            branch_name=branch_name,
             initiated_by=identity["sicil_no"],
         )
         result = _wait_for_export_job(job_id)
@@ -108,16 +119,18 @@ def _run_export(source_path: str, target_path: str) -> None:
 # "Dosya Yükle" moduyla baslatilan export akisi: yuklenen dosyalari backend'e
 # HTTP ile gonderir, sonucu (indirilebilir bayt dizisiyle birlikte)
 # session_state'e yazar.
-def _run_export_upload(uploaded_files: list, *, is_directory_upload: bool = False) -> None:
+def _run_export_upload(
+    uploaded_files: list, *, project_name: str, branch_name: str, is_directory_upload: bool = False,
+) -> None:
     identity = get_identity()
     try:
         with st.spinner("Dosyalar yükleniyor..."):
             job_id = api_client.start_export_job_upload(
                 uploaded_files,
                 is_directory_upload=is_directory_upload,
-                project_name=identity["project_name"],
+                project_name=project_name,
                 sicil_no=identity["sicil_no"],
-                branch_name=identity["branch_name"],
+                branch_name=branch_name,
                 initiated_by=identity["sicil_no"],
             )
         result = _wait_for_export_job(job_id)
@@ -145,6 +158,65 @@ def _run_export_upload(uploaded_files: list, *, is_directory_upload: bool = Fals
         "download_bytes": download_bytes,
         "download_name": download_name,
     }
+
+
+# "Hızlı Metin / Kod" modu: yapistirilan metni tek dosyalik bir yukleme
+# olarak tarar. Maskeli metin, indirme paketinden (karantina karari sonrasi
+# yenilenen paket dahil) her gosterimde yeniden okunur.
+def _run_export_text(text: str, extension: str, *, project_name: str, branch_name: str) -> None:
+    name = quick_text_file_name(extension)
+    _run_export_upload(
+        [InMemoryUpload(name, text.encode("utf-8"))], project_name=project_name, branch_name=branch_name,
+    )
+    result = st.session_state.get("export_last_result")
+    if result is not None:
+        result["quick_text"] = {"name": name, "original": text}
+
+
+# Export indirme paketinden hizli metnin maskeli halini cikarir; dosya
+# karantinada/dogrulanamamis oldugu icin pakete girmediyse None.
+def _masked_quick_text(download_bytes: bytes, name: str) -> str | None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(download_bytes)) as zf:
+            files = [info for info in zf.infolist() if not info.is_dir()]
+            match = next((info for info in files if info.filename == name), None)
+            if match is None and len(files) == 1:
+                match = files[0]
+            if match is None:
+                return None
+            return zf.read(match).decode("utf-8", errors="replace")
+    except zipfile.BadZipFile:
+        return None
+
+
+# Hizli metin sonucunu: orijinal ve maskeli metni yan yana, maskeli metni
+# tek dosya olarak indirme dugmesiyle gosterir.
+def _render_quick_text_result(result: dict) -> None:
+    quick = result["quick_text"]
+    download_bytes = result.get("download_bytes")
+    if download_bytes is None:
+        st.warning(
+            "Maskelenmiş metin alınamadı. Tarama sonucu kaydedildi; "
+            f"işlem #{result['report'].run_id} için yeniden deneyin."
+        )
+        return
+    masked = _masked_quick_text(download_bytes, quick["name"])
+    st.subheader("Yan Yana Karşılaştırma")
+    if masked is None:
+        st.warning(
+            "Maskelenmiş metin güvenlik kontrollerinden geçemediği için gösterilmiyor. "
+            "Yukarıdaki uyarılara bakın; karar verdikten sonra bu ekrana döndüğünüzde sonuç yenilenir."
+        )
+        return
+    if masked == quick["original"]:
+        st.caption("Metinde hassas bilgi bulunamadı; içerik değiştirilmedi.")
+    render_side_by_side(quick["name"], ("Orijinal Metin", quick["original"]), ("Maskelenmiş Metin", masked))
+    st.download_button(
+        "⬇️ Maskelenmiş Metni İndir",
+        data=masked.encode("utf-8"),
+        file_name=f"maskelenmis_{quick['name']}",
+        type="primary",
+    )
 
 
 # Rapordaki dosya sayilarindan ("N dosya tarandi, M dosyada bulgu bulundu, ...")
@@ -196,20 +268,27 @@ def _render_result(result: dict) -> None:
         )
 
     st.markdown(_clean_copied_label(report))
+    notices = list(getattr(report, "validation_notices", None) or [])
+    actionable = [w for w in (getattr(report, "validation_warnings", None) or []) if w not in notices]
+    if actionable:
+        with st.expander(f"Doğrulama uyarısı olan {len(actionable)} kayıt", expanded=True):
+            for warning in actionable:
+                st.write(warning)
+    for summary in getattr(report, "validation_notice_summary", None) or []:
+        st.caption(f"ℹ️ {summary}")
     unsupported = getattr(report, "files_skipped_unsupported", 0)
     if unsupported:
-        st.warning(
-            f"{unsupported} dosyanın içeriği metin olarak tanınamadı. "
-            "Bu içerik türlerinde maskeleme desteklenmediği için dosyalar taranmadı ve çıktıya alınmadı. "
-            "İndirilen proje bu dosyaları içermez."
+        st.info(
+            f"ℹ️ {unsupported} dosya desteklenen format kapsamı dışında (metin olarak tanınamadı). "
+            "Bu dosyalar taranmadı ve çıktıya alınmadı; indirilen proje bu dosyaları içermez."
         )
-        with st.expander(f"Desteklenmeyen {unsupported} dosyayı ve nedenlerini gör", expanded=True):
+        with st.expander(f"Kapsam dışı {unsupported} dosyayı ve nedenlerini gör"):
             for outcome in report.outcomes:
                 if outcome.status == "skipped_unsupported":
                     st.write(f"{outcome.relative_path}: {outcome.error}")
     extra_notes = []
     if report.files_excluded:
-        extra_notes.append(f"{report.files_excluded} dosya güvenlik politikası gereği hariç tutuldu (hiç kopyalanmadı).")
+        extra_notes.append(f"{report.files_excluded} dosya hariç tutma kuralı gereği atlandı (hiç kopyalanmadı).")
     if report.files_skipped_symlink:
         extra_notes.append(f"{report.files_skipped_symlink} kısayol (symlink) atlandı.")
     if report.files_copied_undecodable:
@@ -317,7 +396,9 @@ def _render_result(result: dict) -> None:
         if st.button("Onay Bekleyenler ekranına git →", key="goto_review_queue"):
             st.switch_page(st.session_state["_nav_pages"]["review"])
 
-    if "download_bytes" in result:  # yukleme modu - path modunda bu anahtar hic yok
+    if "quick_text" in result:
+        _render_quick_text_result(result)
+    elif "download_bytes" in result:  # yukleme modu - path modunda bu anahtar hic yok
         download_bytes = result["download_bytes"]
         if download_bytes is not None:
             st.download_button(
@@ -354,31 +435,38 @@ def _render_result(result: dict) -> None:
 
 
 # Ekranin giris noktasi: st.navigation tarafindan cagirilir. Kaynak turune
-# (yol/yukleme) gore formu cizer, gonderildiginde ilgili _run_export* akisini
+# (yukleme/hizli metin/yol) gore formu cizer, gonderildiginde ilgili _run_export* akisini
 # tetikler ve varsa onceki sonucu gosterir.
 def render() -> None:
     identity = get_identity()
     page_intro(
         "📤 Dışarı Çıkar",
-        "Bu ekranda bir proje klasörünü tarayıp içindeki hassas bilgileri (IP adresi, e-posta, "
-        "şifre/anahtar gibi) otomatik olarak gizleyebilirsiniz. Sonuç, seçtiğiniz hedef klasöre "
-        "güvenli bir kopya olarak yazılır; orijinal klasörünüze hiçbir şekilde dokunulmaz.",
+        "Bu ekranda bir proje klasörünü, dosyaları ya da yapıştırdığınız bir kod parçasını tarayıp "
+        "içindeki hassas bilgileri (IP adresi, e-posta, şifre/anahtar gibi) otomatik olarak "
+        "gizleyebilirsiniz. Sonuç güvenli bir kopya olarak üretilir; orijinal içeriğinize hiçbir "
+        "şekilde dokunulmaz.",
     )
 
     st.caption("Geri dönüşüm ve desteklenen dosya türlerinde sözdizimi kontrol edilir. Çıktı derlenmez veya çalıştırılmaz; çalışma davranışı ve tüm hassas verilerin yakalandığı garanti edilmez.")
-    st.info(
-        f"Bu işlem **{identity['project_name']} / {identity['sicil_no']} / {identity['branch_name']}** "
-        "kimliğiyle kaydedilecek."
-    )
+    project_name, branch_name = render_project_branch_inputs("export_")
+    pair_errors = validate_project_branch(project_name, branch_name)
+    if pair_errors:
+        st.info("Taramayı başlatmadan önce proje ve branch'i seçin ya da yazın.")
+    else:
+        st.info(
+            f"Bu işlem **{project_name} / {branch_name}** projesine, **{identity['sicil_no']}** "
+            "sicilinizle kaydedilecek."
+        )
+    target = {"project_name": project_name, "branch_name": branch_name}
 
     mode = st.radio(
         "Kaynak türü",
-        ["📁 Klasör Yolu (bu bilgisayarda/sunucuda)", "⬆️ Dosya Yükle"],
+        [_MODE_UPLOAD, _MODE_TEXT, _MODE_PATH],
         horizontal=True,
         key="export_mode",
     )
 
-    if mode == "⬆️ Dosya Yükle":
+    if mode == _MODE_UPLOAD:
         upload_kind = st.radio(
             "Ne yüklemek istiyorsunuz?",
             ["Dosya(lar) / .zip", "📂 Bir Klasör (tüm alt klasörleriyle)"],
@@ -407,10 +495,38 @@ def render() -> None:
             submitted = st.form_submit_button("Taramayı Başlat", type="primary", width="stretch")
 
         if submitted:
-            if not uploaded_files:
+            if pair_errors:
+                for message in pair_errors:
+                    st.error(message)
+            elif not uploaded_files:
                 st.error("En az bir dosya/klasör seçmelisiniz.")
             else:
-                _run_export_upload(uploaded_files, is_directory_upload=is_directory_upload)
+                _run_export_upload(uploaded_files, is_directory_upload=is_directory_upload, **target)
+    elif mode == _MODE_TEXT:
+        with st.form("export_form_text"):
+            text = st.text_area(
+                "Metin / Kod",
+                height=260,
+                placeholder="Maskelenecek kod parçasını veya metni buraya yapıştırın.",
+                key="export_text_input",
+            )
+            type_label = st.selectbox(
+                "Dosya türü",
+                list(QUICK_TEXT_TYPES),
+                help="Metin bu türde tek bir dosya olarak taranır; türe özgü kurallar (ör. .properties "
+                "anahtarları) buna göre uygulanır.",
+                key="export_text_type",
+            )
+            submitted = st.form_submit_button("Taramayı Başlat", type="primary", width="stretch")
+
+        if submitted:
+            if pair_errors:
+                for message in pair_errors:
+                    st.error(message)
+            elif not text.strip():
+                st.error("Taranacak metin boş bırakılamaz.")
+            else:
+                _run_export_text(text, QUICK_TEXT_TYPES[type_label], **target)
     else:
         with st.form("export_form"):
             source_path = st.text_input(
@@ -422,7 +538,10 @@ def render() -> None:
             submitted = st.form_submit_button("Taramayı Başlat", type="primary", width="stretch")
 
         if submitted:
-            if not source_path.strip() or not target_path.strip():
+            if pair_errors:
+                for message in pair_errors:
+                    st.error(message)
+            elif not source_path.strip() or not target_path.strip():
                 st.error("Kaynak Klasör ve Hedef Klasör alanları boş bırakılamaz.")
             elif not Path(source_path.strip()).is_dir():
                 st.error(f"Kaynak klasör bulunamadı: {source_path.strip()}")
@@ -433,7 +552,7 @@ def render() -> None:
                 # tarafinda yapilir (bkz. app/webapp/path_guard.py, artik
                 # sadece backend tarafindan kullanilir); backend reddederse
                 # _run_export bunu ApiError -> show_error ile gosterir.
-                _run_export(source_path.strip(), target_path.strip())
+                _run_export(source_path.strip(), target_path.strip(), **target)
 
     result = st.session_state.get("export_last_result")
     if result:

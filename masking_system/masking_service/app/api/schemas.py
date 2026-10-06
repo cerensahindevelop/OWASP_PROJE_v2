@@ -20,6 +20,13 @@ class IdentityMixin(BaseModel):
     branch_name: str
 
 
+# Kullaniciyi sicil tanimlar; proje/branch istege bagli filtredir.
+class SicilScope(BaseModel):
+    sicil_no: str
+    project_name: str | None = None
+    branch_name: str | None = None
+
+
 # --------------------------------------------------------------------------
 # Kurallar (filtre_kurallari)
 # --------------------------------------------------------------------------
@@ -86,6 +93,11 @@ class RunSummaryOut(BaseModel):
     match_count: int | None = None
 
 
+class ProjectBranchOut(BaseModel):
+    project_name: str
+    branch_name: str
+
+
 class AuditLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -123,6 +135,8 @@ class ReviewQueueOut(BaseModel):
     surrounding_context: str | None
     status: str
     created_at: datetime
+    project_name: str | None = None
+    branch_name: str | None = None
 
 
 # --------------------------------------------------------------------------
@@ -138,6 +152,11 @@ class AuditEvidenceOut(BaseModel):
     label: str = ""
 
 
+class AuditRevalidationOut(BaseModel):
+    scheduled: int
+    active_ids: list[int]
+
+
 class AuditWarningOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -148,6 +167,9 @@ class AuditWarningOut(BaseModel):
     audit_failed: bool
     status: str
     created_at: datetime
+    project_name: str | None = None
+    branch_name: str | None = None
+    revalidating: bool = False
     summary: str = ""
     location: str = ""
     next_step: str = ""
@@ -275,6 +297,8 @@ class ExportReportOut(BaseModel):
     outcomes: list[FileOutcomeOut]
     status: str
     validation_warnings: list[str] = []
+    validation_notices: list[str] = []
+    validation_notice_summary: list[str] = []
     degraded_detectors: list[str] = []
     blocked_by_check: dict[str, int] = {}
     llm_usage_summary: dict[str, float] = {}
@@ -382,7 +406,12 @@ class UnmaskReportOut(BaseModel):
     has_unresolved_placeholders: bool
 
 
-class UnmaskPathRequest(IdentityMixin):
+class UnmaskPathRequest(BaseModel):
+    # Kullaniciyi tanimlayan sicildir; proje/branch paketin maskeleme
+    # isleminden okunur (yalnizca job kaydi olmayan eski paketler icin gerekir).
+    sicil_no: str
+    project_name: str | None = None
+    branch_name: str | None = None
     job_id: int | None = Field(default=None, ge=1)
     source_path: str
     target_path: str

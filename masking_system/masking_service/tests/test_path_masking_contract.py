@@ -120,7 +120,10 @@ def test_digit_extension_is_resolved_before_overlaps(db_session, path_rule):
     masked, mappings = mask_relative_path(db_session, context, original, {}, load_active_rules(db_session))
     assert len(mappings) == 1
     values = {m.placeholder_value: decrypt_value(m.original_value_encrypted) for m in mappings}
-    assert list(values.values()) == ["Zephyrqx123"]
+    # Yol terimi, icerikteki gibi tam token'a genisler: kodda
+    # `class Zephyrqx123Service` ile ayni yer tutucuyu alir.
+    assert list(values.values()) == ["Zephyrqx123Service"]
+    assert masked.suffix == ".java"
     assert PathPlaceholderResolver(values).reverse(masked) == (original, 1, [])
 
 
@@ -177,4 +180,5 @@ def test_adjacent_all_caps_terms_in_path_are_masked_separately(db_session, monke
     [written] = [path.relative_to(target) for path in target.rglob("*.java")]
     assert written.parent == relative.parent
     assert "VEGA" not in written.name.upper() and "OMEGA" not in written.name.upper()
-    assert written.name.endswith("Service.java")
+    # Dosya adi, koddaki `VEGAOMEGAService` identifier'i gibi tek token olarak maskelenir.
+    assert "Service" not in written.name and written.suffix == ".java"

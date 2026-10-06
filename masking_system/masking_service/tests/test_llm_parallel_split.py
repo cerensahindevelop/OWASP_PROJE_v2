@@ -1,5 +1,6 @@
 """Parallel chunk scanning and split-and-rescan of truncated (finish_reason=length) chunks."""
 import asyncio
+import itertools
 import json
 from types import SimpleNamespace
 
@@ -26,8 +27,22 @@ def finding(value):
     return {'bulunan_deger': value, 'tip': 'KOD', 'guven_seviyesi': 'yuksek', 'gerekce': 'kod'}
 
 
+_line_numbers = itertools.count()
+
+
+def _letters(n, width):
+    # Satir kimligi harflerle: yalnizca rakamlari farkli satirlar LLM icin ayni sayilir.
+    out = ""
+    for _ in range(width):
+        n, r = divmod(n, 26)
+        out = "abcdefghijklmnopqrstuvwxyz"[r] + out
+    return out
+
+
 def lines(n, width=60):
-    return ''.join('x' * (width - 1) + '\n' for _ in range(n))
+    # Satirlar benzersiz: tekrar eden satirlar LLM'e bir kez gittigi icin
+    # (text_chunking.dedupe_for_llm) ayni satirla parca sayisi olusturulamaz.
+    return ''.join(_letters(next(_line_numbers), 7) + 'x' * (width - 8) + '\n' for _ in range(n))
 
 
 def test_chunks_are_requested_concurrently_and_output_is_deterministic(monkeypatch):

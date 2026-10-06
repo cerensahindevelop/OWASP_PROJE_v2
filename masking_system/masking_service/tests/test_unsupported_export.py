@@ -47,7 +47,7 @@ def test_binary_content_is_excluded_across_names_and_projects(export_files, db_s
     binary = bytes(range(256)) * 4
     report, source, target = export_files({name: binary, "good.py": b"value = 1\n"})
 
-    assert report.status == "completed_with_warnings"
+    assert report.status == "completed"
     assert report.files_scanned == 2
     assert report.files_ready == 1
     assert report.files_skipped_unsupported == 1
@@ -79,9 +79,11 @@ def test_binary_content_is_excluded_across_names_and_projects(export_files, db_s
     assert row["Hata"] == 0
 
 
-def test_all_binary_project_is_not_reported_complete(export_files):
+def test_all_binary_project_manifest_is_not_complete(export_files):
+    # Kapsam disi dosya bilgi notudur (durum "completed"), ama butunluk kaydi
+    # ciktinin projenin tam kopyasi olmadigini yine soyler.
     report, _, target = export_files({"payload.bin": bytes(range(256))})
-    assert report.status == "completed_with_warnings"
+    assert report.status == "completed"
     assert report.files_ready == report.files_validation_failed == 0
     assert report.files_skipped_unsupported == 1
     manifest = read_manifest(target, report.context_id)
@@ -129,3 +131,19 @@ def test_large_jar_is_unsupported_type_not_failed_check(export_files, db_session
     assert "taranmadı ve çıktıya alınmadı" in outcome.error
     assert not (target / name).exists()
     assert not db_session.scalars(select(AuditWarning).where(AuditWarning.run_id == report.run_id)).all()
+
+
+def test_size_limit_comes_from_scan_max_file_mb_setting(export_files, monkeypatch):
+    # Sinir kodda sabit degil: SCAN_MAX_FILE_MB'den okunur (1 MB'a dusurulunce 2 MB dosya asar).
+    monkeypatch.setattr(exporter.settings.scan, "max_file_mb", 1)
+    report, _, target = export_files({"big.txt": b"a" * (2 * 1024 * 1024), "small.txt": b"ok\n"})
+    assert report.files_skipped_too_large == 1
+    assert not (target / "big.txt").exists()
+    assert (target / "small.txt").exists()
+    assert report.status == "completed_with_warnings"
+
+
+def test_scan_max_file_mb_default_is_50():
+    from app.core.config import ScanSettings
+
+    assert ScanSettings(_env_file=None).max_file_bytes == 50 * 1024 * 1024

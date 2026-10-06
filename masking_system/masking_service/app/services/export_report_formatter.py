@@ -10,10 +10,13 @@ ExportReport.summary_text() geriye-uyumlu ince bir sarmalayici olarak kalir.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.services.failed_checks import failed_check_label
+from app.services.java_classfile import CLASS_COVERAGE
 from app.services.runtime_params import RuntimeParam
+from app.services.syntax_validator import BRACKET_ONLY_NOTICE, STRUCTURAL_ONLY_NOTICE
 
 if TYPE_CHECKING:
     from app.services.exporter import ExportReport
@@ -44,6 +47,33 @@ _STATUS_DISPLAY_NAMES = {
 # SADECE dikkat gerektiren (sifirdan farkli) durumlar - 8 satirlik "hepsi 0"
 # dokumu okunurlugu bogar, o yuzden burada gosterilmez.
 _HIDDEN_PATH = "<gizlendi>"
+
+
+
+_COVERAGE_SUMMARIES = (
+    (STRUCTURAL_ONLY_NOTICE, "{count} dosya düz metin olduğu için ayrıca biçim denetimi yapılmadı; "
+                             "içerik ve geri dönüş kontrolleri tamam"),
+    (BRACKET_ONLY_NOTICE, "{count} dosyada derleyici denetimi yok, parantez ve tırnak dengesi denetlendi; "
+                          "içerik ve geri dönüş kontrolleri tamam"),
+    (CLASS_COVERAGE, "{count} Java .class dosyasında metin sabitleri tarandı; sınıf çalıştırılmadı"),
+)
+
+
+# Kapsam notlarini tur basina tek, sade bir cumleye indirger; dosyalar yalnizca
+# adlariyla listelenir (`README.md, API.md`). original_paths (etiket -> kaynak
+# yol) verilirse orijinal adlar kullanilir; yalnizca ekran icindir, saklanan
+# rapor ve loglar maskeli etiketle kalir.
+def summarize_coverage_notices(notices: list[str], original_paths: dict[str, str] | None = None) -> list[str]:
+    def name(label: str) -> str:
+        source = (original_paths or {}).get(label)
+        return Path(source if source is not None else label.split("#", 1)[0]).name
+
+    summaries = []
+    for marker, template in _COVERAGE_SUMMARIES:
+        names = [name(entry.partition(": ")[0]) for entry in notices if entry.endswith(marker)]
+        if names:
+            summaries.append(f"{template.format(count=len(names))}: {', '.join(names)}.")
+    return summaries
 
 
 def format_export_report(report: "ExportReport") -> str:
@@ -157,10 +187,15 @@ def format_export_report(report: "ExportReport") -> str:
             f"icerikte maskeli ama yolda acik; dosya kimlikleri: {', '.join(refs)}"
         )
 
-    if report.validation_warnings:
+    if report.actionable_validation_warnings:
         lines.append("")
         lines.append("  SOZDIZIMI DOGRULAMA UYARILARI:")
-        lines.extend(f"    {notice}" for notice in report.validation_warnings)
+        lines.extend(f"    {notice}" for notice in report.actionable_validation_warnings)
+
+    if report.validation_notices:
+        lines.append("")
+        lines.append("  Bilgi notlari (dogrulama kapsami; cikti etkilenmedi):")
+        lines.extend(f"    - {summary}" for summary in summarize_coverage_notices(report.validation_notices))
 
     if report.matches_by_rule:
         lines.append("")
@@ -225,19 +260,24 @@ def format_export_report(report: "ExportReport") -> str:
             if outcome.status == "failed_finalization":
                 lines.append(f"    - {report.file_label(outcome.relative_path)}: {outcome.error}")
 
-    attention: list[str] = []
+    # Kapsam disi dosyalar bilerek islenmez; uyari degil bilgi notudur.
+    info: list[str] = []
     if report.files_skipped_unsupported:
-        attention.append(
-            f"{report.files_skipped_unsupported} dosyada maskeleme desteklenmiyor; "
-            "dosyalar taranmadi ve ciktiya alinmadi"
+        info.append(
+            f"{report.files_skipped_unsupported} dosya desteklenen format kapsami disinda; "
+            "taranmadi ve ciktiya alinmadi"
         )
         for outcome in report.outcomes:
             if outcome.status == "skipped_unsupported":
-                attention.append(f"{report.file_label(outcome.relative_path)}: {outcome.error}")
+                info.append(f"{report.file_label(outcome.relative_path)}: {outcome.error}")
+    if report.files_skipped_symlink:
+        info.append(f"{report.files_skipped_symlink} dosya symlink oldugu icin atlandi")
+    if report.files_excluded:
+        info.append(f"{report.files_excluded} dosya haric tutma kurali geregi atlandi (hic kopyalanmadi)")
+
+    attention: list[str] = []
     if report.files_copied_binary:
         attention.append(f"{report.files_copied_binary} binary dosya dogrulanamadi ve ciktiya alinmadi")
-    if report.files_skipped_symlink:
-        attention.append(f"{report.files_skipped_symlink} dosya symlink oldugu icin atlandi")
     if report.files_skipped_too_large:
         attention.append(
             f"{report.files_skipped_too_large} dosya boyut esigini astigi icin dogrulanamadi ve kopyalanmadi"
@@ -245,10 +285,6 @@ def format_export_report(report: "ExportReport") -> str:
     if report.files_copied_undecodable:
         attention.append(
             f"{report.files_copied_undecodable} dosya decode edilemedi, manuel inceleme gerekli"
-        )
-    if report.files_excluded:
-        attention.append(
-            f"{report.files_excluded} dosya guvenlik politikasi geregi haric tutuldu (hic kopyalanmadi)"
         )
     if report.files_errored:
         attention.append(f"{report.files_errored} dosya hata aldi")
@@ -279,9 +315,15 @@ def format_export_report(report: "ExportReport") -> str:
         and not report.files_failed_round_trip_validation
         and not report.files_failed_consistency_validation
         and not report.files_failed_finalization
-        and not report.validation_warnings
+        and not report.actionable_validation_warnings
         and not report.degraded_detectors
     ):
-        lines.append("  Sorun yok: hata, atlanan symlink, boyut asimi ya da haric tutma yasanmadi.")
+        lines.append("  Sorun yok: hata, boyut asimi ya da dogrulama sorunu yasanmadi.")
+
+    if info:
+        lines.append("")
+        lines.append("  Bilgi notlari (kapsam disi dosyalar):")
+        for item in info:
+            lines.append(f"    - {item}")
 
     return "\n".join(lines)

@@ -123,9 +123,18 @@ def _empty_llm(monkeypatch):
     monkeypatch.setattr(llm_recognizer, "call_vllm", fake)
 
 
+def _letters(n, width):
+    # Satir kimligi harflerle: yalnizca rakamlari farkli satirlar LLM icin ayni sayilir.
+    out = ""
+    for _ in range(width):
+        n, r = divmod(n, 26)
+        out = "abcdefghijklmnopqrstuvwxyz"[r] + out
+    return out
+
+
 def test_heavy_file_produces_content_free_workload_notice(monkeypatch):
     _empty_llm(monkeypatch)
-    text = "var owner = 'Hakan';\n" * 1200  # ~25 KB -> 5 parca
+    text = "".join(f"var owner{_letters(i, 4)} = 'Hakan';\n" for i in range(1000))  # ~25 KB benzersiz satir -> 5 parca
     out = asyncio.run(LLMDetector(_settings()).detect(text, {"file_path": "big.cs"}))
     [notice] = [n for n in out.notices if n.startswith("llm_is_yuku_yuksek")]
     assert "parca=5" in notice and "Hakan" not in notice

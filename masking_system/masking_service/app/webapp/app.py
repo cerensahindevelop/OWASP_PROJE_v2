@@ -23,12 +23,6 @@ def run() -> None:
         render_identity_gate()
         return
 
-    with st.sidebar:
-        render_identity_badge()
-        with st.expander("Veri erişimi ve saklama"):
-            st.warning("Eşleştirme veritabanı ve yedekleri orijinal hassas değerleri açık metin içerir. Dışarı taşınmamalı; yalnızca yetkili işletim hesabı ve yöneticiler erişmelidir.")
-            st.caption("Proje/sicil/branch seçimi kullanıcı kimlik doğrulaması değildir. Kullanıcı yetkileri kurumun erişim katmanında uygulanmalıdır.")
-
     pages = [
         st.Page(export_page.render, title="Dışarı Çıkar", icon="📤", url_path="disari-cikar"),
         st.Page(review_page.render, title="Onay Bekleyenler", icon="🕵️", url_path="onay-bekleyenler"),
@@ -46,5 +40,17 @@ def run() -> None:
         "term_upload": pages[4],
     }
 
-    navigation = st.navigation(pages)
+    # Varsayilan navigasyon sidebar'in EN USTUNE cizilir; baslik ve kimlik
+    # rozeti sayfa listesinin ustunde kalsin diye gizlenip
+    # asagida st.page_link ile elle cizilir.
+    navigation = st.navigation(pages, position="hidden")
+
+    with st.sidebar:
+        st.markdown("### 🔒 Maskeleme Sistemi")
+        render_identity_badge()
+        st.divider()
+        st.caption("Sayfalar")
+        for page in pages:
+            st.page_link(page, width="stretch")
+
     navigation.run()

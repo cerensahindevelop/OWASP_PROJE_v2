@@ -212,3 +212,48 @@ def test_verification_3_new_extension_rule_takes_effect_without_code_change():
                 sqltext("DELETE FROM dosya_tipi_kategori_kisitlamasi WHERE dosya_uzantisi = 'tf_pytest'")
             )
             db.commit()
+
+
+class TestDisabledEntities:
+    """PRESIDIO_DISABLED_ENTITIES: Ingilizce spaCy modelinin Turkce metinde
+    urettigi ORGANIZATION/LOCATION/NRP/DATE_TIME bulgulari atilir; PERSON ve
+    DB'de tanimli ozel kurallar etkilenmez."""
+
+    def test_disabled_builtin_entities_are_dropped_person_kept(self, monkeypatch):
+        from app.services.presidio_detector import _AnalyzerResult
+
+        content = "Veriler SQLite ile Ankara'da tutulur; sorumlu Mehmet Kaya."
+        spans = {"ORGANIZATION": "SQLite", "LOCATION": "Ankara", "NRP": "Veriler", "PERSON": "Mehmet Kaya"}
+        results = [
+            _AnalyzerResult(entity_type=kind, start=content.index(value),
+                            end=content.index(value) + len(value), score=0.85)
+            for kind, value in spans.items()
+        ]
+        detector = PresidioDetector([], disabled_entities=frozenset({"ORGANIZATION", "LOCATION", "NRP", "DATE_TIME"}))
+        monkeypatch.setattr(detector, "_analyze", lambda content, entities=None: results)
+
+        output = asyncio.run(detector.detect(content, {"file_path": "README.md"}))
+
+        assert [(r.tip, r.deger) for r in output.results] == [("PERSON", "Mehmet Kaya")]
+
+    def test_custom_rule_with_disabled_entity_type_still_runs(self, monkeypatch):
+        from app.services.presidio_detector import _AnalyzerResult
+
+        rule = PresidioRuleSpec(rule_name="presidio_kurum", regex_pattern=r"ACME", entity_type="ORGANIZATION",
+                                confidence_score=0.9, is_allow_list=False)
+        detector = PresidioDetector([rule], disabled_entities=frozenset({"ORGANIZATION"}))
+        content = "ACME servisi"
+        monkeypatch.setattr(detector, "_analyze", lambda content, entities=None: [
+            _AnalyzerResult(entity_type="ORGANIZATION", start=0, end=4, score=0.9, rule=rule.as_rule_spec()),
+        ])
+
+        output = asyncio.run(detector.detect(content, {"file_path": "README.md"}))
+
+        assert [r.deger for r in output.results] == ["ACME"]
+
+def test_disabled_entities_setting_parses_comma_list():
+    from app.core.config import PresidioSettings
+
+    assert PresidioSettings(_env_file=None).disabled_entity_set == {"ORGANIZATION", "LOCATION", "NRP"}
+    assert PresidioSettings(_env_file=None, disabled_entities=" nrp , ").disabled_entity_set == {"NRP"}
+    assert PresidioSettings(_env_file=None, disabled_entities="").disabled_entity_set == frozenset()

@@ -4,8 +4,9 @@ from app.services.audit_warning_details import describe_audit_warning
 from app.services.term_upload import commit_term_upload
 
 
-def warning(reasoning, masked_content="", audit_failed=False):
-    return SimpleNamespace(reasoning=reasoning, masked_content=masked_content, audit_failed=audit_failed)
+def warning(reasoning, masked_content="", audit_failed=False, file_path="src/sample.cs"):
+    return SimpleNamespace(reasoning=reasoning, masked_content=masked_content, audit_failed=audit_failed,
+                           file_path=file_path)
 
 
 def test_saved_term_locations_need_no_rescan():

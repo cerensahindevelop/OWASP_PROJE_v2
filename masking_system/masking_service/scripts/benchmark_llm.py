@@ -17,6 +17,7 @@ from app.core.config import VLLMSettings
 from app.services.llm_recognizer import find_llm_detections, LLMRecognitionError
 from app.services.audit_reviewer import audit_masked_text
 from app.services.llm_runtime import llm_file_context
+from app.services.llm_transport import llm_http_scope
 
 
 def main():
@@ -38,6 +39,7 @@ def main():
     text = (unit*((args.chars//len(unit))+1))[:args.chars]
     text += '\n# Internal project codename: ZEPHYR_DEMO_741\n'
     results = []
+    @llm_http_scope()
     async def run(s):
         async def one(index):
             name = f'synthetic-{index}.txt'

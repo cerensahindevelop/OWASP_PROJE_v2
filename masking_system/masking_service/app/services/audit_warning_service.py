@@ -30,8 +30,9 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 from typing import Callable, Sequence
+from time import time
 
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -45,8 +46,9 @@ from app.services.roundtrip_validator import text_digest
 from app.services.rule_engine import reverse_text
 from app.repository.audit_warning_repository import SqlAlchemyAuditWarningRepository
 from app.services.audit_reviewer import (
-    audit_masked_text, audit_record_key, decode_audit_record, encode_audit_record,
+    AuditFinding, audit_masked_text, audit_record_key, decode_audit_record, encode_audit_record,
 )
+from app.services.llm_transport import llm_http_scope
 from app.services.llm_runtime import llm_file_context
 from app.services.runtime_params import build_runtime_params
 from app.services.log_refs import file_label, file_ref, log_file_label
@@ -112,10 +114,15 @@ class AuditWarningService:
         self.audit_warnings = SqlAlchemyAuditWarningRepository(db)
         # Son _ai_check'te modelden alinan sonucun sifreli kaydi (yeniden kullanimda None).
         self._fresh_audit_record: str | None = None
+        self._unresolved_findings: tuple[AuditFinding, ...] = ()
+
+    @property
+    def unresolved_audit_findings(self) -> tuple[AuditFinding, ...]:
+        return self._unresolved_findings
 
     # Verilen kimlige ait, henuz karara baglanmamis denetim uyarilarini listeler.
     def list_pending_for_identity(
-        self, *, project_name: str, sicil_no: str, branch_name: str
+        self, *, sicil_no: str, project_name: str | None = None, branch_name: str | None = None
     ) -> list[AuditWarning]:
         return self.audit_warnings.list_pending_for_identity(
             project_name=project_name, sicil_no=sicil_no, branch_name=branch_name
@@ -136,6 +143,7 @@ class AuditWarningService:
         return warning
 
     # Bulguyu yanlis alarm sayar; dar suppression ve FINAL PASS basariliysa serbest birakir.
+    @llm_http_scope()
     async def dismiss(self, warning_id: int) -> AuditWarning:
         """Learn a narrow suppression and release only after a complete final pass."""
         warning = self._pending_warning(warning_id)
@@ -153,6 +161,7 @@ class AuditWarningService:
             decision_detail="user_decision=false_alarm",
         )
 
+    @llm_http_scope()
     async def mask(self, warning_id: int) -> AuditWarning:
         """Automatically mask verified audit evidence and release after validation."""
         from app.services.file_classifier import is_lock_filename
@@ -176,6 +185,7 @@ class AuditWarningService:
             decision_detail="user_decision=automatic_mask",
         )
 
+    @llm_http_scope()
     async def finalize_review_hold(self, warning: AuditWarning) -> None:
         """Apply completed review decisions, then release through the same final pass.
 
@@ -287,12 +297,29 @@ class AuditWarningService:
     # Uc asamali serbest birakma (bkz. modul dokumani)
     # ------------------------------------------------------------------
 
+    async def revalidate(self, warning_id: int, *, revalidation_token: str) -> AuditWarning:
+        """Automatic final pass without learning or suppressing any finding."""
+        warning = self._pending_warning(warning_id)
+        if (warning.audit_failed or warning.revalidation_token != revalidation_token
+                or (warning.revalidation_after or 0) <= time()):
+            raise ReviewAlreadyProcessedError("Otomatik doğrulama kaydı başka bir işlem tarafından alındı.")
+        run = self.db.get(MaskingRun, warning.run_id)
+        if run is None or run.status not in {"completed", "completed_with_warnings"}:
+            raise ValueError("Tamamlanmamış export yeniden doğrulanamaz.")
+        return await self._release_with_revalidation(
+            warning, run, mask_values=[], suppressions=[],
+            failure_message="Otomatik doğrulama dosyayı serbest bırakamadı",
+            decision_detail="automatic_revalidation=true",
+            revalidation_token=revalidation_token,
+        )
+
     async def _release_with_revalidation(
         self, warning: AuditWarning, run: MaskingRun, *,
         mask_values: list[tuple[str, str]], suppressions: list[str],
-        failure_message: str, decision_detail: str,
+        failure_message: str, decision_detail: str, revalidation_token: str | None = None,
     ) -> AuditWarning:
         warning_id = warning.id
+        release_location = (run.target_path, warning.file_path, warning.output_path, warning.encoding)
 
         # A: aday icerik; hicbir yazma kalici degil, kilit LLM'den once birakilir.
         savepoint = self.db.begin_nested()
@@ -307,16 +334,22 @@ class AuditWarningService:
         if error is None:
             error = await self._ai_check(candidate.content, warning, run, extra_suppressions=suppressions)
         if error is not None:
-            self._record_failure(warning, run, decision_detail, error)
+            self._record_failure(warning, run, decision_detail, error, revalidation_token=revalidation_token)
             raise ValueError(f"{failure_message}: {error}")
 
         # C: kisa yazma transaction'i.
         savepoint = self.db.begin_nested()
         try:
+            self.db.refresh(warning)
+            self.db.refresh(run)
+            if (run.target_path, warning.file_path, warning.output_path, warning.encoding) != release_location:
+                raise _StaleCandidate("çıktı konumu doğrulama sırasında değişti; işlemi tekrarlayın")
             again = self._prepare_candidate(warning, run, mask_values)
             if again.error is not None or again.content != candidate.content:
                 raise _StaleCandidate(again.error or "dosya ya da eşlemeler doğrulama sırasında değişti; işlemi tekrarlayın")
-            warning = self.audit_warnings.transition_pending(warning_id, status="dismissed")
+            warning = self.audit_warnings.transition_pending(
+                warning_id, status="dismissed", revalidation_token=revalidation_token,
+            )
             warning.masked_content = again.content
             self._log_consistency(warning, run, again.consistency_count)
             learned_ids = [
@@ -332,13 +365,13 @@ class AuditWarningService:
             self.db.add(AuditLog(
                 run_id=run.id, file_path=warning.file_path,
                 action="replaced" if mask_values else "skipped",
-                detail=(f"warning_id={warning_id} ai_result=risky {decision_detail}{suppression_detail} "
+                detail=(f"warning_id={warning_id} ai_result={'clean' if revalidation_token else 'risky'} {decision_detail}{suppression_detail} "
                         "revalidation=passed final_state=READY final_output=written"),
             ))
             savepoint.commit()
         except _StaleCandidate as exc:
             savepoint.rollback()
-            self._record_failure(warning, run, decision_detail, str(exc))
+            self._record_failure(warning, run, decision_detail, str(exc), revalidation_token=revalidation_token)
             raise ValueError(f"{failure_message}: {exc}") from None
         except BaseException:
             savepoint.rollback()
@@ -359,11 +392,25 @@ class AuditWarningService:
         values = (str(item.get("found_value", "")).strip() for item in details.get("evidence", []))
         return list(dict.fromkeys(value for value in values if value))
 
-    def _record_failure(self, warning: AuditWarning, run: MaskingRun, decision_detail: str, error: str) -> None:
+    def _record_failure(
+        self, warning: AuditWarning, run: MaskingRun, decision_detail: str, error: str,
+        *, revalidation_token: str | None = None,
+    ) -> None:
         # Yalnizca denetim kaydi (ve alinan denetim sonucu) kalici olur; karar/esleme
         # yazilmaz, dosya bekler. Ayni icerikle tekrar denemek ayni sonucu alir.
-        if self._fresh_audit_record:
-            warning.audit_record = self._fresh_audit_record
+        self.db.refresh(warning)
+        if warning.status != "pending" or (revalidation_token is not None and warning.revalidation_token != revalidation_token):
+            raise ReviewAlreadyProcessedError("Dosya doğrulama sırasında başka bir işlem tarafından sonuçlandırıldı.")
+        stmt = update(AuditWarning).where(
+            AuditWarning.id == warning.id, AuditWarning.status == "pending",
+        ).values(audit_record=self._fresh_audit_record or warning.audit_record).returning(AuditWarning.id)
+        if revalidation_token is not None:
+            stmt = stmt.where(
+                AuditWarning.revalidation_token == revalidation_token,
+                AuditWarning.revalidation_after > time(),
+            )
+        if self.db.scalar(stmt) is None:
+            raise ReviewAlreadyProcessedError("Dosya doğrulama sırasında başka bir işlem tarafından sonuçlandırıldı.")
         self.db.add(AuditLog(
             run_id=run.id, file_path=warning.file_path, action="error",
             detail=f"warning_id={warning.id} {decision_detail} revalidation=failed final_output=blocked reason={error}",
@@ -436,6 +483,7 @@ class AuditWarningService:
         self, content: str, warning: AuditWarning, run: MaskingRun, *, extra_suppressions: Sequence[str] = (),
     ) -> str | None:
         self._fresh_audit_record = None
+        self._unresolved_findings = ()
         verdict = None
         key = None
         if settings.vllm.enabled:
@@ -465,6 +513,7 @@ class AuditWarningService:
             and not covered_by_values(finding.ilgili_bolum, content, extra)
         ]
         if remaining:
+            self._unresolved_findings = tuple(remaining)
             return f"final AI denetimi {len(remaining)} bastırılmamış risk buldu"
         return None
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Protocol
+from time import time
 
 # Sorgu/guncelleme insasi (select, update) ve DB session tipi icin cekirdek
 # SQLAlchemy bilesenleri.
@@ -15,12 +16,14 @@ from app.db.models import AuditWarning, MaskingContext, MaskingRun
 # servis katmani somut SQLAlchemy implementasyonuna degil bu arayuze baglidir.
 class AuditWarningRepository(Protocol):
     # Bekleyen bir denetim uyarisini onay/red durumuna gecirir.
-    def transition_pending(self, warning_id: int, *, status: str) -> AuditWarning:
+    def transition_pending(
+        self, warning_id: int, *, status: str, revalidation_token: str | None = None,
+    ) -> AuditWarning:
         ...
 
     # Verilen kimlige (proje/sicil/branch) ait, henuz karara baglanmamis uyarilari listeler.
     def list_pending_for_identity(
-        self, *, project_name: str, sicil_no: str, branch_name: str
+        self, *, sicil_no: str, project_name: str | None = None, branch_name: str | None = None
     ) -> list[AuditWarning]:
         ...
 
@@ -38,7 +41,7 @@ class SqlAlchemyAuditWarningRepository:
     # Aktif kimlige ait, henuz karara baglanmamis (durum='pending') ikincil
     # risk kayitlarini, en eski once olacak sekilde dondurur.
     def list_pending_for_identity(
-        self, *, project_name: str, sicil_no: str, branch_name: str
+        self, *, sicil_no: str, project_name: str | None = None, branch_name: str | None = None
     ) -> list[AuditWarning]:
         stmt = (
             select(AuditWarning)
@@ -50,12 +53,15 @@ class SqlAlchemyAuditWarningRepository:
                 # bekleyenler arasinda gosterilmez: hedef klasor o islem
                 # icin hic yayimlanmadi, serbest birakma yanlis yere yazardi.
                 MaskingRun.status.in_(("completed", "completed_with_warnings")),
-                MaskingContext.project_name == project_name,
                 MaskingContext.sicil_no == sicil_no,
-                MaskingContext.branch_name == branch_name,
             )
             .order_by(AuditWarning.created_at)
         )
+        # Kullanici sicille tanimlanir; proje/branch yalnizca istege bagli filtredir.
+        if project_name:
+            stmt = stmt.where(MaskingContext.project_name == project_name)
+        if branch_name:
+            stmt = stmt.where(MaskingContext.branch_name == branch_name)
         return list(self.db.scalars(stmt).all())
 
     # Bir run_id'ye ait TUM (durum farketmeksizin) ikincil risk kayitlarini
@@ -66,7 +72,9 @@ class SqlAlchemyAuditWarningRepository:
 
     # Bekleyen (durum='pending') bir uyariyi atomik UPDATE ile confirmed/dismissed
     # durumuna gecirir; kayit zaten islenmisse ReviewAlreadyProcessedError firlatir.
-    def transition_pending(self, warning_id: int, *, status: str) -> AuditWarning:
+    def transition_pending(
+        self, warning_id: int, *, status: str, revalidation_token: str | None = None,
+    ) -> AuditWarning:
         if status not in {"confirmed", "dismissed"}:
             raise ValueError(f"unsupported audit warning status: {status}")
 
@@ -76,6 +84,11 @@ class SqlAlchemyAuditWarningRepository:
             .values(status=status)
             .returning(AuditWarning.id)
         )
+        if revalidation_token is not None:
+            stmt = stmt.where(
+                AuditWarning.revalidation_token == revalidation_token,
+                AuditWarning.revalidation_after > time(),
+            )
         updated_id = self.db.scalar(stmt)
         if updated_id is None:
             raise ReviewAlreadyProcessedError(f"denetim_uyarilari id={warning_id} zaten islenmis veya yok")

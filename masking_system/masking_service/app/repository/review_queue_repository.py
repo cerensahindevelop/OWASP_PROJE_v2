@@ -17,9 +17,12 @@ class ReviewQueueRepository(Protocol):
     def transition_pending(self, review_id: int, *, status: str) -> ReviewQueue:
         ...
 
+    def transition_equivalent_pending(self, review_id: int, *, status: str) -> tuple[ReviewQueue, int]:
+        ...
+
     # Verilen kimlige ait, henuz karara baglanmamis inceleme kayitlarini listeler.
     def list_pending_for_identity(
-        self, *, project_name: str, sicil_no: str, branch_name: str
+        self, *, sicil_no: str, project_name: str | None = None, branch_name: str | None = None
     ) -> list[ReviewQueue]:
         ...
 
@@ -36,7 +39,7 @@ class SqlAlchemyReviewQueueRepository:
 
     # Aktif kimlige ait, henuz karara baglanmamis (pending) bulgulari eskiden yeniye siralar.
     def list_pending_for_identity(
-        self, *, project_name: str, sicil_no: str, branch_name: str
+        self, *, sicil_no: str, project_name: str | None = None, branch_name: str | None = None
     ) -> list[ReviewQueue]:
         stmt = (
             select(ReviewQueue)
@@ -48,12 +51,15 @@ class SqlAlchemyReviewQueueRepository:
                 # bekleyenler arasinda gosterilmez: hedef klasor o islem
                 # icin hic yayimlanmadi, serbest birakma yanlis yere yazardi.
                 MaskingRun.status.in_(("completed", "completed_with_warnings")),
-                MaskingContext.project_name == project_name,
                 MaskingContext.sicil_no == sicil_no,
-                MaskingContext.branch_name == branch_name,
             )
             .order_by(ReviewQueue.created_at)
         )
+        # Kullanici sicille tanimlanir; proje/branch yalnizca istege bagli filtredir.
+        if project_name:
+            stmt = stmt.where(MaskingContext.project_name == project_name)
+        if branch_name:
+            stmt = stmt.where(MaskingContext.branch_name == branch_name)
         return list(self.db.scalars(stmt).all())
 
     # Bir run_id'ye ait TUM (durum farketmeksizin) review kayitlarini
@@ -83,3 +89,24 @@ class SqlAlchemyReviewQueueRepository:
         if row is None:
             raise ReviewAlreadyProcessedError(f"review_queue id={review_id} bulunamadi")
         return row
+
+    def transition_equivalent_pending(self, review_id: int, *, status: str) -> tuple[ReviewQueue, int]:
+        """The selected row claims the decision before updating its exact peers.
+
+        Both updates share a transaction. SQLite serializes conflicting writers;
+        another decision cannot partially approve/reject the same group.
+        Missing values and runless rows never form a decision group.
+        """
+        row = self.transition_pending(review_id, status=status)
+        if row.run_id is None or not row.found_value:
+            return row, 1
+        peers = list(self.db.scalars(
+            update(ReviewQueue).where(
+                ReviewQueue.run_id == row.run_id,
+                ReviewQueue.file_path == row.file_path,
+                ReviewQueue.found_value == row.found_value,
+                ReviewQueue.entity_type == row.entity_type,
+                ReviewQueue.status == "pending",
+            ).values(status=status).returning(ReviewQueue.id)
+        ))
+        return row, 1 + len(peers)

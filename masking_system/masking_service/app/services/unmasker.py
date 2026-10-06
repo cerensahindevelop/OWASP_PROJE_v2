@@ -41,10 +41,7 @@ from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.db.models import AuditLog, MaskingContext, MaskingRun, ValueMapping
 from app.services.exclude_admin import load_active_exclude_specs
-from app.services.exporter import (
-    DEFAULT_MAX_INLINE_SIZE,
-    _validate_paths,
-)
+from app.services.exporter import _validate_paths
 from app.services.file_pipeline import ReadStatus, read_scanned_file
 from app.services.file_type import write_text_preserving_encoding
 from app.services.java_classfile import ClassFormatError
@@ -52,7 +49,7 @@ from app.services.rule_engine import reverse_text
 from app.services.path_placeholders import PathPlaceholderResolver, UnsafeUnmaskPathError
 from app.services.scanner import iter_project_files
 from app.services.output_publication import OutputPublication, publish_run
-from app.services.integrity_manifest import MANIFEST_NAME, read_manifest, file_digest, source_tag
+from app.services.integrity_manifest import MANIFEST_NAME, peek_manifest_job_id, read_manifest, file_digest, source_tag
 from app.services.mapping_service import mapping_scope_for_run
 from app.services.roundtrip_validator import text_digest
 import hmac
@@ -66,6 +63,11 @@ class ContextNotFoundError(ValueError):
     matching masking_context - i.e. the caller supplied a wrong triple.
     Deliberately NOT a subclass of ExportValidationError: callers should be
     able to tell "bad folder paths" apart from "bad project identity"."""
+
+
+class PackageOwnerMismatchError(ContextNotFoundError):
+    """Paket bulundu ama baska bir sicille maskelenmis ya da islem kaydi
+    yok. Mesaj paketin sahibini (proje/sicil/branch) ASLA icermez."""
 
 
 # Cozulen bir path bileseninin, hedef klasorun disina cikmaya calistigi
@@ -266,6 +268,38 @@ def _load_identity(
         )
 
     return context
+
+
+# Kullaniciyi tanimlayan sicildir; proje/branch paketin maskeleme isleminden
+# (butunluk kaydindaki ya da elle girilen JOB ID) okunur. Islem baska bir
+# sicille yapildiysa geri alma reddedilir. Proje ve branch birlikte
+# verilirse eski (job kaydi olmayan) paketler icin ucluyle aranir.
+def resolve_unmask_identity(
+    db: Session, *, source: Path, sicil_no: str, project_name: str | None,
+    branch_name: str | None, job_id: int | None,
+) -> tuple[str, str]:
+    candidate = job_id if job_id is not None else peek_manifest_job_id(source)
+    if candidate is None:
+        if project_name and branch_name:
+            return project_name, branch_name
+        raise PackageOwnerMismatchError(
+            "Paketin maskeleme işlem kaydı bulunamadı. Çıktıdaki .masking-integrity.json "
+            "dosyasını da yükleyin ya da maskeleme JOB ID'sini girin."
+        )
+    job = db.get(MaskingRun, candidate)
+    context = db.get(MaskingContext, job.context_id) if job is not None and job.operation_type == "mask" else None
+    if context is None or context.sicil_no != sicil_no:
+        raise PackageOwnerMismatchError(
+            "Bu paket sizin sicilinizle maskelenmemiş ya da maskeleme kaydı bulunamadı. "
+            "Geri alma yalnızca paketi maskeleyen sicille yapılabilir."
+        )
+    if (project_name and project_name != context.project_name) or (
+        branch_name and branch_name != context.branch_name
+    ):
+        raise PackageOwnerMismatchError(
+            "Girilen proje/branch, paketin maskelendiği proje/branch ile eşleşmiyor."
+        )
+    return context.project_name, context.branch_name
 
 
 def load_context_mappings(
@@ -478,20 +512,26 @@ def unmask_project(
     db: Session,
     *,
     source_path: str,
-    project_name: str,
     sicil_no: str,
-    branch_name: str,
     target_path: str,
     initiated_by: str,
-    max_inline_size: int = DEFAULT_MAX_INLINE_SIZE,
+    project_name: str | None = None,
+    branch_name: str | None = None,
+    max_inline_size: int | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
     job_id: int | None = None,
 ) -> UnmaskReport:
+    if max_inline_size is None:
+        max_inline_size = settings.scan.max_file_bytes
     source = Path(source_path).resolve()
     target = Path(target_path).resolve()
     _validate_paths(source, target)
 
     # Security gate: resolve identity BEFORE touching the filesystem at all.
+    project_name, branch_name = resolve_unmask_identity(
+        db, source=source, sicil_no=sicil_no, project_name=project_name,
+        branch_name=branch_name, job_id=job_id,
+    )
     context = _load_identity(db, project_name, sicil_no, branch_name)
     manifest = read_manifest(source, context.id)
     if manifest is not None and manifest["version"] == 2:

@@ -6,11 +6,11 @@ eski parametre listesiyle kopyalanmisti. Bu kontrol app/ altindaki her
 dosyayi ayristirir ve dar bir kapsamda cagrilari cagrilan fonksiyonun
 gercek imzasiyla karsilastirir:
 
-- yalnizca baska bir app/ modulundeki MODUL DUZEYI fonksiyona dogrudan
-  cagrilar: `modul.f(...)` (import app.x.y as modul / from app.x import y)
-  ve `from app.x.y import f; f(...)`;
+- baska bir app/ modulundeki fonksiyonlara ve statik olarak sinifi bilinen
+  nesnelerin metotlarina cagrilar; dogrudan kurulan nesneler ve bir kez
+  atanan yerel nesneler desteklenir;
 - cagrida *args/**kwargs varsa, cagrilan fonksiyon *args/**kwargs aliyorsa
-  ya da dekoratorluyse, ad yerel olarak golgeleniyorsa veya cagri dinamikse
+  ya da imzayi korudugu bilinmeyen dekorator varsa, ad yerel olarak golgeleniyorsa veya cagri dinamikse
   atlanir (yanlis pozitif yerine kapsam disi).
 Cagrilan ad hedef modulde hic tanimli degilse (fonksiyon silinmis/eski
 modul) de hata verilir.
@@ -55,6 +55,8 @@ class _Module:
     functions: dict[str, _Signature | None]  # None: imzasi kontrol edilemez (dekorator, *args)
     bound: set[str]  # modul duzeyinde baglanan her ad
     open_namespace: bool  # `from x import *` ya da modul __getattr__
+    classes: dict[str, dict[str, _Signature | None]]
+    unknown_decorators: set[str]
 
 
 def _module_name(app_dir: Path, path: Path) -> str:
@@ -64,17 +66,56 @@ def _module_name(app_dir: Path, path: Path) -> str:
     return ".".join([app_dir.name, *parts])
 
 
-def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> _Signature | None:
+def _signature(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    transparent: frozenset[str] = frozenset(), *, bound_method: bool = False,
+) -> _Signature | None:
     args = node.args
-    if node.decorator_list or args.vararg or args.kwarg:
+    decorators = {_decorator_name(d) for d in node.decorator_list}
+    allowed = transparent | ({"staticmethod", "classmethod"} if bound_method else set())
+    if not decorators <= allowed or args.vararg or args.kwarg:
         return None
     positional = [a.arg for a in (*args.posonlyargs, *args.args)]
     with_default = len(args.defaults)
     required = positional[: len(positional) - with_default] if with_default else positional
+    posonly = len(args.posonlyargs)
+    if bound_method and "staticmethod" not in decorators:
+        if not positional:
+            return None
+        required = [name for name in required if name != positional[0]]
+        positional = positional[1:]
+        posonly = max(0, posonly - 1)
     kwonly = [a.arg for a in args.kwonlyargs]
     required_kw = [a.arg for a, default in zip(args.kwonlyargs, args.kw_defaults) if default is None]
-    return _Signature(tuple(positional), len(args.posonlyargs), frozenset(required), tuple(kwonly),
+    return _Signature(tuple(positional), posonly, frozenset(required), tuple(kwonly),
                       frozenset(required_kw))
+
+
+def _decorator_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Call):
+        if node.args or node.keywords:
+            return "<dynamic>"
+        node = node.func
+    return ".".join(_dotted(node) or ["<dynamic>"])
+
+
+def _transparent_decorators(tree: ast.Module) -> frozenset[str]:
+    # Resolve imports, rather than trusting any decorator with the same name.
+    names = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "app.services.llm_transport":
+            names.update(a.asname or a.name for a in node.names if a.name == "llm_http_scope")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "app.services.llm_transport":
+                    names.add(f"{alias.asname or alias.name}.llm_http_scope")
+    # A local reassignment/function may replace the imported decorator.
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.discard(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            names.difference_update(_stored_names(node))
+    return frozenset(names)
 
 
 def _top_level_statements(body):
@@ -96,11 +137,25 @@ def _stored_names(node) -> set[str]:
 def _load_module(app_dir: Path, path: Path) -> _Module:
     tree = ast.parse(path.read_bytes(), filename=str(path))
     functions: dict[str, _Signature | None] = {}
+    classes: dict[str, dict[str, _Signature | None]] = {}
+    unknown_decorators: set[str] = set()
+    transparent = _transparent_decorators(tree)
     bound: set[str] = set()
     open_namespace = False
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            functions[stmt.name] = _signature(stmt)
+            functions[stmt.name] = _signature(stmt, transparent)
+            if any(_decorator_name(d) not in transparent for d in stmt.decorator_list):
+                unknown_decorators.add(stmt.name)
+        elif isinstance(stmt, ast.ClassDef):
+            methods = {}
+            for method in stmt.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    methods[method.name] = _signature(method, transparent, bound_method=True)
+                    if any(_decorator_name(d) not in transparent | {"staticmethod", "classmethod"}
+                           for d in method.decorator_list):
+                        unknown_decorators.add(f"{stmt.name}.{method.name}")
+            classes[stmt.name] = methods
     for stmt in _top_level_statements(tree.body):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             bound.add(stmt.name)
@@ -118,7 +173,8 @@ def _load_module(app_dir: Path, path: Path) -> _Module:
         if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
             for name in _stored_names(stmt) & functions.keys():
                 functions[name] = None
-    return _Module(_module_name(app_dir, path), path, tree, functions, bound, open_namespace)
+    return _Module(_module_name(app_dir, path), path, tree, functions, bound, open_namespace,
+                   classes, unknown_decorators)
 
 
 def _resolve_relative(module: _Module, level: int, target: str | None) -> str:
@@ -210,6 +266,50 @@ def _check_call(call: ast.Call, sig: _Signature) -> str | None:
     return None
 
 
+def _class_reference(expr, module_aliases, function_aliases, modules, shadowed):
+    parts = _dotted(expr)
+    if not parts or parts[0] in shadowed:
+        return None
+    if len(parts) == 1 and parts[0] in function_aliases:
+        source, name = function_aliases[parts[0]]
+    elif len(parts) >= 2 and parts[0] in module_aliases:
+        source = ".".join([module_aliases[parts[0]], *parts[1:-1]])
+        name = parts[-1]
+    else:
+        return None
+    if source in modules and name in modules[source].classes:
+        return source, name
+    return None
+
+
+def _scope_nodes(scope):
+    yield scope
+    for child in ast.iter_child_nodes(scope):
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            yield from _scope_nodes(child)
+
+
+def _known_receivers(scope, module_aliases, function_aliases, modules, shadowed):
+    nodes = list(_scope_nodes(scope))
+    counts: dict[str, int] = {}
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            counts[node.id] = counts.get(node.id, 0) + 1
+    receivers = {}
+    for node in nodes:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and counts.get(target.id) == 1 and isinstance(value, ast.Call):
+            reference = _class_reference(value.func, module_aliases, function_aliases, modules, shadowed)
+            if reference is not None:
+                receivers[target.id] = reference
+    return receivers
+
+
 def check(app_dir: Path = SERVICE / "app", stats: dict[str, int] | None = None) -> list[Finding]:
     app_dir = app_dir.resolve()
     root = app_dir.name
@@ -229,13 +329,46 @@ def check(app_dir: Path = SERVICE / "app", stats: dict[str, int] | None = None) 
             and not isinstance(node, ast.Lambda)
         ]
         shadowed_at: dict[int, set[str]] = {}
+        receiver_at: dict[int, dict[str, tuple[str, str]]] = {}
         for func, names in scopes:
+            receivers = _known_receivers(func, module_aliases, function_aliases, modules, names)
+            for node in _scope_nodes(func):
+                if isinstance(node, ast.Call):
+                    receiver_at[id(node)] = receivers
             for node in ast.walk(func):
                 if isinstance(node, ast.Call):
                     shadowed_at.setdefault(id(node), set()).update(names)
         for call in (n for n in ast.walk(module.tree) if isinstance(n, ast.Call)):
+            shadowed = shadowed_at.get(id(call), set())
+            method_target = None
+            if isinstance(call.func, ast.Attribute):
+                receiver = call.func.value
+                if isinstance(receiver, ast.Call):
+                    method_target = _class_reference(receiver.func, module_aliases, function_aliases, modules, shadowed)
+                elif isinstance(receiver, ast.Name):
+                    method_target = receiver_at.get(id(call), {}).get(receiver.id)
+            if method_target is not None:
+                target_module, class_name = method_target
+                if target_module == module.name:
+                    continue
+                function = f"{class_name}.{call.func.attr}"
+                target = modules[target_module]
+                sig = target.classes[class_name].get(call.func.attr)
+                # Inherited/dynamic methods are deliberately outside this check.
+                if sig is None:
+                    if stats is not None and function in target.unknown_decorators:
+                        stats["skipped_decorated"] = stats.get("skipped_decorated", 0) + 1
+                    continue
+                if stats is not None:
+                    stats["checked"] = stats.get("checked", 0) + 1
+                    stats["checked_methods"] = stats.get("checked_methods", 0) + 1
+                reason = _check_call(call, sig)
+                if reason:
+                    caller = f"{module.path.relative_to(app_dir.parent).as_posix()}:{call.lineno}"
+                    findings.append(Finding(caller, f"{target_module}.{function}", reason))
+                continue
             parts = _dotted(call.func)
-            if not parts or parts[0] in shadowed_at.get(id(call), set()):
+            if not parts or parts[0] in shadowed:
                 continue
             if len(parts) == 1 and parts[0] in function_aliases:
                 target_module, function = function_aliases[parts[0]]
@@ -255,6 +388,8 @@ def check(app_dir: Path = SERVICE / "app", stats: dict[str, int] | None = None) 
                 continue
             sig = target.functions.get(function)
             if sig is None:
+                if stats is not None and function in target.unknown_decorators:
+                    stats["skipped_decorated"] = stats.get("skipped_decorated", 0) + 1
                 continue
             if stats is not None:
                 stats["checked"] = stats.get("checked", 0) + 1
@@ -275,6 +410,7 @@ def main(argv=None) -> int:
     for finding in findings:
         print(finding.line())
     print(f"checked_calls={stats.get('checked', 0)}")
+    print(f"checked_methods={stats.get('checked_methods', 0)} skipped_decorated_calls={stats.get('skipped_decorated', 0)}")
     print("RESULT=" + ("OK" if not findings else "FAILED"))
     return int(bool(findings))
 

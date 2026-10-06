@@ -26,7 +26,7 @@ from app.webapp.common import (
     show_error,
 )
 # get_identity: sadece aktif kimlige ait gecmis islemleri filtrelemek icin.
-from app.webapp.identity import get_identity
+from app.webapp.identity import get_identity, render_project_branch_filter
 from app.webapp.time_display import format_turkey_time
 
 _REVIEW_STATUS_LABELS = {
@@ -174,15 +174,17 @@ def render() -> None:
     identity = get_identity()
     page_intro(
         "🗂️ Geçmiş İşlemler",
-        "Bu ekranda, aktif kimliğinize ait tüm geçmiş Dışarı Çıkar ve Geri Al işlemlerini "
-        "görebilir, herhangi birine tıklayarak dosya bazlı detaylarını inceleyebilirsiniz.",
+        "Bu ekranda, sicilinizle yaptığınız tüm proje ve branch'lerdeki geçmiş Dışarı Çıkar ve "
+        "Geri Al işlemlerini görebilir, herhangi birine tıklayarak dosya bazlı detaylarını "
+        "inceleyebilirsiniz.",
     )
 
+    project_name, branch_name = render_project_branch_filter("history_")
     try:
         runs = api_client.list_runs(
-            project_name=identity["project_name"],
+            project_name=project_name,
             sicil_no=identity["sicil_no"],
-            branch_name=identity["branch_name"],
+            branch_name=branch_name,
             limit=200,
         )
     except ApiError as exc:
@@ -190,13 +192,15 @@ def render() -> None:
         return
 
     if not runs:
-        st.info("Bu kimlikle henüz yapılmış bir işlem yok.")
+        st.info("Bu filtreyle eşleşen bir işlem yok.")
         return
 
     table_rows = [
         {
             "run_id": r.run_id,
             "Tarih": format_turkey_time(r.started_at, "%d.%m.%Y %H:%M", missing="-"),
+            "Proje": r.project_name,
+            "Branch": r.branch_name,
             "İşlem": OPERATION_LABELS.get(r.operation_type, r.operation_type),
             "Durum": STATUS_LABELS.get(r.status, r.status),
             "Dosya sayısı": r.files_scanned if r.files_scanned is not None else "-",
@@ -212,7 +216,7 @@ def render() -> None:
         width="stretch",
         on_select="rerun",
         selection_mode="single-row",
-        column_order=["Tarih", "İşlem", "Durum", "Dosya sayısı", "Bulgu sayısı"],
+        column_order=["Tarih", "Proje", "Branch", "İşlem", "Durum", "Dosya sayısı", "Bulgu sayısı"],
     )
 
     selected_run = None

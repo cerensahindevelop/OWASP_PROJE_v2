@@ -80,7 +80,10 @@ def main() -> int:
     from app.services.llm_recognizer import (  # noqa: E402
         LLMRecognitionError, build_detection_request, call_vllm, parse_and_verify_detections,
     )
-    payload = build_detection_request(SAMPLE, s.model, s.seed, max_tokens=s.max_tokens)
+    payload = build_detection_request(
+        SAMPLE, s.model, s.seed, max_tokens=s.max_tokens, disable_thinking=s.disable_thinking,
+        presence_penalty=s.presence_penalty, reasoning_effort=s.reasoning_effort,
+    )
     try:
         raw = asyncio.run(call_vllm(s.host, s.timeout_seconds, payload, s.api_key))
     except LLMRecognitionError as exc:

@@ -16,7 +16,7 @@ from app.webapp.api_client import ApiError
 # Guven seviyesi renk/etiketleri, baslik ve hata gosterimi yardimcilari.
 from app.webapp.common import CONFIDENCE_COLORS, CONFIDENCE_LABELS, page_intro, show_error
 # get_identity: sadece aktif kimlige ait onay kuyrugu kayitlarini listelemek icin.
-from app.webapp.identity import get_identity
+from app.webapp.identity import get_identity, render_project_branch_filter
 from app.services.audit_action_labels import CONFIRM_ACTION_LABEL, DISMISS_ACTION_LABEL, MASK_ACTION_LABEL
 from app.services.learned_decisions import normalize_value, security_scope
 
@@ -109,7 +109,7 @@ def _run_bulk_action(action: str, review_ids: list[int]) -> None:
     verb = "onaylandı" if action == "approve" else "reddedildi"
     text = f"{ok_count} kayıt {verb}."
     if skipped:
-        text += f" {skipped} kayıt bu arada başkası tarafından işlenmiş olduğu için atlandı."
+        text += f" {skipped} kayıt aynı karar kapsamında veya başka bir kullanıcı tarafından zaten sonuçlandırıldı."
     if action == "approve" and ok_count:
         text += "\n\n" + _APPROVE_NOTE
     st.session_state["review_flash"] = ("success" if action == "approve" else "info", text)
@@ -159,12 +159,23 @@ def _run_single_audit_action(action: str, warning_id: int) -> None:
 # ve her biri icin confirm/dismiss butonlarini gosterir. Uyari yoksa hicbir
 # sey cizmez (erken doner).
 def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> None:
+    identity_key = (identity["project_name"], identity["sicil_no"], identity["branch_name"])
+    polling = st.session_state.get("audit_revalidation_poll_identity") == identity_key
+    st.fragment(run_every="5s" if polling else None)(_render_audit_warnings_panel)(identity, review_count)
+
+
+def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
     flash = st.session_state.pop("audit_flash", None)
     if flash:
         kind, text = flash
         getattr(st, kind)(text)
 
     try:
+        revalidation = api_client.revalidate_pending_audit_warnings(
+            project_name=identity["project_name"], sicil_no=identity["sicil_no"], branch_name=identity["branch_name"],
+        )
+        if revalidation.scheduled:
+            _invalidate_export_download()
         pending = api_client.list_pending_audit_warnings(
             project_name=identity["project_name"],
             sicil_no=identity["sicil_no"],
@@ -173,6 +184,22 @@ def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> Non
     except ApiError as exc:
         show_error(exc)
         return
+    identity_key = (identity["project_name"], identity["sicil_no"], identity["branch_name"])
+    previous = st.session_state.get("audit_pending_snapshot")
+    current_ids = frozenset(item.id for item in pending)
+    if previous is not None and previous[0] == identity_key and previous[1] - current_ids:
+        _invalidate_export_download()
+    st.session_state["audit_pending_snapshot"] = (identity_key, current_ids)
+    active_ids = (frozenset(revalidation.active_ids) | frozenset(
+        item.id for item in pending if getattr(item, "revalidating", False)
+    )) & current_ids
+    was_polling = st.session_state.get("audit_revalidation_poll_identity") == identity_key
+    if bool(active_ids) != was_polling:
+        st.session_state["audit_revalidation_poll_identity"] = identity_key if active_ids else None
+        st.rerun()
+    if active_ids:
+        st.info("Eski denetim bulguları otomatik yeniden kontrol ediliyor. Sonuçlar burada güncellenecek.")
+    pending = [item for item in pending if item.id not in active_ids]
     rows = [
         {
             "id": item.id,
@@ -184,6 +211,7 @@ def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> Non
             "location": getattr(item, "location", "") or "Konum bilgisi kaydedilmemiş.",
             "next_step": getattr(item, "next_step", ""),
             "evidence": list(getattr(item, "evidence", []) or []),
+            "project": f"{getattr(item, 'project_name', None) or '-'} / {getattr(item, 'branch_name', None) or '-'}",
         }
         for item in pending
     ]
@@ -223,7 +251,7 @@ def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> Non
     st.info(
         f"✓ Hazır: {ready_count}  |  ⚠ İnceleme Gerekli: {review_count}  |  "
         f"⛔ Güvenlik Karantinası: {len(quarantine_rows)}  |  "
-        f"✕ Doğrulama Başarısız: {len(validation_rows)}"
+        f"✕ Doğrulama Başarısız: {len(validation_rows)}  |  ⟳ Yeniden doğrulanıyor: {len(active_ids)}"
     )
 
     if validation_rows:
@@ -251,7 +279,7 @@ def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> Non
             header_col, badge_col = st.columns([4, 1.4])
             with header_col:
                 st.markdown(f"**📄 {file_name}**")
-                st.caption(f"{row['file_path']} · İşlem #{row['run_id']}")
+                st.caption(f"{row['project']} · {row['file_path']} · İşlem #{row['run_id']}")
             with badge_col:
                 if row["audit_failed"]:
                     st.badge("Denetim Yapılamadı", color="orange")
@@ -311,11 +339,15 @@ def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> Non
 # supheli bulgu onay kuyrugunu (tekli/coklu onayla-reddet aksiyonlariyla)
 # cizer.
 def render() -> None:
-    identity = get_identity()
     page_intro(
         "🕵️ Onay Bekleyenler",
-        "Önce dışa aktarımı durdurulan dosyaları, ardından maskelenmesi için onay bekleyen bulguları inceleyin.",
+        "Önce dışa aktarımı durdurulan dosyaları, ardından maskelenmesi için onay bekleyen bulguları inceleyin. "
+        "Sicilinizle yaptığınız tüm proje ve branch'lerdeki kayıtlar listelenir.",
     )
+    # Kullanici sicille tanimlanir; proje/branch bu ekranda yalnizca filtredir
+    # (None = tumu). Asagidaki yardimcilar bu kapsami "identity" olarak alir.
+    project_name, branch_name = render_project_branch_filter("review_")
+    identity = {**get_identity(), "project_name": project_name, "branch_name": branch_name}
 
     flash = st.session_state.pop("review_flash", None)
     if flash:
@@ -342,16 +374,19 @@ def render() -> None:
             "confidence_level": item.confidence_level,
             "reason": item.reason,
             "surrounding_context": item.surrounding_context,
+            "project": f"{getattr(item, 'project_name', None) or '-'} / {getattr(item, 'branch_name', None) or '-'}",
         }
         for item in pending
     ]
 
-    grouped: dict[tuple[str, str, str, str], list[dict]] = {}
+    # Ayni deger farkli projelerde ayri karardir: tek tikla baska bir
+    # projedeki bulgu da onaylanmasin diye proje/branch grubun parcasidir.
+    grouped: dict[tuple[str, str, str, str, str], list[dict]] = {}
     for row in rows:
         if not row["found_value"]:
             continue
         key = (
-            normalize_value(row["found_value"]), row["entity_type"],
+            row["project"], normalize_value(row["found_value"]), row["entity_type"],
             row["confidence_level"], security_scope(row["file_path"]),
         )
         grouped.setdefault(key, []).append(row)
@@ -372,7 +407,7 @@ def render() -> None:
             header_col, badge_col = st.columns([4, 1.2])
             with header_col:
                 st.markdown(f"**{row['found_value']}**")
-                st.caption(f"{file_count} dosya / {len(group_rows)} kullanım")
+                st.caption(f"{row['project']} · {file_count} dosya / {len(group_rows)} kullanım")
             with badge_col:
                 level = row["confidence_level"]
                 st.badge(

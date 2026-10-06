@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from app.webapp import review_page
@@ -8,6 +9,14 @@ from app.webapp import review_page
 # sayfanin ilk cizimi bunu asabiliyor ("AppTest script run timed out after
 # 3(s)"). Sinir yalnizca asili kalan bir calistirmayi yakalamak icindir.
 APP_TEST_TIMEOUT_SECONDS = 30
+
+
+@pytest.fixture(autouse=True)
+def _no_background_revalidation(monkeypatch):
+    # Sayfa her cizimde bekleyen uyarilari yeniden dogrulamaya aday gosterir;
+    # testlerde backend yok, hicbir dosya otomatik dogrulamada degil.
+    monkeypatch.setattr(review_page.api_client, "revalidate_pending_audit_warnings",
+                        lambda **_: SimpleNamespace(scheduled=0, active_ids=[]))
 
 
 def _review_app() -> AppTest:

@@ -130,8 +130,10 @@ class PresidioDetector:
         entropy_threshold: float = 3.5,
         max_analyzer_chars: int = _DEFAULT_MAX_ANALYZER_CHARS,
         chunk_overlap_chars: int = _DEFAULT_CHUNK_OVERLAP_CHARS,
+        disabled_entities: frozenset[str] = frozenset(),
     ) -> None:
         self.rules = rules
+        self.disabled_entities = disabled_entities
         self.language = language
         self.spacy_model = spacy_model
         self.use_builtin_recognizers = use_builtin_recognizers
@@ -195,6 +197,9 @@ class PresidioDetector:
         for item in analyzed:
             span = (item.start, item.end)
             if _overlaps(span, protected_spans) or _overlaps(span, allow_spans):
+                continue
+            # Kapatilan yerlesik kategoriler atlanir; DB'deki ozel kurallar (rule dolu) her zaman calisir.
+            if item.rule is None and item.entity_type in self.disabled_entities:
                 continue
             value = content[item.start:item.end]
             # Entropi kontrolu: dogal-dil kategorileri (PERSON vb.) rastgele

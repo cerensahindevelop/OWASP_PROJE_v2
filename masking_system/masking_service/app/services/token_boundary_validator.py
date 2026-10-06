@@ -16,7 +16,14 @@ Iki ayri durum ele alinir:
    karakter) OTESINDE baslamis/bitmisse - tespitin bu string ile gercekten
    ilgili oldugu guvenilir sayilmaz - TAMAMEN REDDEDILIR.
 
-2) Eslesme tirnaksiz (bare) koddaysa: once en yakin identifier sinirina
+   Istisna: kurumsal terim sozlugu eslesmesi (is_corporate_term_result)
+   literal'in tamamini degil, icindeki tam token'i maskeler - SQL tablo
+   adi, dosya yolu ve API yolu, kodda ve dosya adlarinda ayni token'in
+   aldigi yer tutucuyu alir. Ayni literal'i baska bir bulgu tamamen
+   maskeliyorsa ya da token bir kacis dizisine yapisiksa literal'in
+   tamami maskelenir (bkz. _narrow_in_literal).
+
+2)Eslesme tirnaksiz (bare) koddaysa: once en yakin identifier sinirina
    (\\b) genisletilir - bu, ayirici icermeyen camelCase/PascalCase/snake_case/
    UPPER_SNAKE_CASE identifier'larda (orn. `subeAdi`, `HedefSubeAdi`,
    `SUBE_ADI`) eslesmenin sadece bir PARCASI bulunmus olsa bile identifier'in
@@ -62,6 +69,7 @@ from app.services.detectors import DetectionResult
 # Reused for every finding in this document, including authoritative fallback.
 from app.services.string_literal_index import StringLiteralIndex
 from app.services.rule_engine import TR_LOWER_CLASS
+from app.services.placeholder_policy import is_corporate_rule
 
 _DEFAULT_MAX_EXPANSION = 200
 _BRACKET_CLOSERS = {")": "(", "}": "{", "]": "["}
@@ -88,6 +96,22 @@ def _is_word_char(ch: str | None) -> bool:
 # Token gercek bir identifier gibi mi gorunuyor (harf/alt-cizgiyle basliyor, rakamla degil)?
 def _looks_like_identifier(token: str) -> bool:
     return bool(token) and (token[0].isalpha() or token[0] == "_")
+
+
+def is_corporate_term_result(result: DetectionResult) -> bool:
+    """Kurumsal terim sozlugu eslesmesi mi (proje/sicil/branch ya da regex degil)?
+
+    Bir string literal icinde yalnizca bu eslesmeler kendi token'ina
+    daraltilir (bkz. TokenBoundaryValidator._narrow_in_literal): kurum adi
+    hassas olan KELIMEDIR, cevresindeki SQL/yol/cumle degil. Parametrik ve
+    regex eslesmeleri tum literal'i maskelemeye devam eder - "test-2024-gizli"
+    gibi bir parolada proje adi "test" yalnizca bir parcadir.
+    """
+    return (
+        result.kaynak_motor == "dictionary"
+        and result.rule is not None
+        and is_corporate_rule(result.rule.rule_name)
+    )
 
 
 def is_authoritative_result(result: DetectionResult) -> bool:
@@ -201,6 +225,9 @@ class TokenBoundaryValidator:
         if not results:
             return accepted, rejections
         string_index = StringLiteralIndex(text, file_path)
+        # accepted icindeki sira -> kendi token'ina daraltilan kurumsal
+        # terimin literal ic sinirlari (bkz. asagidaki son gecis).
+        narrowed: dict[int, tuple[int, int]] = {}
         for result in results:
             if result.start is None or result.end is None:
                 rejections.append(BoundaryRejection(result=result, reason="eksik offset araligi"))
@@ -241,6 +268,13 @@ class TokenBoundaryValidator:
                     result=result, reason="tek satirlik bulgu cok satirli string'in tamamina genisletilmez",
                 ))
                 continue
+            if is_corporate_term_result(result):
+                bounds = string_index.enclosing(result.start, result.end)
+                if bounds is not None and (new_start, new_end) == bounds[:2]:
+                    token = self._narrow_in_literal(text, result.start, result.end, bounds[0], bounds[1])
+                    if token is not None:
+                        narrowed[len(accepted)] = bounds[:2]
+                        new_start, new_end = token
             if (new_start, new_end) == (result.start, result.end) and result.deger == text[new_start:new_end]:
                 accepted.append(result)
             else:
@@ -249,6 +283,21 @@ class TokenBoundaryValidator:
                 # deger, metinde gercekte maskelenen span ile uyusmaz ve
                 # unmask sirasinda yanlis deger geri donerdi.
                 accepted.append(replace(result, start=new_start, end=new_end, deger=text[new_start:new_end]))
+
+        # Ayni literal'i baska bir bulgu (parola regex'i, proje adi, LLM)
+        # TAMAMEN maskeliyorsa daraltma geri alinir: aksi halde ikinci
+        # cakisma cozumunde kurumsal terim (yuksek otorite) kazanir, tum
+        # literal'i isteyen bulgu kaybeder ve degerin geri kalani acikta kalir.
+        if narrowed:
+            whole_spans = [
+                (r.start, r.end) for i, r in enumerate(accepted) if i not in narrowed
+            ]
+            for i, (content_start, content_end) in narrowed.items():
+                if any(s <= content_start and content_end <= e for s, e in whole_spans):
+                    accepted[i] = replace(
+                        accepted[i], start=content_start, end=content_end,
+                        deger=text[content_start:content_end],
+                    )
 
         # Son guvence: sinira genisletme/daraltma sonucu yalnizca noktalama
         # kalan bir span (orn. ayristirilamayan bir string'den `]}\n`) hicbir
@@ -261,6 +310,28 @@ class TokenBoundaryValidator:
             else:
                 rejections.append(BoundaryRejection(result=result, reason="harf/rakam icermeyen deger maskelenmez"))
         return kept, rejections
+
+    # Kurumsal terimi literal'in tamami yerine icindeki tam token'a (ayni
+    # kelime karakteri kurali: harf/rakam/alt cizgi) daraltir:
+    # "SELECT * FROM tsk_bakim" -> "SELECT * FROM mask_x_1". Token, kodda ayni
+    # identifier'in aldigi yer tutucuyu alir; yol/SQL/API referanslari
+    # dosya adlari ve tablo tanimlariyla tutarli kalir. Token bir kacis
+    # dizisine yapisiksa ("\nTSK" -> "nTSK") yer tutucu "\mask..." gibi
+    # gecersiz bir kacis uretebilir ve geri cozumde \b bulunmaz; o durumda
+    # None doner, literal'in tamami maskelenir.
+    def _narrow_in_literal(
+        self, text: str, start: int, end: int, content_start: int, content_end: int,
+    ) -> tuple[int, int] | None:
+        start, end = max(start, content_start), min(end, content_end)
+        if start >= end:
+            return None
+        while start > content_start and _is_word_char(text[start - 1]):
+            start -= 1
+        while end < content_end and _is_word_char(text[end]):
+            end += 1
+        if start > content_start and text[start - 1] == "\\":
+            return None
+        return start, end
 
     def is_exact_span_allowed(
         self,

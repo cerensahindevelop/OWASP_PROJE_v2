@@ -1,7 +1,8 @@
-"""Oturum boyunca hatirlanan kullanici kimligi (proje adi + sicil no +
-branch adi). Bu ucluyu her ekranda ayri ayri sormak yerine bir kere alip
-st.session_state icinde tutar - export/import/review ekranlari bunu
-sadece okur, asla kendi form alani olarak tekrar sormaz.
+"""Oturum boyunca hatirlanan kullanici kimligi: sicil numarasi. Kullaniciyi
+tanimlayan sicildir; ayni kisi farkli proje ve branch'lerde calisabilir.
+Proje/branch maskeleme formunda her islem icin secilir
+(render_project_branch_inputs), listelerde istege bagli filtredir
+(render_project_branch_filter); geri almada paketin kaydindan okunur.
 """
 
 from __future__ import annotations
@@ -14,6 +15,9 @@ _sicil_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,49}$")
 _MAX_NAME_LEN = 200
 
 _DRAFT_PREFIXES = ("export_", "import_", "review_", "term_upload_")
+# Proje/branch secici anahtarlari: taslak sayilmaz (kayip uyarisi
+# tetiklemez) ama kullanici degisince temizlenir.
+_SELECTOR_PREFIX = "pb_"
 
 
 _IDENTITY_GATE_STYLE = """
@@ -146,7 +150,8 @@ def _init_state() -> None:
     st.session_state.setdefault("identity", None)
 
 
-# Aktif kimligi (proje/sicil/branch) dondurur, henuz girilmemisse None.
+# Aktif kullaniciyi ({"sicil_no": ...}) dondurur, henuz girilmemisse None.
+# Kullaniciyi tanimlayan sicildir; proje/branch her islemde ayrica secilir.
 def get_identity() -> dict[str, str] | None:
     _init_state()
     return st.session_state["identity"]
@@ -157,26 +162,29 @@ def has_identity() -> bool:
     return get_identity() is not None
 
 
-def validate_identity_fields(project_name: str, sicil_no: str, branch_name: str) -> list[str]:
-    """Backend'e hic gitmeden, kullanici Devam Et'e basar basmaz gosterilecek
-    basit dogrulama hatalarini dondurur. Bos liste = gecerli."""
+def validate_sicil(sicil_no: str) -> list[str]:
+    """Giris ekraninda backend'e gitmeden gosterilen sicil hatalari."""
+    sicil_no = (sicil_no or "").strip()
+    if not sicil_no:
+        return ["Sicil Numarası boş bırakılamaz."]
+    if not _sicil_RE.match(sicil_no):
+        return [
+            "Sicil Numarası geçersiz format: sadece harf, rakam, tire (-) ve alt çizgi (_) "
+            "içerebilir; bir harf/rakamla başlamalı ve en az 2 karakter olmalıdır (örn. EMP-1001)."
+        ]
+    return []
+
+
+def validate_project_branch(project_name: str, branch_name: str) -> list[str]:
+    """Maskeleme formundaki proje/branch alanlarinin hatalari. Bos liste = gecerli."""
     errors: list[str] = []
     project_name = (project_name or "").strip()
-    sicil_no = (sicil_no or "").strip()
     branch_name = (branch_name or "").strip()
 
     if not project_name:
         errors.append("Proje Adı boş bırakılamaz.")
     elif len(project_name) > _MAX_NAME_LEN:
         errors.append(f"Proje Adı en fazla {_MAX_NAME_LEN} karakter olabilir.")
-
-    if not sicil_no:
-        errors.append("Sicil Numarası boş bırakılamaz.")
-    elif not _sicil_RE.match(sicil_no):
-        errors.append(
-            "Sicil Numarası geçersiz format: sadece harf, rakam, tire (-) ve alt çizgi (_) "
-            "içerebilir; bir harf/rakamla başlamalı ve en az 2 karakter olmalıdır (örn. EMP-1001)."
-        )
 
     if not branch_name:
         errors.append("Branch Adı boş bırakılamaz.")
@@ -188,19 +196,72 @@ def validate_identity_fields(project_name: str, sicil_no: str, branch_name: str)
     return errors
 
 
-# Aktif kimligi session_state'e kaydeder.
-def set_identity(project_name: str, sicil_no: str, branch_name: str) -> None:
-    st.session_state["identity"] = {
-        "project_name": project_name.strip(),
-        "sicil_no": sicil_no.strip(),
-        "branch_name": branch_name.strip(),
-    }
+# Aktif kullaniciyi session_state'e kaydeder.
+def set_identity(sicil_no: str) -> None:
+    st.session_state["identity"] = {"sicil_no": sicil_no.strip()}
+
+
+# Sicilin daha once calistigi proje/branch ciftleri (en son kullanilan once).
+# Oneri listesidir; API'ye ulasilamazsa bos liste doner, form yine calisir.
+def known_project_branches() -> list[tuple[str, str]]:
+    identity = get_identity()
+    if identity is None:
+        return []
+    from app.webapp import api_client
+    try:
+        return api_client.list_project_branches(identity["sicil_no"])
+    except Exception:
+        return []
+
+
+_NEW_PAIR = "➕ Yeni proje / branch"
+
+
+def render_project_branch_inputs(key_prefix: str) -> tuple[str, str]:
+    """Maskeleme formunda proje ve branch secimi: onceki ciftlerden biri ya
+    da yeni bir cift. Degerler kayitlarda kullanilacagi gibi (strip) doner."""
+    pairs = known_project_branches()
+    choice = _NEW_PAIR
+    if pairs:
+        labels = [f"{project} / {branch}" for project, branch in pairs]
+        choice = st.selectbox(
+            "Proje / Branch",
+            [*labels, _NEW_PAIR],
+            key=f"{_SELECTOR_PREFIX}{key_prefix}choice",
+            help="Daha önce çalıştığınız proje/branch çiftleri en son kullanılan önce listelenir.",
+        )
+        if choice != _NEW_PAIR:
+            return pairs[labels.index(choice)]
+    col_project, col_branch = st.columns(2)
+    project_name = col_project.text_input(
+        "Proje Adı", placeholder="Örn. Poseidon", key=f"{_SELECTOR_PREFIX}{key_prefix}project",
+        help="Maskeleme kayıtlarının ilişkilendirileceği proje veya ürün adı.",
+    )
+    branch_name = col_branch.text_input(
+        "Branch Adı", placeholder="Örn. main", key=f"{_SELECTOR_PREFIX}{key_prefix}branch",
+        help="Kaynak projenin aktif dalı; örneğin main, develop veya release-1.0.",
+    )
+    return (project_name or "").strip(), (branch_name or "").strip()
+
+
+_ALL = "Tümü"
+
+
+def render_project_branch_filter(key_prefix: str) -> tuple[str | None, str | None]:
+    """Listelerde istege bagli proje/branch filtresi; None = filtre yok."""
+    pairs = known_project_branches()
+    projects = sorted({project for project, _branch in pairs})
+    col_project, col_branch = st.columns(2)
+    project = col_project.selectbox("Proje", [_ALL, *projects], key=f"{_SELECTOR_PREFIX}{key_prefix}filter_project")
+    branches = sorted({b for p, b in pairs if project == _ALL or p == project})
+    branch = col_branch.selectbox("Branch", [_ALL, *branches], key=f"{_SELECTOR_PREFIX}{key_prefix}filter_branch")
+    return (None if project == _ALL else project), (None if branch == _ALL else branch)
 
 
 # Ekran taslaklarini (form durumu) session_state'ten temizler.
 def _clear_page_drafts() -> None:
     for key in list(st.session_state.keys()):
-        if key.startswith(_DRAFT_PREFIXES):
+        if key.startswith((*_DRAFT_PREFIXES, _SELECTOR_PREFIX)):
             del st.session_state[key]
 
 
@@ -230,12 +291,12 @@ def render_identity_gate() -> None:
             <div class="osw-identity-icon" aria-hidden="true">◆</div>
             <div>
               <p class="osw-identity-eyebrow">Güvenli çalışma alanı</p>
-              <h1 class="osw-identity-title" id="osw-identity-title">Çalışma kimliğinizi belirleyin</h1>
+              <h1 class="osw-identity-title" id="osw-identity-title">Sicil numaranızla devam edin</h1>
             </div>
           </div>
           <p class="osw-identity-lead">
-            Maskeleme ve geri alma işlemlerini doğru projeyle eşleştirmek için bu üç bilgiyi
-            yalnızca oturumun başında girmeniz yeterlidir.
+            İşlemleriniz sicil numaranızla kaydedilir. Proje ve branch'i her maskeleme
+            işleminde ayrıca seçersiniz; tüm projelerdeki kayıtlarınızı tek yerden görürsünüz.
           </p>
         </section>
         """,
@@ -243,43 +304,33 @@ def render_identity_gate() -> None:
     )
 
     with st.form("identity_form", clear_on_submit=False):
-        project_name = st.text_input(
-            "Proje Adı",
-            placeholder="Örn. Poseidon",
-            help="Maskeleme kayıtlarının ilişkilendirileceği proje veya ürün adı.",
-        )
         sicil_no = st.text_input(
             "Sicil Numarası",
             placeholder="Örn. EMP-1001",
             help="İşlem sahibini belirleyen kurum içi personel numarası.",
         )
-        branch_name = st.text_input(
-            "Branch Adı",
-            placeholder="Örn. main",
-            help="Kaynak projenin aktif dalı; örneğin main, develop veya release-1.0.",
-        )
         submitted = st.form_submit_button("Çalışma Alanına Devam Et  →", type="primary", width="stretch")
 
     st.markdown(
-        '<p class="osw-identity-footnote">🔒 Bu bilgiler hassas içerik değildir; yalnızca işlem kayıtlarını ve geri alma eşlemelerini doğru bağlamda tutmak için kullanılır.</p>',
+        '<p class="osw-identity-footnote">🔒 Sicil numarası hassas içerik değildir; işlem kayıtlarını ve geri alma eşlemelerini size bağlamak için kullanılır.</p>',
         unsafe_allow_html=True,
     )
 
     if submitted:
-        errors = validate_identity_fields(project_name, sicil_no, branch_name)
+        errors = validate_sicil(sicil_no)
         if errors:
             for message in errors:
                 st.error(message)
         else:
-            set_identity(project_name, sicil_no, branch_name)
+            set_identity(sicil_no)
             st.rerun()
 
 
 # Kimlik degistirme oncesi, kaydedilmemis is kaybolabilecegi icin onay ister.
-@st.dialog("Kimliği değiştir")
+@st.dialog("Kullanıcıyı değiştir")
 def _confirm_identity_change_dialog() -> None:
     st.warning(
-        "Aktif kimliği değiştiriyorsunuz. Devam eden bir işleminiz veya henüz kapatmadığınız bir "
+        "Aktif kullanıcıyı değiştiriyorsunuz. Devam eden bir işleminiz veya henüz kapatmadığınız bir "
         "sonuç varsa kaybolabilir."
     )
     col_confirm, col_cancel = st.columns(2)
@@ -296,14 +347,12 @@ def render_identity_badge() -> None:
     if identity is None:
         return
 
-    st.caption("Aktif Kullanıcı")
-    st.markdown(
-        f"**{identity['project_name']}** / {identity['sicil_no']} / {identity['branch_name']}"
-    )
-    if st.button("🔄 Kimliği Değiştir", width="stretch"):
-        if has_unsaved_work():
-            _confirm_identity_change_dialog()
-        else:
-            clear_identity()
-            st.rerun()
-    st.divider()
+    with st.container(border=True):
+        st.caption("Aktif Kullanıcı")
+        st.markdown(f"**Sicil:** {identity['sicil_no']}")
+        if st.button("🔄 Kullanıcıyı Değiştir", width="stretch"):
+            if has_unsaved_work():
+                _confirm_identity_change_dialog()
+            else:
+                clear_identity()
+                st.rerun()

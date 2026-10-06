@@ -181,8 +181,8 @@ def test_approved_corporate_aliases_mask_package_content_and_directory_path(db_s
     )
 
     masked_files = list(masked_dir.rglob("Config.java"))
-    assert report.status == "completed_with_warnings"
-    assert any("bracket/quote" in warning for warning in report.validation_warnings)
+    assert report.status == "completed"
+    assert any("bracket/quote" in notice for notice in report.validation_notices)
     assert len(masked_files) == 1
     masked_relative = masked_files[0].relative_to(masked_dir).as_posix()
     assert masked_relative.startswith("src/main/java/com/")

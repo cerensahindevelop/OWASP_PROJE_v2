@@ -9,6 +9,9 @@
 *.db-wal
 *.db-shm
 
+# Yerel yedekler (.env ve DB kopyalari) - hassas, commit edilmez
+.backups/
+
 # Python
 __pycache__/
 *.py[cod]

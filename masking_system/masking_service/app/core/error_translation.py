@@ -19,13 +19,15 @@ from app.core.exceptions import ExportInProgressError, MaskingSystemError, Revie
 from app.services.exporter import ExportValidationError
 from app.services.term_file_parser import TermFileError
 from app.services.term_upload import TermUploadValidationError
-from app.services.unmasker import ContextNotFoundError
+from app.services.unmasker import ContextNotFoundError, PackageOwnerMismatchError
 
 
 def friendly_error(exc: Exception) -> tuple[str, str | None]:
     """(kullaniciya gosterilecek mesaj, varsa teknik detay) dondurur.
     Teknik detay None ise cagiran taraf 'detaylari goster' benzeri bir
     genisletici/blok hic gostermemelidir."""
+    if isinstance(exc, PackageOwnerMismatchError):
+        return (str(exc), None)
     if isinstance(exc, ContextNotFoundError):
         return (
             "Bu proje/sicil/branch bilgisiyle daha önce yapılmış bir dışa aktarma bulunamadı. "

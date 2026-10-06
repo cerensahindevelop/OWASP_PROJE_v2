@@ -32,7 +32,11 @@ from app.services.llm_recognizer import (
 from app.services.encoded_blobs import find_encoded_blobs
 from app.services.llm_input_view import build_llm_input_view
 from app.services.llm_runtime import LLMScanMetrics, current_llm_file
+from app.services.llm_transport import llm_http_scope
 from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE
+from app.services.string_literal_index import StringLiteralIndex
+from app.services.term_classifier import HeuristicValuePolicy
+from app.services.text_chunking import dedupe_for_llm
 
 logger = logging.getLogger("uvicorn.error.llm")
 
@@ -51,7 +55,7 @@ localhost example com org net http https www api v1 v2 id ids name names value v
 """.split())
 
 # verify_audit_findings davranisi degistiginde artirilir (bkz. audit_record_key).
-_VERIFIER_VERSION = 3
+_VERIFIER_VERSION = 4
 
 _AUDIT_PROMPT_PATH = Path(__file__).with_name("audit_prompt.txt")
 
@@ -109,7 +113,7 @@ def load_audit_prompt() -> str:
 # vLLM'e gonderilecek denetim istegini (prompt + maskelenmis metin + sema) hazirlar.
 def build_audit_request(
     masked_text: str, model: str, seed: int, max_tokens: int = 512, disable_thinking: bool = False,
-    presence_penalty: float = 0.0, file_context: str | None = None,
+    presence_penalty: float = 0.0, file_context: str | None = None, reasoning_effort: str = "",
 ) -> dict:
     payload = {
         "model": model,
@@ -127,6 +131,8 @@ def build_audit_request(
     }
     if disable_thinking:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     if presence_penalty:
         payload["presence_penalty"] = presence_penalty
     return payload
@@ -169,16 +175,22 @@ def _placeholder_free_segments(quote: str) -> list[str]:
     return segments
 
 
-def _is_substantive(segment: str) -> bool:
+def _is_substantive(segment: str, policy: HeuristicValuePolicy | None = None) -> bool:
+    policy = policy or HeuristicValuePolicy(compound=settings.scan.generic_compound_filter)
+    if not policy.accepts(segment):
+        return False
     words = _CONTENT_RE.findall(segment)
     if not words:
         return False
-    return any(word.casefold() not in _GENERIC_TOKENS for word in words)
+    return any(
+        word.casefold() not in _GENERIC_TOKENS and (word.isdigit() or policy.accepts(word))
+        for word in words
+    )
 
 
-_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_IDENTIFIER_RE = re.compile(r"(?:[^\W\d]|_)\w*")
 # Alinti "anahtar = deger" / "anahtar: deger" bicimindeyse hassas olan degerdir.
-_KEY_VALUE_RE = re.compile(r"^[\"']?([A-Za-z_][\w.]*)[\"']?\s*(?:=(?![=>])|:)\s*[@$]?[\"']?(.+)$")
+_KEY_VALUE_RE = re.compile(r"^[\"']?((?:[^\W\d]|_)[\w.]*)[\"']?\s*(?:=(?![=>])|:)\s*[@$]?[\"']?(.+)$")
 # dr["kimlikNo"], row['eMail'] gibi bir alan/sutun erisimi veri degil, verinin
 # okundugu yerin adidir (model alintiyi kapanis tirnagindan once kesebilir).
 FIELD_ACCESS_RE = re.compile(r"^[A-Za-z_]\w*\s*\[\s*[\"']?([\w.\- ]+?)[\"']?\s*\]?$")
@@ -190,12 +202,19 @@ _CODE_MARKER_RE = re.compile(r"[\[(]|\.\s*[A-Z][a-z]")
 _CAMEL_HUMP_RE = re.compile(r"[a-z0-9][A-Z]|[A-Za-z0-9]_[A-Za-z0-9]")
 # Satir sonu atamasinda deger kod degil duz veri olmali (orn. .env, .properties).
 _CODE_PUNCTUATION = frozenset("()[]{};")
+_CODE_FRAGMENT_RE = re.compile(
+    r"\b(?:class|interface|enum|def|function)\s+(?:[^\W\d]|_)\w*"
+    r"|\b(?:public|private|protected|static|void)\s+[^\n]*[{};()]"
+)
+_METHOD_DECLARATION_RE = re.compile(
+    r"\b(?:void|int|long|bool|boolean|string|String)\s+((?:[^\W\d]|_)\w*)\s*(?:\(|$)"
+)
 
 
-def _clean_values(text: str, raw: str) -> list[str]:
+def _clean_values(text: str, raw: str, policy: HeuristicValuePolicy | None = None) -> list[str]:
     return [
         segment for segment in _placeholder_free_segments(raw)
-        if segment in text and _is_substantive(segment)
+        if segment in text and _is_substantive(segment, policy)
     ]
 
 
@@ -240,7 +259,7 @@ def _identifier_assignments(text: str, name: str) -> list[re.Match] | None:
     return assignments or None
 
 
-def resolve_audit_values(text: str, quote: str) -> list[str]:
+def _resolve_audit_values(text: str, quote: str, policy: HeuristicValuePolicy) -> list[str]:
     """Modelin alintisini metinde ACIK duran somut degerlere cevirir.
 
     Hassas olan degisken/alan adi degil, ona atanan degerdir: model
@@ -250,63 +269,136 @@ def resolve_audit_values(text: str, quote: str) -> list[str]:
     yalnizca bir ad, sizinti degildir.
     """
     values: list[str] = []
-    for segment in _clean_values(text, quote):
+    for segment in _placeholder_free_segments(quote):
+        if segment not in text:
+            continue
         if FIELD_ACCESS_RE.match(segment) or _is_code_expression(segment):
             continue
         pair = _KEY_VALUE_RE.match(segment)
         if pair and _is_code_expression(pair.group(2)):
             continue  # adTextBox.Text = row["kisiAdi"].ToString: kod, veri degil
         if pair and _identifier_assignments(text, pair.group(1)) is not None:
-            narrowed = _clean_values(text, pair.group(2))
-            if narrowed:
-                values.extend(narrowed)
-                continue
+            narrowed = _clean_values(text, pair.group(2), policy)
+            values.extend(narrowed)
+            continue
         assignments = _identifier_assignments(text, segment)
         if assignments is None:
-            if not _is_code_symbol(text, segment):
+            if _is_substantive(segment, policy) and not _is_code_symbol(text, segment):
                 values.append(segment)
             continue
         for match in assignments:
             literal, bare = match.group(2), match.group(3)
             if literal is not None:
-                values.extend(_clean_values(text, literal))
+                values.extend(_clean_values(text, literal, policy))
             elif bare is not None:
                 bare = bare.split(" #", 1)[0].split(" //", 1)[0].strip()
                 # Baska bir degiskene/ifadeye atama (x = y; x = f()) deger degildir.
                 if bare and not _CODE_PUNCTUATION.intersection(bare) \
                         and _identifier_assignments(text, bare) is None:
-                    values.extend(_clean_values(text, bare))
+                    values.extend(_clean_values(text, bare, policy))
     return list(dict.fromkeys(values))
 
 
-def verify_audit_findings(text: str, findings: list[AuditFinding]) -> tuple[list[AuditFinding], int]:
-    """Keep only findings whose cited clear-text value really exists in `text`.
+class AuditFindingVerifier:
+    """Resolve concrete evidence once per excerpt, using the detection policy.
 
-    Tespit katmanindaki ilkenin aynisi: modelin soyledigine degil, metinde
-    birebir dogrulanabilen alintiya guvenilir. Yer tutucular alintidan
-    cikarilir (onlar zaten guvenli); degisken adlari atanan degere cevrilir
-    (bkz. resolve_audit_values). Geriye anlamli, metinde gecen bir deger
-    kalmazsa bulgu "somut sizinti" sayilmaz. Donus: (dogrulanan, atilan_sayisi).
+    Broad code excerpts are narrowed to literals, comments and non-generic
+    identifiers. Unknown organization names remain eligible; a general class
+    declaration cannot turn an entire source file into a sensitive value.
     """
-    verified: list[AuditFinding] = []
-    dropped = 0
+
+    def __init__(self, text: str, file_path: str = "", policy: HeuristicValuePolicy | None = None) -> None:
+        self.text = text
+        self.file_path = file_path
+        self.policy = policy or HeuristicValuePolicy(compound=settings.scan.generic_compound_filter)
+        self._resolved: dict[str, list[str]] = {}
+
+    def resolve(self, quote: str) -> list[str]:
+        if quote not in self._resolved:
+            values = []
+            for segment in _placeholder_free_segments(quote):
+                if segment not in self.text:
+                    continue
+                if _CODE_FRAGMENT_RE.search(segment):
+                    values.extend(self._code_values(segment))
+                else:
+                    values.extend(_resolve_audit_values(self.text, segment, self.policy))
+            self._resolved[quote] = list(dict.fromkeys(values))
+        return list(self._resolved[quote])
+
+    def _code_values(self, segment: str) -> list[str]:
+        index = StringLiteralIndex(segment, self.file_path or "excerpt.java")
+        values: list[str] = []
+        code = list(segment)
+        for start, end, outer_start, outer_end in index.spans:
+            values.extend(_clean_values(self.text, segment[start:end], self.policy))
+            code[outer_start:outer_end] = " " * (outer_end - outer_start)
+        for start, end in index.comment_spans:
+            values.extend(_clean_values(self.text, segment[start:end], self.policy))
+            code[start:end] = " " * (end - start)
+        remainder = "".join(code)
+        methods = {m.group(1) for m in _METHOD_DECLARATION_RE.finditer(remainder)}
+        for match in re.finditer(r"(?:[^\W\d]|_)\w*|\d{6,}", remainder):
+            name = match.group()
+            if name in methods or re.match(r"\s*\(", remainder[match.end():]):
+                continue
+            values.extend(self.resolve(name))
+        return values
+
+    def verify(self, findings: list[AuditFinding]) -> tuple[list[AuditFinding], int]:
+        verified: dict[str, AuditFinding] = {}
+        dropped = 0
+        for finding in findings:
+            kept = self.resolve(finding.ilgili_bolum or "")
+            if not kept:
+                dropped += 1
+            for value in kept:
+                verified.setdefault(value, AuditFinding(finding.aciklama, value))
+        return list(verified.values()), dropped
+
+
+def resolve_audit_values(text: str, quote: str, file_path: str = "") -> list[str]:
+    return AuditFindingVerifier(text, file_path).resolve(quote)
+
+
+def verify_audit_findings(
+    text: str, findings: list[AuditFinding], file_path: str = "",
+) -> tuple[list[AuditFinding], int]:
+    return AuditFindingVerifier(text, file_path).verify(findings)
+
+
+# Tekrarsiz metinde dogrulanan alintinin, ayni siniftaki (yalnizca rakamlari
+# farkli) satirlardaki karsiliklarini bulgu olarak ekler. Karsilik orijinal
+# maskeli metinden alinir; gecici yer tutucuyla cakisan aralik atlanir.
+def _variant_findings(
+    findings: list[AuditFinding], part: str, part_offset: int, deduped, view, masked_text: str,
+) -> list[AuditFinding]:
+    variants: dict[str, AuditFinding] = {}
+    known = {finding.ilgili_bolum for finding in findings}
     for finding in findings:
-        kept = resolve_audit_values(text, finding.ilgili_bolum or "")
-        if not kept:
-            dropped += 1
-            continue
-        for value in kept:
-            verified.append(AuditFinding(aciklama=finding.aciklama, ilgili_bolum=value))
-    return verified, dropped
+        quote = finding.ilgili_bolum
+        position = part.find(quote) if quote else -1
+        while position >= 0:
+            start = part_offset + position
+            for member_start, member_end in deduped.member_spans(view.text, start, start + len(quote)) or []:
+                original = view.to_original(member_start, member_end)
+                if original is None:
+                    continue
+                value = masked_text[original[0]:original[1]]
+                if value and value not in known:
+                    variants.setdefault(value, AuditFinding(aciklama=finding.aciklama, ilgili_bolum=value))
+            position = part.find(quote, position + 1)
+    return list(variants.values())
 
 
 # Maskelenmis metni LLM ile denetler ("hala bir ipucu kalmis mi?"). LLM kapaliysa risksiz sayar.
 # Chunk'lar tespit adimiyla ayni sekilde es zamanli denetlenir (toplam sinir:
 # llm_runtime._gate); ilk hatada kalan chunk'lar iptal edilir ve dosya karantinaya gider.
+@llm_http_scope()
 async def audit_masked_text(
     masked_text: str, vllm_settings, file_path: str | None = None, blob_min_chars: int | None = None,
 ) -> AuditVerdict:
-    if not vllm_settings.enabled:
+    if not vllm_settings.enabled or not masked_text.strip():
         return AuditVerdict(risky=False, audited=False)
     if not vllm_settings.host or not vllm_settings.model:
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
@@ -318,27 +410,46 @@ async def audit_masked_text(
     blobs = find_encoded_blobs(masked_text, blob_min_chars)
     view = build_llm_input_view(masked_text, vllm_settings, blob_spans=blobs, phase="audit", file_path=file_path)
     overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
-    chunks = chunk_text(view.text, vllm_settings.max_file_chars, overlap_chars)
+    # Tekrarli buyuk dosyada her farkli satir bir kez denetlenir; alintilar
+    # gorunum metninden birebir alinmis satirlarda dogrulanir.
+    # Tekrarli buyuk dosyada yalnizca rakamlari farkli satirlar bir kez denetlenir.
+    # Bulunan alinti, atlanan benzer satirlardaki konumsal karsiliklariyla birlikte
+    # bulgu olur (`PRJ-ALFA-7` -> `PRJ-ALFA-8`); otomatik duzeltme hepsini maskeler.
+    deduped = dedupe_for_llm(view.text, vllm_settings.max_file_chars, normalize_digits=True)
+    scan_text = deduped.text if deduped is not None else view.text
+    chunks = chunk_text(scan_text, vllm_settings.max_file_chars, overlap_chars)
     file_context = describe_file_context(file_path)
     with LLMScanMetrics("audit", len(chunks), file_path) as metrics:
         async def audit_chunk(index: int, offset: int, chunk: str) -> list[AuditFinding]:
             # Tek parcayi denetler, yalnizca metinde dogrulanan bulgulari doner.
-            async def scan(_part_offset: int, part: str) -> list[AuditFinding]:
+            async def scan(part_offset: int, part: str) -> list[AuditFinding]:
                 payload = build_audit_request(
                     part, vllm_settings.model, getattr(vllm_settings, "seed", 42),
                     max_tokens=getattr(vllm_settings, "max_tokens", 1024),
                     disable_thinking=getattr(vllm_settings, "disable_thinking", False),
                     presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
+                    reasoning_effort=getattr(vllm_settings, "reasoning_effort", ""),
                     file_context=file_context,
                 )
+                verifier = AuditFindingVerifier(part, file_path or "")
                 verdict = await metrics.request(vllm_settings, payload, call_vllm, parse_audit_response, index)
-                verified, dropped = verify_audit_findings(part, verdict.findings)
+                verified, dropped = verifier.verify(verdict.findings)
+                if not verdict.risky and verified:
+                    # Concrete, source-verified evidence determines the verdict.
+                    # A conflicting summary flag must neither clear a real finding
+                    # nor turn it into an unrecoverable transport/validation error.
+                    logger.warning(
+                        "llm_audit_inconsistent scan_id=%s chunk=%d outcome=verified_risk kept_findings=%d",
+                        metrics.scan_id, index, len(verified),
+                    )
                 if dropped or (verdict.risky and not verified):
                     # Icerik degil, sadece sayilar loglanir.
                     logger.info(
                         "llm_audit_unverified file=%r chunk=%d model_risky=%s dropped_findings=%d kept_findings=%d",
                         metrics.log_label, index, verdict.risky, dropped, len(verified),
                     )
+                if deduped is not None:
+                    verified += _variant_findings(verified, part, part_offset, deduped, view, masked_text)
                 return verified
 
             # Yanit max_tokens'ta kesilirse parca bolunup yeniden denetlenir
@@ -377,16 +488,21 @@ def audit_record_key(content: str, file_path: str, vllm_settings, blob_min_chars
         "content": hashlib.sha256(content.encode("utf-8", "surrogatepass")).hexdigest(),
         "file": describe_file_context(file_path),
         "model": vllm_settings.model,
+        "host": getattr(vllm_settings, "host", None),
         "prompt": hashlib.sha256(load_audit_prompt().encode("utf-8")).hexdigest(),
         "max_file_chars": vllm_settings.max_file_chars,
         "overlap": getattr(vllm_settings, "chunk_overlap_chars", 500),
         "max_tokens": getattr(vllm_settings, "max_tokens", 1024),
         "seed": getattr(vllm_settings, "seed", 42),
         "disable_thinking": getattr(vllm_settings, "disable_thinking", False),
+        "reasoning_effort": getattr(vllm_settings, "reasoning_effort", ""),
         "presence_penalty": getattr(vllm_settings, "presence_penalty", 0.0),
         "blob_min_chars": blob_min_chars,
         # Bulgu dogrulama mantigi degisince eski kayitlar yeniden kullanilmaz.
         "verifier": _VERIFIER_VERSION,
+        # Rakami farkli satirlar tek denetlenir, bulgular karsiliklarina yayilir.
+        "line_dedup": "digits-v1",
+        "generic_compound_filter": settings.scan.generic_compound_filter,
     }
     return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 

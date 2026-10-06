@@ -41,6 +41,7 @@ from app.services.rule_engine import (
     compound_aware_boundary_pattern,
     diacritic_tolerant_escape,
 )
+from app.services.identifier_parts import split_identifier
 from app.services.term_classifier import classify_term
 from app.services.term_file_parser import parse_terms_from_file
 from app.services.placeholder_policy import CORPORATE_PLACEHOLDER_PREFIX, CORPORATE_RULE_PREFIXES, is_corporate_rule
@@ -125,15 +126,53 @@ class _RuleFields:
     description: str
 
 
-# Tek bir terim icin tum FilterRule alanlarini hesaplar (regex_pattern
-# sifreli, is_active durumu suspicious ise False) - _RuleFields dokstringindeki
-# ortak hesaplama noktasi budur.
-def _compute_rule_fields(*, term: str, category: str, status: str, priority: int) -> _RuleFields:
-    pattern_text = compound_aware_boundary_pattern(
+# Birlesik bir terimin harf parcalari arasina istege bagli tek bir ayrac
+# (bosluk, alt cizgi, tire) koyar: "DenizKuvvetleri" terimi "Deniz Kuvvetleri",
+# "deniz_kuvvetleri" ve "deniz-kuvvetleri" yazimlarini da yakalar; tersine
+# "Deniz Kuvvetleri" terimi bitisik yazimi da yakalar. Rakam gecisleri ve
+# baska ayraclar (nokta, egik cizgi) oldugu gibi kalir.
+def _separator_tolerant_escape(term: str) -> str:
+    parts = split_identifier(term)
+    if len(parts) < 2 or parts[0].start != 0 or parts[-1].end != len(term):
+        return diacritic_tolerant_escape(term)
+    pieces = [diacritic_tolerant_escape(parts[0].text)]
+    for left, right in zip(parts, parts[1:]):
+        gap = term[left.end:right.start]
+        if gap in _TERM_SEPARATORS and left.text[-1].isalpha() and right.text[0].isalpha():
+            pieces.append(_TERM_SEPARATOR_PATTERN)
+        else:
+            pieces.append(diacritic_tolerant_escape(gap))
+        pieces.append(diacritic_tolerant_escape(right.text))
+    return "".join(pieces)
+
+
+_TERM_SEPARATORS = ("", " ", "_", "-")
+_TERM_SEPARATOR_PATTERN = "[ _-]?"
+
+
+def corporate_term_pattern(term: str) -> str:
+    return compound_aware_boundary_pattern(
+        _separator_tolerant_escape(term),
+        connector_class=_TERM_CONNECTOR_CLASS,
+        free_right_continuation=True,
+    )
+
+
+# Ayrac toleransindan ONCEKI desen; yalnizca mevcut kurallari yeni desene
+# tasiyan migration'in "elle degistirilmemis" kontrolu icin.
+def legacy_corporate_term_pattern(term: str) -> str:
+    return compound_aware_boundary_pattern(
         diacritic_tolerant_escape(term),
         connector_class=_TERM_CONNECTOR_CLASS,
         free_right_continuation=True,
     )
+
+
+# Tek bir terim icin tum FilterRule alanlarini hesaplar (regex_pattern
+# sifreli, is_active durumu suspicious ise False) - _RuleFields dokstringindeki
+# ortak hesaplama noktasi budur.
+def _compute_rule_fields(*, term: str, category: str, status: str, priority: int) -> _RuleFields:
+    pattern_text = corporate_term_pattern(term)
     classification = classify_term(term)
     inactive_note = (
         f" Pasiflik nedeni: {classification.reason}"

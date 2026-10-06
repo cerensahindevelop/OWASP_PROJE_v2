@@ -21,9 +21,11 @@ from app.services.syntax_brackets import (
     SyntaxValidationError,
 )
 from app.services.syntax_parsers import ParseResult, compare_json_types, parse_document
+from app.services.tabular_scan import csv_delimiter, csv_record_shape
 
 logger = logging.getLogger(__name__)
 _PARSER_SUFFIXES = {"py", "json", "yaml", "yml", "toml", "xml", "ts", "tsx", "js", "jsx", "sql"}
+_CSV_SUFFIXES = {"csv", "tsv"}
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ def validation_mode(relative_path: str) -> str:
     suffix = Path(relative_path).suffix.lower().lstrip(".")
     if suffix in _PARSER_SUFFIXES:
         return "parser-based"
+    if suffix in _CSV_SUFFIXES:
+        return "csv-structure"
     if suffix in _BRACKET_QUOTE_LANGUAGE_SUFFIXES:
         return "bracket/quote-based"
     return "structural-only"
@@ -87,6 +91,25 @@ def _bracket_error(suffix: str, text: str) -> str | None:
     return None
 
 
+# Saf kapsam notlari: dosya turu icin tam parser olmadigini bildirir; ciktinin
+# eksik ya da bozuk oldugu anlamina gelmez (bkz. ExportReport.validation_notices).
+STRUCTURAL_ONLY_NOTICE = "Bu dosya turu icin parser yok; yalnizca metin/geri donus butunlugu kontrol edildi."
+BRACKET_ONLY_NOTICE = "Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir."
+
+
+# Maskeleme CSV'nin kayit/alan yapisini degistirmemeli. Kaynak zaten duzensizse
+# (eksik alanli satir vb.) ayni duzensizlik sorun sayilmaz; yalnizca fark hatadir.
+def _csv_structure_error(suffix: str, original_text: str, masked_text: str) -> str | None:
+    delimiter = csv_delimiter(original_text, suffix)
+    before, after = csv_record_shape(original_text, delimiter), csv_record_shape(masked_text, delimiter)
+    for index, (expected, actual) in enumerate(zip(before, after), 1):
+        if expected != actual:
+            return f"CSV yapisi bozuldu: {index}. kayitta alan sayisi {expected} iken {actual} oldu"
+    if len(before) != len(after):
+        return f"CSV yapisi bozuldu: kayit sayisi {len(before)} iken {len(after)} oldu"
+    return None
+
+
 def inspect_masked_syntax(
     relative_path: str,
     masked_text: str,
@@ -96,13 +119,17 @@ def inspect_masked_syntax(
 ) -> SyntaxResult:
     suffix = Path(relative_path).suffix.lower().lstrip(".")
     mode = validation_mode(relative_path)
+    if mode == "csv-structure":
+        if original_text is None or masked_text == original_text:
+            return SyntaxResult(None, mode)
+        return SyntaxResult(_csv_structure_error(suffix, original_text, masked_text), mode)
     if mode == "structural-only":
         # The existing upstream token/round-trip checks remain authoritative.
-        notices = ("Bu dosya turu icin parser yok; yalnizca metin/geri donus butunlugu kontrol edildi.",) if masked_text != original_text else ()
+        notices = (STRUCTURAL_ONLY_NOTICE,) if masked_text != original_text else ()
         return SyntaxResult(None, mode, notices)
     notices: list[str] = []
     if mode == "bracket/quote-based" and masked_text != original_text:
-        notices.append("Bu dil icin tam parser yok; bracket/quote kontrolu derleme veya calisma dogrulamasi degildir.")
+        notices.append(BRACKET_ONLY_NOTICE)
     original: ParseResult | None = None
     masked: ParseResult | None = None
     if mode == "parser-based":

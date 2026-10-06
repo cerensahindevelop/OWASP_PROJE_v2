@@ -44,7 +44,7 @@ from app.services.consistency_masking import (
     find_consistency_occurrences,
 )
 from app.services.exclude_admin import load_active_exclude_specs
-from app.services.export_report_formatter import _RULE_DISPLAY_NAMES, format_export_report
+from app.services.export_report_formatter import _RULE_DISPLAY_NAMES, format_export_report, summarize_coverage_notices
 from app.services.failed_checks import REPORT_ONLY_CHECKS, UNKNOWN_FAILED_CHECK, FailedCheck, failed_check_label
 from app.services.identifier_parts import contains_term
 from app.services.file_classifier import ignored_directory_reason, is_opaque_binary_filename
@@ -53,6 +53,7 @@ from app.services.file_type import peek_classify, write_text_preserving_encoding
 from app.services.java_classfile import JAVA_CLASS_ENCODING, CLASS_COVERAGE, ClassFormatError, parse_class
 from app.services.detectors import DetectionOrchestrator, synthetic_llm_rule
 from app.services.llm_recognizer import LLMRecognitionError
+from app.services.llm_transport import llm_http_scope
 from app.services.llm_runtime import (
     LLMFileUsage, LLMUsageCollector, llm_file_context, start_llm_usage, stop_llm_usage, usage_summary,
 )
@@ -84,9 +85,8 @@ from app.services.review_masking import NarrowedValueError, mask_known_values
 from app.services.runtime_params import build_runtime_params
 from app.services.log_refs import UNKNOWN_FILE_LABEL, file_label, file_ref, log_file_label
 from app.services.scanner import iter_project_files
-from app.services.syntax_validator import validate_masked_syntax
+from app.services.syntax_validator import BRACKET_ONLY_NOTICE, STRUCTURAL_ONLY_NOTICE, validate_masked_syntax
 
-DEFAULT_MAX_INLINE_SIZE = 50 * 1024 * 1024  # 50MB, per product owner's own example
 DEFAULT_ENABLE_PATH_MASKING = True
 
 _REPORT_BUCKETS = {
@@ -158,6 +158,13 @@ class FileOutcome:
             self.final_state = "SECURITY_QUARANTINE"
         else:
             self.final_state = "VALIDATION_FAILED"
+
+
+_COVERAGE_NOTICES = (STRUCTURAL_ONLY_NOTICE, BRACKET_ONLY_NOTICE, CLASS_COVERAGE)
+
+
+def _is_coverage_notice(entry: str) -> bool:
+    return entry.endswith(_COVERAGE_NOTICES)
 
 
 # Bir export (maskeleme) calismasinin tum ozetini tutan rapor nesnesi -
@@ -400,13 +407,32 @@ class ExportReport:
     def has_degraded_detectors(self) -> bool:
         return bool(self.degraded_detectors)
 
+    # Kapsam notlari ("parser yok", yalnizca bracket/quote, .class kapsami) bilgi
+    # amaclidir: rapor ve ekranda gorunur ama ciktiyi eksik/hatali yapmaz,
+    # bu yuzden durumu "uyarili"ya cevirmez. Diger dogrulama notlari (kaynakta
+    # mevcut parser hatasi, uyariyla gecen sozdizimi hatasi vb.) uyari kalir.
+    @property
+    def validation_notices(self) -> list[str]:
+        return [entry for entry in self.validation_warnings if _is_coverage_notice(entry)]
+
+    # Ekran (API) icin: dosyalar orijinal adlariyla.
+    @property
+    def validation_notice_summary(self) -> list[str]:
+        originals = {label: path for path, label in self.file_labels.items()}
+        return summarize_coverage_notices(self.validation_notices, originals)
+
+    @property
+    def actionable_validation_warnings(self) -> list[str]:
+        return [entry for entry in self.validation_warnings if not _is_coverage_notice(entry)]
+
     @property
     def has_unverifiable_files(self) -> bool:
+        # Kapsam disi dosyalar (desteklenmeyen tur, haric tutma kurali, symlink)
+        # bilerek islenmez: rapora bilgi notu olarak duser, durumu "uyarili" yapmaz.
+        # Taranmasi gerekip taranamayan dosyalar (boyut, kodlama, arsiv, hata) uyari kalir.
         return bool(
             self.files_errored or self.files_skipped_too_large
             or self.files_copied_binary or self.files_copied_undecodable
-            or self.files_skipped_unsupported
-            or self.files_excluded or self.files_skipped_symlink
             or self.files_archive_unsupported or self.files_scan_only_sensitive
             or self.files_failed_detection
         )
@@ -1836,8 +1862,9 @@ def _finalize_file(
         )
 
     if masked_file.review_results:
+        decision_count = len({(result.deger, result.tip) for result in masked_file.review_results})
         reason = (
-            f"INCELEME_GEREKLI: Bu dosyada {len(masked_file.review_results)} düşük/orta güvenli AI "
+            f"INCELEME_GEREKLI: Bu dosyada {decision_count} farklı düşük/orta güvenli AI "
             "bulgusu kullanıcı kararı bekliyor. Kararlar tamamlanınca dosya otomatik yeniden doğrulanacaktır."
         )
         _warn(
@@ -2435,6 +2462,7 @@ def _mark_run_failed(db: Session, run_id: int) -> None:
 # Export akisinin ana giris noktasi: bir proje klasorunu tarar, her dosyayi
 # maskeler, hedefe kopyalar ve ozet bir rapor uretir. Dosyalar batch'ler
 # halinde islenir; tespit/denetim es zamanli, DB yazma adimlari siralidir.
+@llm_http_scope()
 async def export_project(
     db: Session,
     *,
@@ -2444,13 +2472,15 @@ async def export_project(
     branch_name: str,
     target_path: str,
     initiated_by: str,
-    max_inline_size: int = DEFAULT_MAX_INLINE_SIZE,
+    max_inline_size: int | None = None,
     enable_path_masking: bool = DEFAULT_ENABLE_PATH_MASKING,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> ExportReport:
     # Karisik surum (TypeError olayi) ya da yeniden baslatilmamis backend:
     # hicbir DB/dosya yazmasindan once fail-closed (API, is ve CLI yollari).
     ensure_export_allowed()
+    if max_inline_size is None:
+        max_inline_size = settings.scan.max_file_bytes
     source = Path(source_path).resolve()
     target = Path(target_path).resolve()
     _validate_paths(source, target)
@@ -3091,7 +3121,7 @@ async def export_project(
                 or report.has_failed_finalization
                 or report.has_degraded_detectors
                 or report.has_unverifiable_files
-                or report.validation_warnings
+                or report.actionable_validation_warnings
             )
             else "completed"
         )

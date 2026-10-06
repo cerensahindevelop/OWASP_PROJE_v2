@@ -162,7 +162,7 @@ def test_preexisting_syntax_error_remains_compatible(suffix):
     assert result.warnings
 
 
-@pytest.mark.parametrize("path", ["a.css", "a.scss", "a.html", "a.vue", "a.svelte", "a.md", "a.txt", "a.csv", "a.ini", "a.conf", "a.properties", ".env", "Dockerfile", "NOTICE"])
+@pytest.mark.parametrize("path", ["a.css", "a.scss", "a.html", "a.vue", "a.svelte", "a.md", "a.txt", "a.ini", "a.conf", "a.properties", ".env", "Dockerfile", "NOTICE"])
 def test_structural_only_files_do_not_gain_a_parser(path):
     assert validation_mode(path) == "structural-only"
     result = inspect_masked_syntax(path, "{don't parse", "plain text")

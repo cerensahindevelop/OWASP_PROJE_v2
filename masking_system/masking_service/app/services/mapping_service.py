@@ -303,6 +303,11 @@ def mask_display_path(text: str, runtime_params: dict[str, str], rules: list[Rul
     return masked
 
 
+# token_boundary_validator._is_word_char ile ayni tanim (icerikteki token siniri).
+def _is_path_word_char(ch: str) -> bool:
+    return ch == "_" or ch.isalnum()
+
+
 # Klasor/dosya yolundaki aktif kurumsal terim/alias ve runtime kimliklerini,
 # icerik maskelemesiyle AYNI matcher/oncelik/mapping kayitlarini kullanarak
 # maskeler. Genel secret/IP vb. regex'ler yollarda calistirilmaz: yol kapsami
@@ -340,22 +345,27 @@ def mask_relative_path(
                 match.start < right and left < match.end for left, right in token_spans
             ):
                 continue
-            # A token ends with a numeric counter. Leaving source digits
-            # adjacent would turn token _1 + "123" into an ambiguous _1123.
-            # Store the exact term + digit suffix as one reversible value.
-            # Extend BEFORE overlap resolution so a separate numeric match
-            # cannot cause overlapping replacements. isdecimal agrees with
-            # the path decoder's Unicode-aware (?!\d) counter boundary.
-            end = match.end
-            while end < len(text) and text[end].isdecimal():
+            # Icerik maskelemesiyle AYNI kural: terim, icinde gectigi tam
+            # token'a (harf/rakam/alt cizgi) genisletilir. Boylece
+            # `KaraKuvvetleriBakimServisi.py`, koddaki
+            # `import KaraKuvvetleriBakimServisi` ile ayni yer tutucuyu alir
+            # ve import/dosya referanslari maskeli projede de cozulur. Sayac
+            # rakamina kaynak rakami yapisamaz (_1 + "123" -> _1123):
+            # rakamlar da token'a dahildir.
+            start, end = match.start, match.end
+            while start > 0 and _is_path_word_char(text[start - 1]):
+                start -= 1
+            while end < len(text) and _is_path_word_char(text[end]):
                 end += 1
+            if any(start < right and left < end for left, right in token_spans):
+                continue
             detection_candidates.append(DetectionResult(
-                deger=text[match.start:end],
+                deger=text[start:end],
                 tip=match.rule.category,
                 guven_seviyesi="yuksek",
                 kaynak_motor="dictionary",
                 gerekce=f"rule={match.rule.rule_name}",
-                start=match.start,
+                start=start,
                 end=end,
                 rule=match.rule,
             ))
@@ -483,6 +493,7 @@ def build_orchestrator(
             entropy_threshold=settings.presidio.entropy_threshold,
             max_analyzer_chars=settings.presidio.max_analyzer_chars,
             chunk_overlap_chars=settings.presidio.chunk_overlap_chars,
+            disabled_entities=settings.presidio.disabled_entity_set,
         )
     )
     local_registry = DetectorRegistry()
@@ -692,7 +703,12 @@ def apply_detections(
                     detail=llm_error,
                 )
             )
+    # One decision per exact value/type in this file; offsets remain in the
+    # detection outcome for diagnostics, while the persistent queue is grouped.
+    review_groups = {}
     for result in outcome.review_results:
+        review_groups.setdefault((result.deger, result.tip), result)
+    for result in review_groups.values():
         _enqueue_review(db, run_id=run_id, file_path=file_path, result=result, text=text)
 
     if run_id is not None:

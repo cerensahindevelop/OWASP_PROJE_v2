@@ -555,6 +555,9 @@ class AuditWarning(Base):
         "FailedCheck; orn. 'llm_denetimi', 'llm_tespit', 'sozdizimi'). Karantina nedeni "
         "dagilimini olcmek icindir. Eski kayitlarda NULL.",
     )
+    revalidation_key: Mapped[str | None] = mapped_column("yeniden_dogrulama_anahtari", String(64), nullable=True)
+    revalidation_token: Mapped[str | None] = mapped_column("yeniden_dogrulama_tokeni", String(32), nullable=True)
+    revalidation_after: Mapped[float | None] = mapped_column("yeniden_dogrulama_zamani", Float, nullable=True)
     status: Mapped[str] = mapped_column(
         "durum", String(20), nullable=False, default="pending",
         comment="'pending', 'confirmed' (risk gercek, dosya karantinada kalir) ya da "

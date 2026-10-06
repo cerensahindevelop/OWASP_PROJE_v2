@@ -234,6 +234,16 @@ def is_generic_compound(value: str) -> bool:
     return len(parts) >= 2 and all(_is_generic_part(part) for part in parts)
 
 
+@dataclass(frozen=True)
+class HeuristicValuePolicy:
+    """Shared policy for probabilistic findings; deterministic rules bypass it."""
+
+    compound: bool = False
+
+    def accepts(self, value: str) -> bool:
+        return not (is_generic_code_token(value) or (self.compound and is_generic_compound(value)))
+
+
 def is_generic_heuristic_value(value: str, *, compound: bool) -> bool:
-    """Sezgisel bulgu filtresi: mevcut tek parca kontrolu + (bayrakla) bilesik ad kurali."""
-    return is_generic_code_token(value) or (compound and is_generic_compound(value))
+    """Compatibility entry point for detection and consistency masking."""
+    return not HeuristicValuePolicy(compound=compound).accepts(value)

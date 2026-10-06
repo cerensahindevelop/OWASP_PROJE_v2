@@ -73,7 +73,7 @@ def test_quarantined_and_syntax_and_round_trip_failures_are_all_reported():
     assert "ROUND-TRIP HATASI" in text
     assert "mismatch.py#ba9876543210: ilk fark 10" in text
     assert "1 dosya symlink oldugu icin atlandi" in text
-    assert "Dikkat edilmesi gerekenler" in text
+    assert "Bilgi notlari (kapsam disi dosyalar)" in text
 
 
 def test_unknown_rule_name_falls_back_to_raw_name():
@@ -134,3 +134,57 @@ def test_report_uses_masked_roots_and_labels():
     assert "Hedef:  /out/x" in text
     assert "Proje: mask_proje_adi_1 | sicil: mask_sicil_no_1 | Branch: main" in text
     assert "src/a.py#00aa11bb22cc: ilk fark 1" in text
+
+
+def test_coverage_notices_are_info_not_warnings():
+    # "parser yok" / yalnizca bracket-quote / .class kapsam notlari bilgi amaclidir:
+    # rapor bunlari ayri gosterir, "Sorun yok" ozetini ve durumu bozmaz.
+    from app.services.java_classfile import CLASS_COVERAGE
+    from app.services.syntax_validator import BRACKET_ONLY_NOTICE, STRUCTURAL_ONLY_NOTICE
+
+    report = _base_report()
+    report.record(FileOutcome("README.md", status="masked", match_count=1, rule_breakdown={"email_address": 1}))
+    report.validation_warnings.extend([
+        f"README.md: validation_mode=structural-only; {STRUCTURAL_ONLY_NOTICE}",
+        f"A.java: validation_mode=bracket/quote-based; {BRACKET_ONLY_NOTICE}",
+        f"B.class: {CLASS_COVERAGE}",
+    ])
+
+    assert report.actionable_validation_warnings == []
+    assert len(report.validation_notices) == 3
+    text = format_export_report(report)
+    assert "SOZDIZIMI DOGRULAMA UYARILARI" not in text
+    assert "Bilgi notlari (dogrulama kapsami" in text
+    assert "1 dosya düz metin olduğu için ayrıca biçim denetimi yapılmadı" in text and "README.md." in text
+    assert "Sorun yok" in text
+
+
+def test_non_coverage_validation_notice_stays_a_warning():
+    report = _base_report()
+    report.validation_warnings.extend([
+        "a.json: validation_mode=parser-based; Kaynak dosya zaten parser hatasi iceriyor; yeni bozulma olmadigi garanti edilemez.",
+        "b.py: sozdizimi hatasi uyariyla ciktiya alindi: satir 3",
+    ])
+
+    assert report.validation_notices == []
+    assert len(report.actionable_validation_warnings) == 2
+    text = format_export_report(report)
+    assert "SOZDIZIMI DOGRULAMA UYARILARI" in text
+    assert "Sorun yok" not in text
+
+
+def test_notice_summary_shows_original_names_on_screen_but_report_stays_masked():
+    from app.services.syntax_validator import STRUCTURAL_ONLY_NOTICE
+
+    report = _base_report()
+    original = "Cumhurbaskanligi_Backend/templates/cumhurbaskanligi_cevap.txt"
+    label = "mask_kurumsal_ifade_1_Backend/templates/mask_kurumsal_ifade_3_cevap.txt#3a072a37ae08"
+    report.file_labels[original] = label
+    report.validation_warnings.append(f"{label}: validation_mode=structural-only; {STRUCTURAL_ONLY_NOTICE}")
+
+    assert report.validation_notice_summary == [
+        "1 dosya düz metin olduğu için ayrıca biçim denetimi yapılmadı; içerik ve geri dönüş "
+        "kontrolleri tamam: cumhurbaskanligi_cevap.txt."
+    ]
+    text = format_export_report(report)
+    assert "mask_kurumsal_ifade_3_cevap.txt." in text and "cumhurbaskanligi" not in text

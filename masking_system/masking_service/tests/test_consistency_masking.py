@@ -160,8 +160,9 @@ def test_consistency_masks_same_value_across_java_markdown_xml_json(
     assert SENSITIVE not in (target / secondary_name).read_text(encoding="utf-8")
     assert "mask_kurumsal_deger_" in (target / secondary_name).read_text(encoding="utf-8")
     assert report.files_failed_consistency_validation == 0
-    assert report.status == "completed_with_warnings"  # Seed.java has lexical validation only.
-    assert any("bracket/quote" in warning for warning in report.validation_warnings)
+    # Seed.java yalnizca bracket/quote dogrulamasi gordu: kapsam notu bilgi olarak raporlanir, durumu bozmaz.
+    assert report.status == "completed"
+    assert any("bracket/quote" in notice for notice in report.validation_notices)
     assert unmask_report.status == "completed"
     assert _tree_bytes(restored) == _tree_bytes(source)
 

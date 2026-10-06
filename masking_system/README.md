@@ -42,6 +42,48 @@ gösterirse karantinaya alır; doğrulanamayan "risk var" yanıtları dosyayı
 bekletmez. LLM'in serbest yazdığı bulgu türü sabit bir listeye eşlenir, böylece
 yer tutucu adına hassas bir terim girmez.
 
+Tespit ve son denetim, sezgisel bulgular için aynı genel değer politikasını
+kullanır. `SCAN_GENERIC_COMPOUND_FILTER=true` olduğunda `UserService` gibi
+genel bileşik adlar son denetimde de elenir. Geniş kod alıntıları içindeki
+literal değerler, yorumlar ve genel olmayan tanımlayıcılar ayrı değerlendirilir;
+sözlük ve kesin kuralların kontrolleri sürer. Çelişkili bir denetim yanıtında
+(`risk_var=false` ve doğrulanmış hassas bulgu) karar, metinde doğrulanmış
+bulgular üzerinden riskli olarak normalize edilir ve çelişki sayısal olarak
+loglanır. Bu durum ek model çağrısı veya teknik hata üretmez; normal otomatik
+maskeleme/inceleme akışı işler. Bağlantı, JSON/şema ve kesilme hataları teknik
+doğrulama hatası olarak dosyayı bloke etmeye devam eder.
+
+Onay kuyruğu aynı dosyadaki aynı değer/varlık tipi için tek kayıt oluşturur.
+Eski tekrar kayıtlarına verilen bir karar da aynı işlem ve dosyadaki eşdeğer
+bekleyen kayıtları atomik olarak sonuçlandırır. Son dosya denetimi karar
+grubundan sonra bir kez çalışır. Onay/red/maskeleme uçları FastAPI threadpool'unda
+çalışır; DB, dosya/manifest yazma ve cevap hazırlama API event loop'unu bloke
+etmez. Model HTTP çağrıları işlem boyunca kendi async döngüsünde yürür.
+
+İnceleme ekranı açıldığında, güncel doğrulayıcının artık somut açık değer
+bulamadığı eski LLM uyarıları `POST /audit-warnings/revalidate-pending` ile
+arka planda yeniden değerlendirilir. Ek bir kullanıcı onayı veya suppression
+kararı oluşturulmaz. Dosya yalnızca tutarlılık, açık terim, geri çözüm,
+sözdizimi ve son AI kontrolleri geçerse çıktıya eklenir. Teknik hatalar,
+tamamlanmamış export'lar, lock dosyaları ve Java bytecode bu akışa alınmaz.
+Arayüz kontrol sürerken sonuçları 5 saniyede bir günceller, bitince periyodik
+sorgulamayı durdurur; kontrol edilen kayıtlar ayrıca
+gösterilir. Worker'lar arasında veritabanı tokeni aynı kaydın tekrar alınmasını
+önler; süre aşımında eski worker dosyayı serbest bırakamaz. Eşzamanlı dosya
+sayısı ortak kilit dizinini kullanan tüm worker'larda toplam en fazla 4'tür;
+model çağrıları export ve kullanıcı kararlarıyla aynı LLM kotasını paylaşır.
+Her otomatik kontrolün DB oturumu worker thread'inde açılıp kapatılır. İptalde
+worker'ın rollback/kapanışı beklenmeden kayıt tokeni temizlenmez. Başarısız kontrollerin
+aynı içerik/ayarlarla otomatik tekrarı 5 dakika bekler; geçerli denetim kaydı
+yeniden kullanılır. Dosya başına otomatik kontrol bütçesi 60–600 saniyedir;
+bütçe dolarsa dosya çıktıya alınmaz. Bu sürümün ek alanları için
+`alembic upgrade head` gerekir.
+
+Denetim kaydı anahtarı değiştiğinde eski kayıt serbest bırakma/yeniden doğrulama
+sırasında yeniden kullanılamaz; bu yük ortak kota ve dosya sınırı ile dağıtılır.
+Normal export önceki export'un denetim kaydını okumaz; anahtar değişimi ilk
+export'a ayrıca tüm dosyalar için bir denetim turu eklemez.
+
 Modelin tespit yanıtının yapısı (JSON / `bulgular` listesi) bozuksa o metin
 parçası hata sayılır ve dosya karantinaya alınır. Yapı sağlam ama tek bir bulgu
 bozuksa (boş ya da yanlış türde `tip`, geçersiz `guven_seviyesi`, eksik
@@ -101,6 +143,31 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
 
 ### LLM verimliliği ve hız
 
+- **HTTP bağlantıları yeniden kullanılır.** Her export, tespit/denetim ve yeniden
+  denemeler boyunca aynı `LLMHttpTransport` bağlantı havuzunu paylaşır. İstemci
+  ilk gerçek istekte açılır; başarı, hata veya iptal sonrasında kapatılır.
+  Tek başına çağrılan tespit/denetim işlemi kendi havuzunu yönetir. Ayrı
+  thread/event loop'ların istemcileri paylaşılmaz. Havuz en fazla 100 açık,
+  20 boşta bağlantı tutar; boşta bağlantı süresi 30 saniyedir. Model isteklerinin
+  eşzamanlılığı endpoint başına ortak `VLLM_MAX_CONCURRENT_REQUESTS` sınırına tabidir;
+  farklı event loop, thread, backend worker ve CLI işleri aynı OS dosya kilitlerini
+  kullanır. Varsayılan kilit dizini aynı kullanıcının sistem geçici dizinidir;
+  `VLLM_ADMISSION_DIR` ile değiştirilebilir. Tüm worker'larda aynı limit ve dizin
+  gerekir. Ayrı container/host için OS kilitlerini destekleyen ortak mount veya
+  model gateway kotası gerekir; bu mekanizma tek başına makineler arası bir
+  kota servisi değildir. Kilit dosyaları servis çalışırken silinmemelidir.
+  Başarı, hata, iptal veya process kapanışında kapasite geri bırakılır. Havuz
+  dışında yapılan retry beklemesi model kotasını tutmaz; diğer kullanıcılar ilerler.
+  sınırı da bağlantı sayısına ayrıca tavan koyar. HTTP toplam zaman aşımı,
+  yeniden deneme ve karantina kuralları aynı kalır. `scripts/benchmark_llm.py`
+  de her ölçüm grubunda bu yaşam döngüsünü kullanır. Gerçek hız kazancı model
+  ve ağ gecikmesine bağlıdır; bu değişiklik modelin tespit doğruluğunu değiştirmez.
+- **Dağıtım imza kontrolü dekoratörleri tanır.** `llm_http_scope` importu doğrulanarak
+  imzayı koruyan dekoratör olarak işlenir. Doğrudan kurulan veya bir kez yerel
+  değişkene atanan servis nesnelerinin metotları da kontrol edilir. Bilinmeyen
+  dekoratörler nedeniyle atlanan çağrı sayısı ayrıca raporlanır. Dinamik nesneler,
+  kalıtımla gelen metotlar ve `*args/**kwargs` çağrıları kapsam dışındadır;
+  `RESULT=OK` bütün dinamik çağrıların uyumlu olduğu anlamına gelmez.
 - **Bilinen değerler modele gösterilmez.** Katman 1'in (sözlük/regex) kesin
   bulguları LLM'e `mask_<tür>_<n>` biçimli geçici yer tutucularla gider; model
   bunları tekrar listelemez, çıktı token'ı ve yanıt kesilmesi azalır. Çıktıdaki
@@ -158,6 +225,10 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
 - **Hazır profiller.** `VLLM_PROFILE=ollama-dev` ya da `vllm-intra`, açıkça
   verilmemiş `VLLM_*` ayarlarını doldurur (tek tek verilen değer her zaman
   önceliklidir). Eşzamanlılık değerlerini `scripts/benchmark_llm.py` ile doğrulayın.
+- **Ollama'da Qwen3.x thinking.** Ollama `chat_template_kwargs`'ı yok sayar;
+  `qwen3.6:35b` gibi modellerde thinking'i yalnızca `VLLM_REASONING_EFFORT=none`
+  kapatır (`ollama-dev` profili bunu doldurur). vLLM'de bu ayarı boş bırakıp
+  `VLLM_DISABLE_THINKING=true` kullanın.
 - **vLLM prefix caching.** Sistem promptu her istekte aynı önekle başlar; vLLM'i
   `--enable-prefix-caching` ile başlatmak ilk token gecikmesini düşürür.
 
@@ -352,9 +423,12 @@ elle başlatmak isteyenler içindir.
 Dosya ve proje dışa aktarımında, özel işleyicisi bulunmayan ve içeriği metin olarak tanınamayan dosyalar
 **desteklenmeyen içerik** olarak raporlanır. Bu karar proje adına veya `.bin`
 uzantısına özel değildir; içerik kontrolüne dayanır. Dosyalar taranmaz,
-çıktıya kopyalanmaz ve onay/serbest bırakma kuyruğuna eklenmez. Sonuç
-**uyarılı tamamlandı** olarak kalır; arayüz ve işlem kayıtları hangi dosyaların
-eksik olduğunu gösterir. Metin içeren bilinmeyen uzantılar mevcut tarama
+çıktıya kopyalanmaz ve onay/serbest bırakma kuyruğuna eklenmez. Bu durum
+uyarı değil **bilgi notudur**: sonuç tek başına bu yüzden "uyarılı" olmaz; arayüz
+ve işlem kayıtları hangi dosyaların kapsam dışı kaldığını gösterir. Hariç tutma
+kuralına takılan dosyalar, symlink'ler ve "bu dosya türü için parser yok" gibi
+doğrulama kapsamı notları da aynı şekilde bilgi olarak raporlanır. Arşivler,
+çözülemeyen kodlama ve boyut aşımı ise uyarı olmaya devam eder. Metin içeren bilinmeyen uzantılar mevcut tarama
 kurallarına tabidir. Boyut, kodlama, sözdizimi ve geri dönüş doğrulaması
 hataları teknik doğrulama hatası olarak engellenmeye devam eder.
 

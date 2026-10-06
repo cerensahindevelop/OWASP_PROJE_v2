@@ -43,17 +43,17 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from time import monotonic
 
-# httpx: LLM sunucusunun /v1/chat/completions uc noktasina istek atmak icin
-# kullanilan HTTP istemcisi - bu dosyadaki tek ag erisimi burasidir.
-# AsyncClient: es zamanli (concurrent) coklu istek icin - bkz. modul dokstring'i.
+# HTTP hata turleri; istemci ve baglanti havuzunun yasam dongusu llm_transport'ta.
 import httpx
 
 from app.core.http_diagnostics import http_error_detail
 from app.services.detectors import LLM_FALLBACK_ENTITY_TYPE, DetectionResult, normalize_llm_entity_type
 from app.services.rule_engine import _overlaps
 from app.services.llm_input_view import LLMInputStats, RedactedView, build_llm_input_view
-from app.services.text_chunking import chunk_text as _overlap_chunks
+from app.services.text_chunking import DedupedText, chunk_text as _overlap_chunks, dedupe_for_llm
+from app.services.tabular_scan import build_condensed, classify_columns, column_cells, find_tables, render_sample
 from app.services.llm_runtime import LLMScanMetrics
+from app.services.llm_transport import llm_http_scope
 
 
 class LLMRecognitionError(RuntimeError):
@@ -146,7 +146,7 @@ def with_file_context(system_prompt: str, file_context: str | None) -> str:
 def build_detection_request(
     text: str, model: str, seed: int, extra_instructions: list[str] | None = None,
     max_tokens: int = 512, disable_thinking: bool = False, presence_penalty: float = 0.0,
-    file_context: str | None = None,
+    file_context: str | None = None, reasoning_effort: str = "",
 ) -> dict:
     payload = {
         "model": model,
@@ -167,6 +167,8 @@ def build_detection_request(
     }
     if disable_thinking:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     if presence_penalty:
         payload["presence_penalty"] = presence_penalty
     return payload
@@ -174,15 +176,12 @@ def build_detection_request(
 
 # vLLM sunucusuna istegi gonderir, ham JSON yaniti dondurur; her hatayi LLMRecognitionError'a cevirir.
 async def call_vllm(host: str, timeout_seconds: float, payload: dict, api_key: str | None = None) -> dict:
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
     started = monotonic()
     try:
-        async with httpx.AsyncClient() as client:
+        async with llm_http_scope() as transport:
             response = await asyncio.wait_for(
-                client.post(
-                    f"{host.rstrip('/')}/v1/chat/completions", json=payload,
-                    headers=headers, timeout=timeout_seconds,
-                ), timeout=timeout_seconds,
+                transport.post_completion(host, timeout_seconds, payload, api_key),
+                timeout=timeout_seconds,
             )
         response.raise_for_status()
         return response.json()
@@ -213,7 +212,7 @@ def _truncation_hint(choice: object) -> str:
         return (
             " - model DUSUNME (thinking) modunda yanit uretti; token butcesi dusunmeye harcandi. "
             "VLLM_DISABLE_THINKING=true yapin ve vLLM'i --default-chat-template-kwargs "
-            "'{\"enable_thinking\": false}' ile baslatin"
+            "'{\"enable_thinking\": false}' ile baslatin (Ollama'da VLLM_REASONING_EFFORT=none)"
         )
     stripped = content.strip()
     if len(stripped) > 400:
@@ -277,6 +276,15 @@ def _effective_confidence(value: str, confidence: str, min_value_chars: int) -> 
     return "dusuk" if len(value.strip()) < min_value_chars else confidence
 
 
+# Model JSON'daki `\u00f6` gibi kacislari cozup `Tokgöz` dondurebilir; metinde
+# yalnizca kacisli hali (`Tokg\u00f6z`) geciyorsa bulgu o yazilisla eslenir.
+def _as_written_in(value: str, text: str) -> str:
+    if value in text:
+        return value
+    escaped = json.dumps(value, ensure_ascii=True)[1:-1]
+    return escaped if escaped != value and escaped in text else value
+
+
 # vLLM yanitini ayristirir; her bulguyu metinde GERCEKTEN gecip gecmedigini kontrol ederek dogrular.
 def parse_and_verify_detections(
     raw_response: dict,
@@ -315,6 +323,7 @@ def parse_and_verify_detections(
             if repair_stats is not None:
                 repair_stats.dropped += 1
             continue
+        value = _as_written_in(value, text)
         raw_type = item.get("tip")
         confidence = item.get("guven_seviyesi")
         reason = item.get("gerekce")
@@ -443,6 +452,53 @@ async def run_chunk_scans(chunks: list[tuple[int, str]], scan_chunk) -> list:
         raise
 
 
+# Tekrarsiz metindeki bulguyu gorunum metnine tasir: (1) ayni siniftaki her
+# satirda konumsal karsiligi (`PRJ-ALFA-7` -> atlanan satirdaki `PRJ-ALFA-8`),
+# (2) degerin metnin baska yerlerindeki birebir gecisleri. Rakamlar genel bir
+# kaliba cevrilmez: bulunan bir port numarasi tum sayilari maskeletmez.
+def _expand_to_all_occurrences(
+    detections: list[DetectionResult], deduped: DedupedText, text: str,
+    protected_spans: list[tuple[int, int]],
+) -> list[DetectionResult]:
+    expanded: list[DetectionResult] = []
+    literal_done: set[tuple[str, str, str]] = set()
+    for detection in detections:
+        spans = deduped.member_spans(text, detection.start or 0, detection.end or 0) or []
+        key = (detection.deger, detection.tip, detection.guven_seviyesi)
+        if key not in literal_done:
+            literal_done.add(key)
+            spans += [(match.start(), match.end()) for match in _aligned_occurrences(detection.deger, text)]
+        for span in spans:
+            if not _overlaps(span, protected_spans):
+                expanded.append(replace(detection, start=span[0], end=span[1], deger=text[span[0]:span[1]]))
+    return expanded
+
+
+# Ornek turda secilen sutunlarin her hucresi icin bulgu uretir (gorunum
+# koordinatlarinda). Hucre basi/sonu bosluk maskelenmez.
+def _column_detections(
+    text: str, tables, decisions, protected_spans: list[tuple[int, int]], min_value_chars: int,
+) -> list[DetectionResult]:
+    results = []
+    for table, column, cell, decision in column_cells(tables, decisions):
+        raw = text[cell.start:cell.end]
+        value = raw.strip()
+        if not value:
+            continue
+        start = cell.start + raw.index(value)
+        span = (start, start + len(value))
+        if _overlaps(span, protected_spans):
+            continue
+        confidence = _effective_confidence(value, decision.guven_seviyesi, min_value_chars)
+        results.append(DetectionResult(
+            deger=value, tip=decision.tip, guven_seviyesi=confidence, kaynak_motor="llm",
+            gerekce=decision.gerekce, start=span[0], end=span[1],
+            raw_result={"bulunan_deger": value, "tip": decision.tip, "guven_seviyesi": confidence,
+                        "gerekce": decision.gerekce, "sutun": table.label(column)},
+        ))
+    return results
+
+
 # Gorunum koordinatlarindaki bulguyu orijinal metne tasir; gecici yer
 # tutucuyla cakisan bulgu eslenemez ve atilir.
 def _to_original(view: RedactedView, detection: DetectionResult) -> DetectionResult | None:
@@ -455,6 +511,7 @@ def _to_original(view: RedactedView, detection: DetectionResult) -> DetectionRes
 
 
 # Metni parcalara bolup her parcayi LLM ile tarar, sonuclari birlestirir. LLM kapaliysa bos liste doner.
+@llm_http_scope()
 async def find_llm_detections(
     text: str,
     consumed: list[tuple[int, int]],
@@ -466,7 +523,7 @@ async def find_llm_detections(
     blob_spans: list[tuple[int, int]] | None = None,
     input_stats: LLMInputStats | None = None,
 ) -> list[DetectionResult]:
-    if not vllm_settings.enabled:
+    if not vllm_settings.enabled or not text.strip():
         return []
     if not vllm_settings.host or not vllm_settings.model:
         raise LLMRecognitionError("VLLM_ENABLED=true iken VLLM_HOST ve VLLM_MODEL zorunludur")
@@ -477,18 +534,13 @@ async def find_llm_detections(
     )
     view_consumed = view.to_view_spans(consumed)
     overlap_chars = getattr(vllm_settings, "chunk_overlap_chars", 500)
-    chunks = chunk_text(view.text, vllm_settings.max_file_chars, overlap_chars)
-    if input_stats is not None:
-        input_stats.record(text, view, len(chunks))
     seed = getattr(vllm_settings, "seed", 42)
     min_value_chars = getattr(vllm_settings, "min_auto_mask_chars", 0)
     file_context = describe_file_context(file_path)
-    detections: dict[tuple, DetectionResult] = {}
-    confidence_rank = {"dusuk": 0, "orta": 1, "yuksek": 2}
 
-    with LLMScanMetrics("detection", len(chunks), file_path) as metrics:
-        # Tek chunk'i tarar; kesilirse scan_with_split yalnizca bu chunk'i
-        # bolup yeniden tarar (basarili chunk'lar tekrar gonderilmez).
+    # Parcalari LLM'e gonderir; kesilen parca scan_with_split ile bolunup
+    # yalnizca o parca yeniden taranir (basarili parcalar tekrar gonderilmez).
+    async def scan_chunks(phase_chunks, metrics, parse_consumed) -> list[list[DetectionResult]]:
         async def scan_chunk(index: int, offset: int, chunk: str) -> list[DetectionResult]:
             async def scan(part_offset: int, part: str) -> list[DetectionResult]:
                 payload = build_detection_request(
@@ -496,29 +548,66 @@ async def find_llm_detections(
                     max_tokens=getattr(vllm_settings, "max_tokens", 1024),
                     disable_thinking=getattr(vllm_settings, "disable_thinking", False),
                     presence_penalty=getattr(vllm_settings, "presence_penalty", 0.0),
+                    reasoning_effort=getattr(vllm_settings, "reasoning_effort", ""),
                     file_context=file_context,
                 )
                 return await metrics.request(
                     vllm_settings, payload, call_vllm,
                     lambda raw: parse_and_verify_detections(
-                        raw, part, view_consumed, base_offset=part_offset, repair_stats=repair_stats,
-                        min_value_chars=min_value_chars,
+                        raw, part, parse_consumed, base_offset=part_offset,
+                        repair_stats=repair_stats, min_value_chars=min_value_chars,
                     ),
                     index,
                 )
 
             return await scan_with_split(scan, index, offset, chunk, overlap_chars)
 
-        chunk_results = await run_chunk_scans(chunks, scan_chunk)
+        return await run_chunk_scans(phase_chunks, scan_chunk)
 
-        # Chunk sirasiyla birlestir -> deterministik cikti.
-        for chunk_detections in chunk_results:
-            for view_detection in chunk_detections:
-                detection = _to_original(view, view_detection)
-                if detection is None:
-                    continue
-                key = (detection.start, detection.end, detection.tip)
-                previous = detections.get(key)
-                if previous is None or confidence_rank[detection.guven_seviyesi] > confidence_rank[previous.guven_seviyesi]:
-                    detections[key] = detection
+    view_results: list[list[DetectionResult]] = []
+    tables = find_tables(view.text, file_path) if len(view.text) > vllm_settings.max_file_chars else []
+    sample_chunk_count = 0
+    if tables:
+        # Tablolu veri: ornek satirlarda hucresinin tamami hassas cikan sutunlar
+        # butunuyle maskelenir; diger sutunlarin farkli degerleri asagida taranir.
+        sample_chunks = chunk_text(render_sample(view.text, tables), vllm_settings.max_file_chars, overlap_chars)
+        sample_chunk_count = len(sample_chunks)
+        with LLMScanMetrics("detection", sample_chunk_count, file_path) as metrics:
+            sample_results = await scan_chunks(sample_chunks, metrics, [])
+        decisions = classify_columns(view.text, tables, [
+            (d.deger, d.tip, d.guven_seviyesi, d.gerekce or "")
+            for chunk_detections in sample_results for d in chunk_detections
+        ])
+        view_results.append(_column_detections(view.text, tables, decisions, view_consumed, min_value_chars))
+        deduped = build_condensed(view.text, tables, decisions)
+    else:
+        # Tekrarli buyuk dosyada (log, veri dokumu) yalnizca rakamlari farkli
+        # satirlar bir kez taranir; bulgular asagida her satirdaki karsiligina tasinir.
+        deduped = dedupe_for_llm(view.text, vllm_settings.max_file_chars, normalize_digits=True)
+    scan_text = deduped.text if deduped is not None else view.text
+    chunks = chunk_text(scan_text, vllm_settings.max_file_chars, overlap_chars)
+    if input_stats is not None:
+        input_stats.record(text, view, sample_chunk_count + len(chunks))
+    detections: dict[tuple, DetectionResult] = {}
+    confidence_rank = {"dusuk": 0, "orta": 1, "yuksek": 2}
+
+    with LLMScanMetrics("detection", len(chunks), file_path) as metrics:
+        chunk_results = await scan_chunks(chunks, metrics, [] if deduped is not None else view_consumed)
+    if deduped is not None:
+        chunk_results = [
+            _expand_to_all_occurrences(chunk_detections, deduped, view.text, view_consumed)
+            for chunk_detections in chunk_results
+        ]
+    view_results.extend(chunk_results)
+
+    # Parca sirasiyla birlestir -> deterministik cikti.
+    for chunk_detections in view_results:
+        for view_detection in chunk_detections:
+            detection = _to_original(view, view_detection)
+            if detection is None:
+                continue
+            key = (detection.start, detection.end, detection.tip)
+            previous = detections.get(key)
+            if previous is None or confidence_rank[detection.guven_seviyesi] > confidence_rank[previous.guven_seviyesi]:
+                detections[key] = detection
     return sorted(detections.values(), key=lambda detection: detection.start or 0)

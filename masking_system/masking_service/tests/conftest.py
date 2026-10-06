@@ -13,7 +13,18 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import engine
+
+
+# Testler gelistiricinin .env'ine bagli olmamali: VLLM_ENABLED=true gercek
+# model sunucusuna istek attirir, SCAN_GENERIC_COMPOUND_FILTER=true tespit
+# sonuclarini degistirir. Her test kod varsayilanlariyla baslar; farkli
+# deger isteyen test monkeypatch ile acikca ayarlar.
+@pytest.fixture(autouse=True)
+def _code_default_runtime_settings(monkeypatch):
+    monkeypatch.setattr(settings.vllm, "enabled", False)
+    monkeypatch.setattr(settings.scan, "generic_compound_filter", False)
 
 
 @pytest.fixture()
