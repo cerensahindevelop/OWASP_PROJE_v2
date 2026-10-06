@@ -175,7 +175,7 @@ def render() -> None:
     page_intro(
         "🗂️ Geçmiş İşlemler",
         "Bu ekranda, sicilinizle yaptığınız tüm proje ve branch'lerdeki geçmiş Dışarı Çıkar ve "
-        "Geri Al işlemlerini görebilir, herhangi birine tıklayarak dosya bazlı detaylarını "
+        "Geri Al işlemlerini görebilir, herhangi birini seçerek dosya bazlı detaylarını "
         "inceleyebilirsiniz.",
     )
 
@@ -198,6 +198,8 @@ def render() -> None:
     table_rows = [
         {
             "run_id": r.run_id,
+            # Yalnizca maskeleme islemlerinin numarasi geri almada kullanilir.
+            "JOB ID": r.run_id if r.operation_type == "mask" else None,
             "Tarih": format_turkey_time(r.started_at, "%d.%m.%Y %H:%M", missing="-"),
             "Proje": r.project_name,
             "Branch": r.branch_name,
@@ -216,7 +218,11 @@ def render() -> None:
         width="stretch",
         on_select="rerun",
         selection_mode="single-row",
-        column_order=["Tarih", "Proje", "Branch", "İşlem", "Durum", "Dosya sayısı", "Bulgu sayısı"],
+        column_order=["JOB ID", "Tarih", "Proje", "Branch", "İşlem", "Durum", "Dosya sayısı", "Bulgu sayısı"],
+        column_config={"JOB ID": st.column_config.NumberColumn(
+            "JOB ID", format="%d",
+            help="İşlem numarası. Tek dosya veya yapıştırılan metni geri alırken Geri Al ekranında kullanılır.",
+        )},
     )
 
     selected_run = None
