@@ -82,7 +82,7 @@ _IDENTITY_GATE_STYLE = """
 .stMainBlockContainer:has(.osw-identity-shell) [data-testid="stForm"] {
     margin-top: 1.4rem;
     padding: 1.35rem 1.45rem 1.25rem;
-    border: 1px solid rgba(15, 23, 42, .11);
+    border: 1px solid rgba(128, 128, 128, .25);
     border-radius: 1.05rem;
     background: color-mix(in srgb, var(--background-color) 96%, #2563eb 4%);
     box-shadow: 0 18px 50px rgba(15, 23, 42, .07);
@@ -99,7 +99,7 @@ _IDENTITY_GATE_STYLE = """
 
 .stMainBlockContainer:has(.osw-identity-shell) [data-testid="stTextInput"] input {
     min-height: 2.85rem;
-    border-color: rgba(15, 23, 42, .13);
+    border-color: rgba(128, 128, 128, .3);
     border-radius: .72rem;
     background: var(--background-color);
 }

@@ -25,6 +25,7 @@ from app.webapp.common import page_intro, show_error
 # get_identity: aktif kullanicinin (sicil) kimligi; proje/branch bu ekranda
 # her islem icin secilir (render_project_branch_inputs).
 from app.webapp.identity import get_identity, render_project_branch_inputs, validate_project_branch
+from app.webapp.path_guard import allowed_roots_configured
 # Hizli metin modu ve yan yana karsilastirma Geri Donustur ekraniyla ortak.
 from app.webapp.quick_text import (
     QUICK_TEXT_TYPES, InMemoryUpload, quick_text_file_name, render_side_by_side,
@@ -441,13 +442,9 @@ def render() -> None:
     identity = get_identity()
     page_intro(
         "📤 Dışarı Çıkar",
-        "Bu ekranda bir proje klasörünü, dosyaları ya da yapıştırdığınız bir kod parçasını tarayıp "
-        "içindeki hassas bilgileri (IP adresi, e-posta, şifre/anahtar gibi) otomatik olarak "
-        "gizleyebilirsiniz. Sonuç güvenli bir kopya olarak üretilir; orijinal içeriğinize hiçbir "
-        "şekilde dokunulmaz.",
+        "Proje dosyalarını ya da bir kod parçasını tarayıp içindeki hassas bilgileri gizleyin. "
+        "Sonuç ayrı bir kopya olarak üretilir; orijinal içeriğe dokunulmaz.",
     )
-
-    st.caption("Geri dönüşüm ve desteklenen dosya türlerinde sözdizimi kontrol edilir. Çıktı derlenmez veya çalıştırılmaz; çalışma davranışı ve tüm hassas verilerin yakalandığı garanti edilmez.")
     project_name, branch_name = render_project_branch_inputs("export_")
     pair_errors = validate_project_branch(project_name, branch_name)
     if pair_errors:
@@ -459,12 +456,10 @@ def render() -> None:
         )
     target = {"project_name": project_name, "branch_name": branch_name}
 
-    mode = st.radio(
-        "Kaynak türü",
-        [_MODE_UPLOAD, _MODE_TEXT, _MODE_PATH],
-        horizontal=True,
-        key="export_mode",
-    )
+    # Sunucudaki klasor yolu yalnizca WEB_ALLOWED_ROOTS tanimliysa calisir;
+    # tanimli degilse secenek gosterilmez (secilse her zaman hata verirdi).
+    modes = [_MODE_UPLOAD, _MODE_TEXT] + ([_MODE_PATH] if allowed_roots_configured() else [])
+    mode = st.radio("Kaynak türü", modes, horizontal=True, key="export_mode")
 
     if mode == _MODE_UPLOAD:
         upload_kind = st.radio(

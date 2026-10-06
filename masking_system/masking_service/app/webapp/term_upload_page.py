@@ -141,23 +141,24 @@ def _render_pending_activation(terms: list) -> None:
     if not passive_terms:
         return
 
-    st.markdown("#### 🔓 Aktivasyon Bekleyen Pasif İfadeler")
-    st.warning(
-        f"⚠️ **{len(passive_terms)} kurumsal ifade PASİF** durumda - şüpheli bulundukları için "
-        "hiçbir taramada otomatik çalışmıyorlar. Gerçekten kurumsal/hassas olduklarını "
-        "doğruladıysanız aşağıdan aktif edebilirsiniz."
+    st.caption(
+        f"{len(passive_terms)} ifade şüpheli bulunduğu için pasif; taramalarda kullanılmıyor. "
+        "Gerçekten kurumsal ve hassas olduğunu doğruladığınız ifadeyi aktif edin."
     )
+    # Her ifade tek satir: ad + neden | onay kutusu | dugme.
     for item in passive_terms:
         with st.container(border=True):
-            st.markdown(f"**{item.term}** — _{item.category}_")
-            st.caption(f"⚠️ Neden pasif: {item.inactive_reason or 'Neden belirtilmemiş'}")
-            confirm_col, button_col = st.columns([3, 1])
+            term_col, confirm_col, button_col = st.columns([3, 3, 1.2], vertical_alignment="center")
+            term_col.markdown(
+                f"**{item.term}** · {item.category}  \n"
+                f":gray[Neden pasif: {item.inactive_reason or 'belirtilmemiş'}]"
+            )
             confirmed = confirm_col.checkbox(
-                "Kurumsal ve hassas olduğunu, yanlış eşleşme riskini kontrol ettiğimi onaylıyorum",
+                "Hassas olduğunu ve yanlış eşleşme riskini kontrol ettim",
                 key=f"inline_activate_confirm_{item.id}",
             )
             if button_col.button(
-                "▶️ Aktif Et",
+                "Aktif Et",
                 key=f"inline_activate_{item.id}",
                 disabled=not confirmed,
                 type="primary",
@@ -174,31 +175,14 @@ def _render_pending_activation(terms: list) -> None:
                     st.rerun()
 
 
-def _render_registry() -> None:
-    st.subheader("Kayıtlı Kurumsal İfadeler")
+def _render_registry(terms: list) -> None:
     st.caption(
-        "Burada yalnızca dosya yükleme ekranından veritabanına eklenen kurumsal ifadeler "
-        "gösterilir; sistemin teknik regex/Presidio/LLM kuralları bu listede yer almaz."
+        "Yalnızca sözlüğe eklenen kurumsal ifadeler listelenir; sistemin yerleşik kuralları "
+        "(IP, e-posta, parola vb.) burada yer almaz."
     )
-    try:
-        terms = api_client.list_corporate_terms()
-    except ApiError as exc:
-        show_error(exc)
-        return
-
-    deleted_message = st.session_state.pop(_DELETE_RESULT_KEY, None)
-    if deleted_message:
-        st.success(deleted_message)
-    activated_message = st.session_state.pop(_ACTIVATE_RESULT_KEY, None)
-    if activated_message:
-        st.success(activated_message)
-
     if not terms:
-        st.info("Henüz kayıtlı kurumsal ifade yok.")
+        st.info("Henüz kayıtlı kurumsal ifade yok. 'İfade ekle' bölümünden ekleyebilirsiniz.")
         return
-
-    _render_pending_activation(terms)
-    st.divider()
 
     categories = sorted({item.category for item in terms})
     filter_col, status_col = st.columns([3, 2])
@@ -234,7 +218,7 @@ def _render_registry() -> None:
             "term_id": item.id,
             "İfade": item.term,
             "Başlık / Proje Adı": item.category,
-            "Placeholder": f"{item.placeholder_prefix}_<N>",
+            "Yer tutucu": f"{item.placeholder_prefix}_<N>",
             "Geçmiş Eşleme": item.mapping_count,
             "Durum": "AKTİF" if item.is_active else "PASİF",
             "Pasiflik Nedeni": "—" if item.is_active else (item.inactive_reason or "Neden belirtilmemiş"),
@@ -250,7 +234,7 @@ def _render_registry() -> None:
         column_order=[
             "İfade",
             "Başlık / Proje Adı",
-            "Placeholder",
+            "Yer tutucu",
             "Geçmiş Eşleme",
             "Durum",
             "Pasiflik Nedeni",
@@ -268,7 +252,7 @@ def _render_registry() -> None:
     )
     if not selected.is_active:
         st.caption(
-            "Bu ifade pasif - aktif etmek için yukarıdaki 'Aktivasyon Bekleyen' listesini kullanın."
+            "Bu ifade pasif - aktif etmek için 'Onay bekleyen' bölümünü kullanın."
         )
 
     confirmed = st.checkbox(
@@ -295,7 +279,7 @@ def _render_registry() -> None:
 
 
 def _render_single_add() -> None:
-    st.subheader("Tek Kurumsal İfade Ekle")
+    st.markdown("#### Tek ifade ekle")
     st.caption("Dosya hazırlamadan tek bir kelimeyi veya ifadeyi doğrudan ekleyebilirsiniz.")
     message = st.session_state.pop(_SINGLE_RESULT_KEY, None)
     if message:
@@ -351,19 +335,52 @@ def _render_single_add() -> None:
 # yukleme formunu cizer, gonderildiginde _run_preview'i tetikler ve bekleyen
 # bir taslak varsa onizlemesini gosterir.
 def render() -> None:
-    identity = get_identity()
+    get_identity()
     page_intro(
         "📚 Kurumsal Terim Sözlüğü",
-        "Kurumun kendi isimlendirmelerini (proje adları, sistem kodları, sunucu/veritabanı adları vb.) "
-        "içeren bir dosya yükleyip mevcut maskeleme motoruna kalıcı kural olarak ekleyebilirsiniz. "
-        "Dosya hiçbir zaman diske yazılmaz; hiçbir terim, önizlemeyi onaylamadan kaydedilmez.",
+        "Kuruma özgü isimleri (proje adları, sistem kodları, sunucu adları vb.) ekleyin; "
+        "maskeleme bunları her taramada gizler. Hiçbir terim önizlemeyi onaylamadan kaydedilmez.",
     )
 
-    _render_registry()
-    st.divider()
+    try:
+        terms = api_client.list_corporate_terms()
+    except ApiError as exc:
+        show_error(exc)
+        terms = []
+    for key in (_DELETE_RESULT_KEY, _ACTIVATE_RESULT_KEY):
+        message = st.session_state.pop(key, None)
+        if message:
+            st.success(message)
+
+    # Yalnizca secili bolum cizilir: pasif ifadeler ve uzun tablo, ekleme
+    # formlarini sayfanin altina itmez.
+    passive_count = sum(not item.is_active for item in terms)
+    labels = {
+        "add": "➕ İfade ekle",
+        "list": f"📋 Kayıtlı ifadeler ({len(terms)})",
+        "pending": f"⏳ Onay bekleyen ({passive_count})",
+    }
+    section = st.segmented_control(
+        "Bölüm", list(labels), format_func=labels.get, default="add",
+        key="term_section", label_visibility="collapsed",
+    ) or "add"
+
+    if section == "list":
+        _render_registry(terms)
+    elif section == "pending":
+        if passive_count:
+            _render_pending_activation(terms)
+        else:
+            st.success("Onay bekleyen pasif ifade yok.")
+    else:
+        _render_add_section()
+
+
+# Tek ifade ekleme ve dosyadan toplu yukleme (onizle -> onayla) akislari.
+def _render_add_section() -> None:
     _render_single_add()
     st.divider()
-    st.subheader("Dosyadan Toplu Kurumsal İfade Yükle")
+    st.markdown("#### Dosyadan toplu yükle")
 
     result = st.session_state.get(_RESULT_KEY)
     if result:

@@ -209,7 +209,7 @@ def render() -> None:
         for r in runs
     ]
 
-    st.caption("Tüm saatler Türkiye saatidir. Ayrıntı görmek için bir satıra tıklayın.")
+    st.caption("Ayrıntı için satırın solundaki kutuyu işaretleyin. Saatler Türkiye saatidir.")
     event = st.dataframe(
         table_rows,
         hide_index=True,

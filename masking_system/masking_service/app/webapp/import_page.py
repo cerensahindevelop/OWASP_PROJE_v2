@@ -27,6 +27,7 @@ from app.webapp.common import page_intro, show_error
 # get_identity: aktif kullanicinin sicili (unmask yalnizca paketi maskeleyen
 # sicille calisir; proje/branch paketin islem kaydindan okunur).
 from app.webapp.identity import get_identity
+from app.webapp.path_guard import allowed_roots_configured
 # is_single_plain_file_upload: backend'in sonucu zip'lemeden tek dosya
 # olarak dondurdugu durumu ayirt etmek icin (karsilastirma onizlemesi).
 from app.webapp.uploads import is_single_plain_file_upload
@@ -199,13 +200,13 @@ def _render_result(result: dict) -> None:
     if report.has_unresolved_placeholders:
         st.error(
             "🔴 Bazı gizlenmiş veriler için eşleşme bulunamadı, bilgileriniz doğru mu kontrol edin. "
-            "Bu placeholder'lar çıktıda OLDUĞU GİBİ (geri dönüştürülmeden) bırakıldı — hiçbir "
+            "Bu yer tutucular çıktıda OLDUĞU GİBİ (geri dönüştürülmeden) bırakıldı — hiçbir "
             "değer sessizce boş geçilmedi ya da tahmin edilmedi."
         )
         suggestion = report.identity_mismatch_suggestion
         if suggestion is not None:
             st.warning(
-                f"🟡 Olası neden: **yanlış proje/branch**. Çözülemeyen placeholder'ların "
+                f"🟡 Olası neden: **yanlış proje/branch**. Çözülemeyen yer tutucuların "
                 f"**{suggestion.matched_count}/{suggestion.unresolved_count} tanesi "
                 f"(%{suggestion.match_ratio * 100:.0f})**, sicilinizle daha önce maskelenmiş "
                 f"**{suggestion.project_name} / {suggestion.branch_name}** projesine ait görünüyor. "
@@ -221,13 +222,13 @@ def _render_result(result: dict) -> None:
                 st.write(notice)
 
     st.markdown(
-        f"**{report.total_placeholders_found} placeholder** bulundu, "
+        f"**{report.total_placeholders_found} gizlenmiş değer (yer tutucu)** bulundu, "
         f"**{report.total_placeholders_resolved} tanesi** başarıyla gerçek değere dönüştürüldü."
     )
 
     if report.has_unresolved_placeholders:
-        st.markdown(f"**Çözülemeyen placeholder sayısı: {report.total_placeholders_unresolved}**")
-        with st.expander("Çözülemeyen placeholder'ların dökümü", expanded=True):
+        st.markdown(f"**Çözülemeyen yer tutucu sayısı: {report.total_placeholders_unresolved}**")
+        with st.expander("Çözülemeyen yer tutucuların dökümü", expanded=True):
             for token, count in sorted(report.unresolved_by_placeholder.items()):
                 st.write(f"- `{token}`: {count} yerde")
 
@@ -298,29 +299,29 @@ def render() -> None:
     identity = get_identity()
     page_intro(
         "📥 Geri Al",
-        "Bu ekranda daha önce maskelenmiş bir proje klasörünü, içindeki gizli placeholder'ları "
-        "gerçek değerlerle değiştirerek geri döndürebilirsiniz. Yalnızca paketi maskeleyen sicille "
-        "geri dönüştürülebilir; proje ve branch paketin kaydından otomatik okunur.",
+        "Maskelenmiş bir paketteki gizlenmiş değerleri gerçek değerlerine döndürün. Yalnızca paketi "
+        "maskeleyen sicille yapılabilir; proje ve branch paketin kaydından otomatik okunur.",
     )
 
     st.info(f"Geri alma **{identity['sicil_no']}** sicilinizle yapılacak.")
-    job_id_value = st.number_input(
-        "Maskeleme JOB ID (isteğe bağlı)",
-        min_value=0,
-        step=1,
-        value=0,
-        key="import_job_id",
-        help="Paketle birlikte .masking-integrity.json dosyası varsa gerekmez. Tek dosya ya da "
-        "yapıştırılan metin geri alınırken, maskeleme sonucunda gösterilen JOB ID'yi girin.",
-    )
-    job_id = int(job_id_value) or None
 
-    mode = st.radio(
-        "Kaynak türü",
-        [_MODE_UPLOAD, _MODE_TEXT, _MODE_PATH],
-        horizontal=True,
-        key="import_mode",
-    )
+    modes = [_MODE_UPLOAD, _MODE_TEXT] + ([_MODE_PATH] if allowed_roots_configured() else [])
+    mode = st.radio("Kaynak türü", modes, horizontal=True, key="import_mode")
+
+    # Paketle gelen .masking-integrity.json islem numarasini zaten tasir;
+    # numara yalnizca tek dosya ya da yapistirilan metin icin gerekir.
+    with st.expander(
+        "Maskeleme JOB ID — yalnızca tek dosya veya yapıştırılan metin için", expanded=mode == _MODE_TEXT,
+    ):
+        job_id_text = st.text_input(
+            "JOB ID",
+            key="import_job_id",
+            placeholder="Örn. 27",
+            help="Maskeleme sonucunda gösterilen işlem numarası. Tüm paketi (.zip veya klasör) "
+            "yüklüyorsanız boş bırakın.",
+        ).strip()
+    job_id = int(job_id_text) if job_id_text.isdecimal() and int(job_id_text) > 0 else None
+    job_id_error = "JOB ID yalnızca rakamlardan oluşmalıdır." if job_id_text and job_id is None else None
 
     if mode == _MODE_UPLOAD:
         upload_kind = st.radio(
@@ -348,10 +349,12 @@ def render() -> None:
                     ".zip dosyası olarak yükleyebilirsiniz.",
                     key="import_file_uploader",
                 )
-            submitted = st.form_submit_button("Geri Dönüştür (Unmask)", type="primary", width="stretch")
+            submitted = st.form_submit_button("Geri Dönüştür", type="primary", width="stretch")
 
         if submitted:
-            if not uploaded_files:
+            if job_id_error:
+                st.error(job_id_error)
+            elif not uploaded_files:
                 st.error("En az bir dosya/klasör seçmelisiniz.")
             else:
                 _run_import_upload(uploaded_files, is_directory_upload=is_directory_upload, job_id=job_id)
@@ -369,10 +372,12 @@ def render() -> None:
                 help="Metin bu türde tek bir dosya olarak işlenir; sonucu dosya olarak da indirebilirsiniz.",
                 key="import_text_type",
             )
-            submitted = st.form_submit_button("Geri Dönüştür (Unmask)", type="primary", width="stretch")
+            submitted = st.form_submit_button("Geri Dönüştür", type="primary", width="stretch")
 
         if submitted:
-            if not masked_text.strip():
+            if job_id_error:
+                st.error(job_id_error)
+            elif not masked_text.strip():
                 st.error("Geri dönüştürülecek metin boş bırakılamaz.")
             else:
                 _run_import_text(masked_text, QUICK_TEXT_TYPES[type_label], job_id=job_id)
@@ -384,10 +389,12 @@ def render() -> None:
             target_path = st.text_input(
                 "Çıktı Klasörü", key="import_target", placeholder="örn. /home/kullanici/geri-donusturulmus/poseidon"
             )
-            submitted = st.form_submit_button("Geri Dönüştür (Unmask)", type="primary", width="stretch")
+            submitted = st.form_submit_button("Geri Dönüştür", type="primary", width="stretch")
 
         if submitted:
-            if not source_path.strip() or not target_path.strip():
+            if job_id_error:
+                st.error(job_id_error)
+            elif not source_path.strip() or not target_path.strip():
                 st.error("Maskelenmiş Proje Klasörü ve Çıktı Klasörü alanları boş bırakılamaz.")
             elif not Path(source_path.strip()).is_dir():
                 st.error(f"Maskelenmiş proje klasörü bulunamadı: {source_path.strip()}")

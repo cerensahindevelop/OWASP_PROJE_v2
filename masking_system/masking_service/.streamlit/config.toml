@@ -19,3 +19,19 @@
 [server]
 maxUploadSize = 10240
 maxMessageSize = 10240
+
+# Kullanicilara Streamlit gelistirici secenekleri (Deploy, yeniden
+# calistir, onbellek temizle) gosterilmez; sag ustteki menude yalnizca
+# izleyici secenekleri (tema secimi dahil) kalir.
+[client]
+toolbarMode = "viewer"
+
+# Acik ve koyu tema birlikte tanimli: varsayilan isletim sisteminin
+# ayarini izler, kullanici sag ustteki menu > Settings'ten secebilir.
+# Birincil dugmeler giris ekraniyla ayni mavi tonda; koyu zeminde
+# okunurluk icin bir ton acik.
+[theme.light]
+primaryColor = "#2563eb"
+
+[theme.dark]
+primaryColor = "#3b82f6"

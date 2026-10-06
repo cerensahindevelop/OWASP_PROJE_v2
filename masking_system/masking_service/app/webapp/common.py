@@ -87,7 +87,19 @@ def inject_base_style() -> None:
         """
         <style>
         [data-testid="stSidebar"] .stButton button { font-size: 0.85rem; }
-        .osw-help { color: var(--text-color-light, #6b7280); font-size: 0.95rem; margin-bottom: 1rem; }
+        /* Renk temadan miras alinir; acik ve koyu temada ayni okunurluk. */
+        .osw-help { color: inherit; opacity: 0.72; font-size: 0.95rem; margin-bottom: 1rem; }
+        /* Streamlit dosya yukleyicisinin Ingilizce metinleri ("Upload",
+           "10GB per file") icin dil ayari yok; metin gizlenip Turkcesi
+           yaziliyor. Streamlit DOM'u degisirse Ingilizce metin geri gelir. */
+        [data-testid="stFileUploaderDropzone"] button [data-testid="stMarkdownContainer"] p { font-size: 0; }
+        [data-testid="stFileUploaderDropzone"] button [data-testid="stMarkdownContainer"] p::after {
+            content: "Gözat"; font-size: 0.875rem;
+        }
+        [data-testid="stFileUploaderDropzoneInstructions"] span { font-size: 0; }
+        [data-testid="stFileUploaderDropzoneInstructions"] span::after {
+            content: "Dosyaları buraya sürükleyin veya seçin"; font-size: 0.875rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,

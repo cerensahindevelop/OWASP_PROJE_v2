@@ -3,12 +3,39 @@ kimlik girildikten sonra sidebar navigasyonunu ve dort ana ekrani kurar."""
 
 from __future__ import annotations
 
+import time
+
 import streamlit as st
 
-from app.webapp import export_page, history_page, import_page, review_page, term_upload_page
+from app.webapp import api_client, export_page, history_page, import_page, review_page, term_upload_page
 from app.webapp.common import inject_base_style
 from app.webapp.upload_queue import install_upload_queue
-from app.webapp.identity import has_identity, render_identity_badge, render_identity_gate
+from app.webapp.identity import get_identity, has_identity, render_identity_badge, render_identity_gate
+
+_PENDING_CACHE_KEY = "_nav_pending_count"
+_PENDING_CACHE_SECONDS = 30
+
+
+# Kenar cubugundaki "Onay Bekleyenler" yanindaki sayi: sicilin tum
+# projelerinde karar bekleyen bulgu + karantinadaki dosya. Her etkilesimde
+# API'yi yormamak icin kisa sure onbellekte tutulur; API'ye ulasilamazsa
+# sayi gosterilmez, gezinme bozulmaz.
+def _pending_count() -> int | None:
+    sicil_no = get_identity()["sicil_no"]
+    cached = st.session_state.get(_PENDING_CACHE_KEY)
+    if cached and cached[0] == sicil_no and time.monotonic() - cached[1] < _PENDING_CACHE_SECONDS:
+        return cached[2]
+    try:
+        # Otomatik yeniden kontrol edilen dosya henuz kullanici karari beklemez.
+        warnings = [
+            item for item in api_client.list_pending_audit_warnings(sicil_no=sicil_no)
+            if not getattr(item, "revalidating", False)
+        ]
+        count = len(api_client.list_pending_reviews(sicil_no=sicil_no)) + len(warnings)
+    except Exception:
+        count = None
+    st.session_state[_PENDING_CACHE_KEY] = (sicil_no, time.monotonic(), count)
+    return count
 
 
 # Streamlit uygulamasinin giris noktasi: kimlik kapisini uygular, gecilirse sidebar + ekranlari kurar.
@@ -50,7 +77,9 @@ def run() -> None:
         render_identity_badge()
         st.divider()
         st.caption("Sayfalar")
+        pending = _pending_count()
         for page in pages:
-            st.page_link(page, width="stretch")
+            label = f"{page.title} ({pending})" if page is pages[1] and pending else None
+            st.page_link(page, label=label, width="stretch")
 
     navigation.run()

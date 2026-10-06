@@ -198,7 +198,7 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
         st.session_state["audit_revalidation_poll_identity"] = identity_key if active_ids else None
         st.rerun()
     if active_ids:
-        st.info("Eski denetim bulguları otomatik yeniden kontrol ediliyor. Sonuçlar burada güncellenecek.")
+        st.caption(f"⟳ {len(active_ids)} dosya otomatik olarak yeniden kontrol ediliyor; sonuç burada güncellenecek.")
     pending = [item for item in pending if item.id not in active_ids]
     rows = [
         {
@@ -248,14 +248,14 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
     except (ApiError, AttributeError, StopIteration):
         pass
 
-    st.info(
-        f"✓ Hazır: {ready_count}  |  ⚠ İnceleme Gerekli: {review_count}  |  "
-        f"⛔ Güvenlik Karantinası: {len(quarantine_rows)}  |  "
-        f"✕ Doğrulama Başarısız: {len(validation_rows)}  |  ⟳ Yeniden doğrulanıyor: {len(active_ids)}"
-    )
+    ready_col, review_col, quarantine_col, failed_col = st.columns(4)
+    ready_col.metric("Son işlemde çıktıya hazır", ready_count, border=True)
+    review_col.metric("Karar bekleyen bulgu", review_count, border=True)
+    quarantine_col.metric("Karantinadaki dosya", len(quarantine_rows), border=True)
+    failed_col.metric("Hatalı dosya", len(validation_rows), border=True)
 
     if validation_rows:
-        st.markdown("### ✕ Doğrulama Başarısız")
+        st.markdown("### Hatalı dosyalar")
         st.error("Bu teknik hatalar kullanıcı kararı beklemez. Dosyalar çıktıya alınmadı; proje yeniden çalıştırılmalıdır.")
         st.dataframe([
             {"İşlem": row["run_id"], "Dosya": row["file_path"], "Teknik sorun": row["summary"]}
@@ -267,7 +267,7 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
             st.divider()
         return
 
-    st.markdown("### ⛔ Güvenlik Karantinası")
+    st.markdown("### Karantinadaki dosyalar")
     st.warning(
         "Bu dosyalar maskelendikten sonra yapılan son kontrolde gizlenmemiş bilgi içeriyor olabilir. "
         "Siz karar verene kadar çıktıya eklenmedi."
@@ -346,6 +346,9 @@ def render() -> None:
     )
     # Kullanici sicille tanimlanir; proje/branch bu ekranda yalnizca filtredir
     # (None = tumu). Asagidaki yardimcilar bu kapsami "identity" olarak alir.
+    # Kararlar kenar cubugundaki bekleyen sayisini degistirir; bir sonraki
+    # etkilesimde yeniden hesaplansin.
+    st.session_state.pop("_nav_pending_count", None)
     project_name, branch_name = render_project_branch_filter("review_")
     identity = {**get_identity(), "project_name": project_name, "branch_name": branch_name}
 
@@ -393,7 +396,7 @@ def render() -> None:
 
     _render_audit_warnings_section(identity, review_count=len(grouped))
 
-    st.markdown("### ⚠ İnceleme Gerekli")
+    st.markdown("### Karar bekleyen bulgular")
     if not grouped:
         st.success("Şu anda onay bekleyen şüpheli bulgu yok.")
         return
