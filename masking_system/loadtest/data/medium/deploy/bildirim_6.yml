@@ -1,0 +1,43 @@
+servisler:
+  - ad: tahsilat
+    adres: 203.0.113.59
+    host: abonelik-mq4.intra.ornek.local
+    anahtar: "SmNds6x4sfPY2rlT0XuNRJ9nQlyl"
+    sorumlu: "Ayse Polatkan"
+    replika: 4
+  - ad: abonelik
+    adres: 192.0.2.138
+    host: envanter-app3.intra.ornek.local
+    anahtar: "ZVOoGWxifHID9pfuygZtE25oAhad"
+    sorumlu: "Emre Gunduzer"
+    replika: 3
+  - ad: kimlik
+    adres: 198.51.100.70
+    host: abonelik-db3.intra.ornek.local
+    anahtar: "fS0Ndzed7KpoCEKPbUMJEV7TEmig"
+    sorumlu: "Selin Ozturkmen"
+    replika: 5
+  - ad: musteri
+    adres: 198.51.100.42
+    host: abonelik-mq8.intra.ornek.local
+    anahtar: "0NkPHcB0vrnv5KpEfSdTFvvLkTqk"
+    sorumlu: "Ayse Sahinkaya"
+    replika: 1
+  - ad: bildirim
+    adres: 203.0.113.87
+    host: kimlik-db9.intra.ornek.local
+    anahtar: "qBld6dHHLrMHfVGKw07aD7dnXJ4d"
+    sorumlu: "Hakan Demirkiran"
+    replika: 4
+  - ad: abonelik
+    adres: 192.0.2.227
+    host: musteri-cache3.intra.ornek.local
+    anahtar: "aVaszWu55AmCjWhwRzdDDCipLoI1"
+    sorumlu: "Hakan Kaplanoglu"
+    replika: 1
+  - ad: abonelik
+    adres: 198.51.100.225
+    host: envanter-db1.intra.ornek.local
+    anahtar: "9DWzICC4ZCkgWHIz9nLyBByXbYT5"
+    sorumlu: "Ceren Kaplanoglu"
+    replika: 1

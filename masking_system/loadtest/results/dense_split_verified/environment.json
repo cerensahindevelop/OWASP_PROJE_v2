@@ -1,0 +1,328 @@
+{
+  "plan": "regression",
+  "created_wall": 1791360627.4961257,
+  "host": "aipc-HP-Z8-G4",
+  "cpu": "CPU(s):                                  64\nModel name:                              Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz\nThread(s) per core:                      2\nSocket(s):                               2\nCPU(s) scaling MHz:                      32%",
+  "ram_total_gib": 62.57792282104492,
+  "kernel": "7.0.0-34-generic",
+  "git_commit": "77e845776c2255e7c505c5a6b0277ab337e58157",
+  "git_status": "M .env.example\n M README.md\n M masking_service/app/api/export_jobs.py\n M masking_service/app/api/routers/export.py\n M masking_service/app/core/config.py\n M masking_service/app/services/exporter.py\n M masking_service/app/services/llm_recognizer.py\n M masking_service/app/webapp/export_page.py\n M masking_service/tests/test_export_page.py\n M masking_service/tests/test_llm_parallel_split.py\n?? loadtest/\n?? masking_service/tests/test_export_job_queue.py\n?? masking_service/tests/test_export_startup_lock.py",
+  "app_python": "Python 3.14.5",
+  "loadtest_python": "3.13.13 | packaged by Anaconda, Inc. | (main, Apr 14 2026, 06:19:41) [GCC 14.3.0]",
+  "env_settings": {
+    "DB_PATH": "masking.db",
+    "PRESIDIO_LANGUAGE": "en",
+    "PRESIDIO_SPACY_MODEL": "en_core_web_lg",
+    "PRESIDIO_USE_BUILTIN_RECOGNIZERS": "true",
+    "SECURITY_ENCRYPTION_KEY": "***",
+    "VLLM_ENABLED": "true",
+    "VLLM_HOST": "http://localhost:11434",
+    "VLLM_MODEL": "qwen3.6:35b",
+    "VLLM_PROFILE": "ollama-dev",
+    "VLLM_MAX_CONCURRENT_REQUESTS": "1",
+    "VLLM_FILE_BATCH_SIZE": "8",
+    "VLLM_MAX_FILE_CHARS": "6000",
+    "VLLM_CHUNK_OVERLAP_CHARS": "500",
+    "VLLM_MAX_TOKENS": "2048",
+    "VLLM_TIMEOUT_SECONDS": "200",
+    "VLLM_TRANSIENT_RETRIES": "1",
+    "VLLM_SEED": "42",
+    "VLLM_DISABLE_THINKING": "true",
+    "VLLM_REASONING_EFFORT": "none",
+    "VLLM_PRESENCE_PENALTY": "0",
+    "VLLM_REDACT_KNOWN_FINDINGS": "true",
+    "VLLM_AUDIT_UNCHANGED_FILES": "true",
+    "VLLM_MIN_AUTO_MASK_CHARS": "3",
+    "VLLM_WARN_CHUNKS_PER_FILE": "10",
+    "SCAN_ENCODED_BLOB_MIN_CHARS": "512",
+    "SCAN_MAX_FILE_MB": "50",
+    "VLLM_AUTO_MASK_MIN_CONFIDENCE": "orta",
+    "VLLM_LOW_CONFIDENCE_ACTION": "ignore",
+    "WEB_API_REQUEST_TIMEOUT_SECONDS": "3600",
+    "VALIDATION_SQL_DIALECT": "",
+    "WEB_API_PORT": "8002",
+    "WEB_API_BASE_URL": "http://127.0.0.1:8002",
+    "SCAN_GENERIC_COMPOUND_FILTER": "true"
+  },
+  "ollama_version": "ollama version is 0.35.1",
+  "ollama_systemd_env": "Environment=PATH=/home/aipc/miniconda3/bin:/home/aipc/miniconda3/condabin:/usr/local/cuda-12.8/bin:/home/aipc/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin OLLAMA_NUM_PARALLEL=4 OLLAMA_CONTEXT_LENGTH=8192 OLLAMA_FLASH_ATTENTION=0",
+  "llama_server_cmdline_at_start": "",
+  "ollama_show": "Model\n    architecture        qwen35moe    \n    parameters          35.5B        \n    context length      262144       \n    embedding length    2048         \n    quantization        Q4_K_M       \n    requires            0.30.0       \n\n  Capabilities\n    completion     \n    vision         \n    tools          \n    thinking       \n        levels     false, true    \n        default    true           \n\n  Projector\n    architecture        clip       \n    parameters          446.57M    \n    embedding length    1152       \n    dimensions          2048       \n\n  Parameters\n    top_k                20      \n    top_p                0.95    \n    draft_num_predict    2       \n    min_p                0       \n    presence_penalty     1.5     \n    repeat_penalty       1       \n    temperature          1       \n\n  License\n    Apache License               \n    Version 2.0, January 2004    \n    ...",
+  "nvidia_smi": "index, name, uuid, memory.total [MiB], driver_version, power.limit [W]\n0, NVIDIA RTX A5000, GPU-30667114-4567-bc4a-029b-3375d117048e, 24564 MiB, 610.57.04, 230.00 W\n1, NVIDIA RTX 4500 Ada Generation, GPU-fbe2dd5d-3644-5c37-3179-8ad50079b7d4, 24570 MiB, 610.57.04, 210.00 W",
+  "datasets": {
+    "seed": 20261006,
+    "datasets": {
+      "small": {
+        "size": "small",
+        "file_count": 6,
+        "total_bytes": 7918,
+        "files_over_6000_chars": 0,
+        "dataset_sha256": "37d8f635e33f87f1ef708339485173f19d0729b8b2bb297548acc73d738dbdcc",
+        "files": [
+          {
+            "path": "app/raporlama/servis_0.py",
+            "bytes": 1499,
+            "chars": 1499,
+            "sha256": "fb4278b3b21d38ec1af4e8b8ab4d4e1d3eaff1ccc55178d994c47f25bc611ee4"
+          },
+          {
+            "path": "src/main/java/tr/ornek/kurum/FaturalamaServisi1.java",
+            "bytes": 1688,
+            "chars": 1688,
+            "sha256": "f4b480079f10a7669add4a96a9e483059e25a38dcab4f4fae9ab66466f4e5e31"
+          },
+          {
+            "path": "config/kimlik_2.properties",
+            "bytes": 1169,
+            "chars": 1169,
+            "sha256": "bfa23a5030b7f64013f64c6eac2930cc3043a6ad41e4c408c741367e5dc691dc"
+          },
+          {
+            "path": "deploy/bildirim_3.yml",
+            "bytes": 1054,
+            "chars": 1054,
+            "sha256": "1bcdb289a01277403ef2f4d8f1a8cc899dea4aa233344d54abad82156da4da86"
+          },
+          {
+            "path": "docs/kurulum_4.md",
+            "bytes": 1279,
+            "chars": 1279,
+            "sha256": "3fa7a2674bb1357857106da63448cfa536c34aa6af493108fc4353b175415ee9"
+          },
+          {
+            "path": "web/src/raporlama_5.js",
+            "bytes": 1229,
+            "chars": 1229,
+            "sha256": "1fbdb9bcd69ce24b3d7e16c8a49b21a2d915cf9df63f3d12e1b735f8f0347c07"
+          }
+        ]
+      },
+      "medium": {
+        "size": "medium",
+        "file_count": 10,
+        "total_bytes": 18484,
+        "files_over_6000_chars": 0,
+        "dataset_sha256": "9469b5273fb96151528a7036a55d23bb7c167eb40994d46470916632efc4c6db",
+        "files": [
+          {
+            "path": "app/raporlama/servis_0.py",
+            "bytes": 2287,
+            "chars": 2287,
+            "sha256": "478f3cc1bab42471a1e9ed62d28283ab5df6bd736de177144f37a39dfb5ef6bd"
+          },
+          {
+            "path": "app/raporlama/servis_1.py",
+            "bytes": 1864,
+            "chars": 1864,
+            "sha256": "adf29e0827233b0d1d6390303af4b548165d71c5ea7fecb2ed1d62a546be920c"
+          },
+          {
+            "path": "src/main/java/tr/ornek/kurum/BildirimServisi2.java",
+            "bytes": 2609,
+            "chars": 2609,
+            "sha256": "0f42df43bd4404a5498747c6cebbb2e0cd2733c611fc3065b8d8da71b24fc0ac"
+          },
+          {
+            "path": "Abonelik/Istemci3.cs",
+            "bytes": 2122,
+            "chars": 2122,
+            "sha256": "25678d9006ffaeaac90ac7214d929ad9cadbba8f585f23d85c58a7a8113faad8"
+          },
+          {
+            "path": "web/src/tahsilat_4.js",
+            "bytes": 1743,
+            "chars": 1743,
+            "sha256": "449306098868f8f2eb6794e58af531d9f516cc17832001a9c71cb799e020264a"
+          },
+          {
+            "path": "config/musteri_5.properties",
+            "bytes": 1208,
+            "chars": 1208,
+            "sha256": "d4d88c2dcfbebd9086fbca20d67eec159ecd5115f305c8ec04aae8ef6343130b"
+          },
+          {
+            "path": "deploy/bildirim_6.yml",
+            "bytes": 1213,
+            "chars": 1213,
+            "sha256": "3a9ab37e71f7cababd85773836bacff32ed1a2d9f8d1742b9d4d6c085f9f3c46"
+          },
+          {
+            "path": "config/baglanti_7.xml",
+            "bytes": 1432,
+            "chars": 1432,
+            "sha256": "b9188af0a83311c8b0c0d4d00a28c6c90446902a8b974f18b8378bc0946b70c3"
+          },
+          {
+            "path": "docs/kurulum_8.md",
+            "bytes": 1527,
+            "chars": 1527,
+            "sha256": "ec41d61c75aa24b687405c0534d3fd0ec3289a0520155fcb608e617cc52ab8ab"
+          },
+          {
+            "path": "db/seed_9.sql",
+            "bytes": 2479,
+            "chars": 2479,
+            "sha256": "087a17044ed11f6f08215e165187623340e7a09f671b6314645c4b33223d805f"
+          }
+        ]
+      },
+      "large": {
+        "size": "large",
+        "file_count": 20,
+        "total_bytes": 54193,
+        "files_over_6000_chars": 2,
+        "dataset_sha256": "a83cf3e56331256787a3baf51d98f4ae647e8107079350e53a734d0e4b3ea4c8",
+        "files": [
+          {
+            "path": "app/raporlama/servis_0.py",
+            "bytes": 2802,
+            "chars": 2802,
+            "sha256": "5c202e462f2731307a649cbf868ac747e82326cf7535abf98dc38dea6a17fa60"
+          },
+          {
+            "path": "app/faturalama/servis_1.py",
+            "bytes": 3455,
+            "chars": 3455,
+            "sha256": "7a14f65a402ff689a95e2481f8ca9d076e5a40e33ecefae947946e0d84bb8bb3"
+          },
+          {
+            "path": "app/musteri/servis_2.py",
+            "bytes": 2011,
+            "chars": 2011,
+            "sha256": "c5353ac47818e7d567c74e0f2c05aa604438d29ce77358dca5788d5c6c28fca5"
+          },
+          {
+            "path": "src/main/java/tr/ornek/kurum/AbonelikServisi3.java",
+            "bytes": 7442,
+            "chars": 7442,
+            "sha256": "29a7280a067b37cacd667ee23ff1301b2e3899caf9bcfeda95c18581880604e1"
+          },
+          {
+            "path": "src/main/java/tr/ornek/kurum/FaturalamaServisi4.java",
+            "bytes": 2994,
+            "chars": 2994,
+            "sha256": "3b8257d8e42cdaa26adcb2266d2c551b6a300996f5232138ba690463cfaf4d1d"
+          },
+          {
+            "path": "src/main/java/tr/ornek/kurum/EnvanterServisi5.java",
+            "bytes": 2245,
+            "chars": 2245,
+            "sha256": "05203ea9c152b23c68293764cff7be6b7fabce3775b89047acc2235e40f62fca"
+          },
+          {
+            "path": "Abonelik/Istemci6.cs",
+            "bytes": 3070,
+            "chars": 3070,
+            "sha256": "708156247abf245b4c865b37a0e628852617ca054209896726150bb64e376600"
+          },
+          {
+            "path": "Abonelik/Istemci7.cs",
+            "bytes": 1964,
+            "chars": 1964,
+            "sha256": "9e086277f1eb66b7dd9b92d3909e4bf9c70fe6835959fbbc526c5ae9b042954d"
+          },
+          {
+            "path": "web/src/raporlama_8.js",
+            "bytes": 2427,
+            "chars": 2427,
+            "sha256": "c86979fdf547ecca6e59475704b731230f94aad92e80933a1de15821c344e6e5"
+          },
+          {
+            "path": "web/src/envanter_9.js",
+            "bytes": 1739,
+            "chars": 1739,
+            "sha256": "a309de8c214f56cb2edb5b4037e31ae4537542962ba39b9f722852b053f359e5"
+          },
+          {
+            "path": "config/faturalama_10.properties",
+            "bytes": 1465,
+            "chars": 1465,
+            "sha256": "32b7ac26e1ee8ac0ecffc97663b9130e8a2795d2d78c2d1bc615162370e36c7e"
+          },
+          {
+            "path": "config/kimlik_11.properties",
+            "bytes": 1219,
+            "chars": 1219,
+            "sha256": "0d96059942f3cfe85816e137baabc3583ae16b36cc6ab26aba31d0cd831f1f94"
+          },
+          {
+            "path": "deploy/faturalama_12.yml",
+            "bytes": 1561,
+            "chars": 1561,
+            "sha256": "7e50d19f92ed9de3890009861c26fe053256f937b1a6063583de1219be0fa1c3"
+          },
+          {
+            "path": "config/baglanti_13.xml",
+            "bytes": 1819,
+            "chars": 1819,
+            "sha256": "6960e41bcc3629fe9bb311b565cff233840b0d5a288a83ecee8ab2592bbabd62"
+          },
+          {
+            "path": "config/servisler_14.json",
+            "bytes": 1856,
+            "chars": 1856,
+            "sha256": "a447618c9213ee7bcd9df71d9c19fdde9a9ed6ac4b13b419a05adc61084361f8"
+          },
+          {
+            "path": "docs/kurulum_15.md",
+            "bytes": 2023,
+            "chars": 2023,
+            "sha256": "3306f2ceac6e0861711cc6fd6898f55a6f1a4641797cfd69e5d6da2dd932a268"
+          },
+          {
+            "path": "docs/kurulum_16.md",
+            "bytes": 1541,
+            "chars": 1541,
+            "sha256": "cd1691506bb7373936f634ce968feca4aaa37c09e090b879b37ebdecb2c4e0a5"
+          },
+          {
+            "path": "db/seed_17.sql",
+            "bytes": 3075,
+            "chars": 3075,
+            "sha256": "1a5eb23f67f88ae50d90b056d4895b90887bd948a8398aed7f1fea908e76e3be"
+          },
+          {
+            "path": "logs/uygulama_18.log",
+            "bytes": 2618,
+            "chars": 2618,
+            "sha256": "1c39ffe25bf767c8e132f635e1cd7be0dcd0bcefa50dec818914e8bb20c728fb"
+          },
+          {
+            "path": "app/envanter/servis_19.py",
+            "bytes": 6867,
+            "chars": 6867,
+            "sha256": "870c9a4cb316cde08f173cc3560d36d98c307fc71a6236e17938a181b263eece"
+          }
+        ]
+      }
+    }
+  },
+  "conditions": [
+    {
+      "cid": "R_dense_u01",
+      "scenario": "burst",
+      "users": 1,
+      "sizes": [
+        "medium"
+      ],
+      "jobs_per_user": 1,
+      "duration_s": null,
+      "backend_workers": 1,
+      "file_batch": 8,
+      "llm_conc": 1,
+      "cold": false,
+      "warmup": true,
+      "barrier": true,
+      "stagger_s": 0.0,
+      "deadline_s": 1800,
+      "reps": 1,
+      "group": "regression"
+    }
+  ],
+  "defaults": {
+    "backend_workers": 1,
+    "file_batch": 8,
+    "llm_conc": 1
+  },
+  "poll_interval_s": 0.5
+}

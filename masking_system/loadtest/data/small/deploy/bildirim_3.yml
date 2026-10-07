@@ -1,0 +1,37 @@
+servisler:
+  - ad: musteri
+    adres: 198.51.100.32
+    host: envanter-db5.intra.ornek.local
+    anahtar: "OonqiPAkjfjfMXP5Mn4jRjwVeCDe"
+    sorumlu: "Ebru Yilmazer"
+    replika: 5
+  - ad: faturalama
+    adres: 198.51.100.136
+    host: bildirim-app8.intra.ornek.local
+    anahtar: "fDh4ixtrz7YF8PYIgeS2aiKHEsqE"
+    sorumlu: "Zeynep Ozturkmen"
+    replika: 4
+  - ad: musteri
+    adres: 203.0.113.76
+    host: abonelik-mq9.intra.ornek.local
+    anahtar: "FFn1Hz4N7mKekUwF01MdIQCPXRV4"
+    sorumlu: "Serkan Kilicaslan"
+    replika: 4
+  - ad: envanter
+    adres: 198.51.100.12
+    host: envanter-app1.intra.ornek.local
+    anahtar: "KkjrAZsbH9JBsKBM5FZXoc8Ke9ZM"
+    sorumlu: "Derya Kaplanoglu"
+    replika: 2
+  - ad: raporlama
+    adres: 198.51.100.249
+    host: tahsilat-mq4.intra.ornek.local
+    anahtar: "8JWdMeLiTRoPIyFuygCEnAJV6GbZ"
+    sorumlu: "Hakan Gunduzer"
+    replika: 1
+  - ad: tahsilat
+    adres: 203.0.113.29
+    host: abonelik-app7.intra.ornek.local
+    anahtar: "xfxWt4nqtSHrM50HifvpJ3olw2Dg"
+    sorumlu: "Zeynep Aksoyhan"
+    replika: 3

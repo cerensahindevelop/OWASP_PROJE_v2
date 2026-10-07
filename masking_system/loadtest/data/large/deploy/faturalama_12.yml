@@ -1,0 +1,55 @@
+servisler:
+  - ad: raporlama
+    adres: 192.0.2.3
+    host: faturalama-mq6.intra.ornek.local
+    anahtar: "RmacggN1MRmLZDLpa1Pdu9BVWvoy"
+    sorumlu: "Burak Demirkiran"
+    replika: 2
+  - ad: abonelik
+    adres: 192.0.2.12
+    host: kimlik-db9.intra.ornek.local
+    anahtar: "o5Qmvwq41J095CpKyfMIbA2F2X3I"
+    sorumlu: "Kerem Dogancay"
+    replika: 1
+  - ad: bildirim
+    adres: 203.0.113.98
+    host: tahsilat-app9.intra.ornek.local
+    anahtar: "tN5PMK6HZ8LYDFS0ZnYFcbCc3HM4"
+    sorumlu: "Ceren Polatkan"
+    replika: 1
+  - ad: musteri
+    adres: 192.0.2.22
+    host: tahsilat-cache1.intra.ornek.local
+    anahtar: "BvcXCD6Urx0V81MgShdirK0N47dr"
+    sorumlu: "Ebru Aydinlioglu"
+    replika: 5
+  - ad: kimlik
+    adres: 203.0.113.187
+    host: musteri-app3.intra.ornek.local
+    anahtar: "Hx2WBrQafDPSciuHLnIVhyu2mbRX"
+    sorumlu: "Ayse Demirkiran"
+    replika: 5
+  - ad: kimlik
+    adres: 203.0.113.218
+    host: bildirim-db9.intra.ornek.local
+    anahtar: "ePWpzHn8ZupRFTWCVD4BqGkEvC42"
+    sorumlu: "Mustafa Kaplanoglu"
+    replika: 1
+  - ad: raporlama
+    adres: 192.0.2.80
+    host: tahsilat-app1.intra.ornek.local
+    anahtar: "T9PkPwAAszWhxhBTaty2YeUfvGV2"
+    sorumlu: "Ahmet Gunduzer"
+    replika: 2
+  - ad: musteri
+    adres: 203.0.113.116
+    host: envanter-mq3.intra.ornek.local
+    anahtar: "VHGQcD5amkR4RfvrTJuuem46HQd6"
+    sorumlu: "Mehmet Arslanbey"
+    replika: 1
+  - ad: raporlama
+    adres: 203.0.113.166
+    host: raporlama-mq1.intra.ornek.local
+    anahtar: "MUtV1VTaDSmXMNIaJtAmmtgQ76DD"
+    sorumlu: "Fatma Kilicaslan"
+    replika: 4

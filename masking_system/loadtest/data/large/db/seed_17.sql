@@ -1,0 +1,21 @@
+-- ornek veri yukleme
+CREATE TABLE musteri (id INT, ad VARCHAR(80), tckn CHAR(11), eposta VARCHAR(120), telefon VARCHAR(20), iban VARCHAR(32));
+INSERT INTO musteri VALUES (1, 'Ceren Dogancay', '11710018346', 'ceren.dogancay@kurum-ornek.com.tr', '+90 559 546 36 53', 'TR962104959847228971387134');
+INSERT INTO musteri VALUES (2, 'Mehmet Ozturkmen', '11146679128', 'mehmet.ozturkmen@kurum-ornek.com.tr', '+90 558 397 13 78', 'TR947115892684605860721377');
+INSERT INTO musteri VALUES (3, 'Burak Polatkan', '30355222574', 'burak.polatkan@kurum-ornek.com.tr', '+90 547 294 48 40', 'TR173047723670243848543285');
+INSERT INTO musteri VALUES (4, 'Ceren Kilicaslan', '73763667094', 'ceren.kilicaslan@kurum-ornek.com.tr', '+90 546 535 37 59', 'TR367587293361039060760289');
+INSERT INTO musteri VALUES (5, 'Ebru Celikbas', '31221316380', 'ebru.celikbas@kurum-ornek.com.tr', '+90 532 287 84 95', 'TR267388336315764393608724');
+INSERT INTO musteri VALUES (6, 'Ayse Yilmazer', '96151768890', 'ayse.yilmazer@kurum-ornek.com.tr', '+90 532 915 22 69', 'TR610639716786470391423229');
+INSERT INTO musteri VALUES (7, 'Mehmet Erdemli', '92764512332', 'mehmet.erdemli@kurum-ornek.com.tr', '+90 540 779 90 20', 'TR425547149547427187739582');
+INSERT INTO musteri VALUES (8, 'Onur Aksoyhan', '95740280454', 'onur.aksoyhan@kurum-ornek.com.tr', '+90 555 221 47 99', 'TR594763515511340379336383');
+INSERT INTO musteri VALUES (9, 'Derya Korkmazer', '28576921628', 'derya.korkmazer@kurum-ornek.com.tr', '+90 532 766 22 99', 'TR835244335642502435604857');
+INSERT INTO musteri VALUES (10, 'Ahmet Dogancay', '62296051562', 'ahmet.dogancay@kurum-ornek.com.tr', '+90 531 561 25 73', 'TR553933247949647209358013');
+INSERT INTO musteri VALUES (11, 'Hakan Aksoyhan', '92497993484', 'hakan.aksoyhan@kurum-ornek.com.tr', '+90 530 612 62 57', 'TR319433500334579423495412');
+INSERT INTO musteri VALUES (12, 'Tolga Arslanbey', '30863317236', 'tolga.arslanbey@kurum-ornek.com.tr', '+90 543 962 23 33', 'TR379951800830753269725137');
+INSERT INTO musteri VALUES (13, 'Ceren Kaplanoglu', '42900119376', 'ceren.kaplanoglu@kurum-ornek.com.tr', '+90 533 960 66 26', 'TR424485226176565358609871');
+INSERT INTO musteri VALUES (14, 'Burak Korkmazer', '94910436646', 'burak.korkmazer@kurum-ornek.com.tr', '+90 555 497 38 66', 'TR812077169845820740460666');
+INSERT INTO musteri VALUES (15, 'Derya Dogancay', '24936538550', 'derya.dogancay@kurum-ornek.com.tr', '+90 551 642 45 81', 'TR614914900333227880744355');
+INSERT INTO musteri VALUES (16, 'Selin Celikbas', '71679237530', 'selin.celikbas@kurum-ornek.com.tr', '+90 552 803 87 29', 'TR279116319878178948454683');
+INSERT INTO musteri VALUES (17, 'Mehmet Gunduzer', '61102587820', 'mehmet.gunduzer@kurum-ornek.com.tr', '+90 539 880 71 23', 'TR528774832697860854673691');
+INSERT INTO musteri VALUES (18, 'Mehmet Polatkan', '96593291048', 'mehmet.polatkan@kurum-ornek.com.tr', '+90 555 150 73 32', 'TR406057844692717553694559');
+INSERT INTO musteri VALUES (19, 'Derya Erdemli', '81927585320', 'derya.erdemli@kurum-ornek.com.tr', '+90 557 819 37 44', 'TR171173856896220135584207');

@@ -1,0 +1,60 @@
+{
+  "kayitlar": [
+    {
+      "servis": "kimlik",
+      "adres": "203.0.113.27",
+      "host": "bildirim-cache3.intra.ornek.local",
+      "token": "FELKKLOz8rYlZHON5sEqarep6ls1vFygn9qV",
+      "iletisim": "kerem.celikbas@kurum-ornek.com.tr"
+    },
+    {
+      "servis": "musteri",
+      "adres": "198.51.100.132",
+      "host": "tahsilat-db3.intra.ornek.local",
+      "token": "QdMYCtFeGQDS8s1if1ZrxpcK2CsUULEYikXL",
+      "iletisim": "tolga.celikbas@kurum-ornek.com.tr"
+    },
+    {
+      "servis": "kimlik",
+      "adres": "192.0.2.57",
+      "host": "musteri-app6.intra.ornek.local",
+      "token": "QpfRBu3KVqe8uIw73AuGIVm6Pc3Eg4crmwWe",
+      "iletisim": "gizem.sahinkaya@kurum-ornek.com.tr"
+    },
+    {
+      "servis": "bildirim",
+      "adres": "198.51.100.222",
+      "host": "bildirim-mq6.intra.ornek.local",
+      "token": "7YgIolOMsTTlIAPJX6SeRYjMrAGpn0psvKu8",
+      "iletisim": "burak.erdemli@kurum-ornek.com.tr"
+    },
+    {
+      "servis": "bildirim",
+      "adres": "198.51.100.14",
+      "host": "bildirim-mq6.intra.ornek.local",
+      "token": "aXI7V1iJpiuDGYyv5MuZwMNdZZM9J1qTESUc",
+      "iletisim": "ebru.korkmazer@kurum-ornek.com.tr"
+    },
+    {
+      "servis": "raporlama",
+      "adres": "192.0.2.222",
+      "host": "musteri-app4.intra.ornek.local",
+      "token": "03zgUYAglSBAGaNAOd4rYqbnmHiRtqA4qBrJ",
+      "iletisim": "ahmet.aksoyhan@kurum-ornek.com.tr"
+    },
+    {
+      "servis": "bildirim",
+      "adres": "192.0.2.144",
+      "host": "raporlama-mq8.intra.ornek.local",
+      "token": "6tcNrANXqRwc7d5f4WMm2xFAVBAITtcYv0TD",
+      "iletisim": "melis.erdemli@kurum-ornek.com.tr"
+    },
+    {
+      "servis": "tahsilat",
+      "adres": "203.0.113.62",
+      "host": "musteri-db8.intra.ornek.local",
+      "token": "qSprfhNaegNijIbruvTlC8POXubK2LxNbscO",
+      "iletisim": "mustafa.gunduzer@kurum-ornek.com.tr"
+    }
+  ]
+}

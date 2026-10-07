@@ -41,3 +41,13 @@ web_outputs/
 # IDE
 .vscode/
 .idea/
+
+# Yuk testi ham olcumleri (tekrar klasorleri, istek/dosya bazli CSV, loglar)
+# yerelde kalir; raporlar, ozetler ve grafikler commit edilir.
+loadtest/results/*/*/
+!loadtest/results/*/charts/
+loadtest/results/*/*_all.csv
+!loadtest/results/*/hw_summary.csv
+loadtest/results/**/*.log
+loadtest/results/_kirli_tekrarlar/
+loadtest/results/_smoke_v1_eski_veri/

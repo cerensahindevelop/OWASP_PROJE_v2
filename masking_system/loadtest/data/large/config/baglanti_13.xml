@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<yapilandirma>
+  <baglanti ad="faturalama">
+    <sunucu>envanter-app7.intra.ornek.local</sunucu>
+    <kullanici>faturalama_svc</kullanici>
+    <parola>Kis2019!LZMj4</parola>
+    <ip>198.51.100.101</ip>
+  </baglanti>
+  <baglanti ad="abonelik">
+    <sunucu>musteri-db4.intra.ornek.local</sunucu>
+    <kullanici>abonelik_svc</kullanici>
+    <parola>Bahar2025!6R150</parola>
+    <ip>192.0.2.196</ip>
+  </baglanti>
+  <baglanti ad="tahsilat">
+    <sunucu>kimlik-mq9.intra.ornek.local</sunucu>
+    <kullanici>tahsilat_svc</kullanici>
+    <parola>Kis2024!PxPr3</parola>
+    <ip>192.0.2.77</ip>
+  </baglanti>
+  <baglanti ad="musteri">
+    <sunucu>abonelik-db1.intra.ornek.local</sunucu>
+    <kullanici>musteri_svc</kullanici>
+    <parola>Guz2020!UoDva</parola>
+    <ip>203.0.113.243</ip>
+  </baglanti>
+  <baglanti ad="musteri">
+    <sunucu>faturalama-mq6.intra.ornek.local</sunucu>
+    <kullanici>musteri_svc</kullanici>
+    <parola>Guz2025!ycFio</parola>
+    <ip>198.51.100.75</ip>
+  </baglanti>
+  <baglanti ad="kimlik">
+    <sunucu>abonelik-app1.intra.ornek.local</sunucu>
+    <kullanici>kimlik_svc</kullanici>
+    <parola>Kis2022!f6Szi</parola>
+    <ip>192.0.2.222</ip>
+  </baglanti>
+  <baglanti ad="envanter">
+    <sunucu>musteri-mq6.intra.ornek.local</sunucu>
+    <kullanici>envanter_svc</kullanici>
+    <parola>Kis2021!3Vlb1</parola>
+    <ip>192.0.2.161</ip>
+  </baglanti>
+  <baglanti ad="musteri">
+    <sunucu>bildirim-cache3.intra.ornek.local</sunucu>
+    <kullanici>musteri_svc</kullanici>
+    <parola>Bahar2019!5KfA3</parola>
+    <ip>198.51.100.28</ip>
+  </baglanti>
+  <baglanti ad="envanter">
+    <sunucu>envanter-app2.intra.ornek.local</sunucu>
+    <kullanici>envanter_svc</kullanici>
+    <parola>Yaz2023!Ackpb</parola>
+    <ip>203.0.113.161</ip>
+  </baglanti>
+</yapilandirma>
