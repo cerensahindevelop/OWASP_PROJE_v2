@@ -78,9 +78,13 @@ _REPAIRED_CONFIDENCE = "orta"
 _REPAIRED_REASON = "LLM bulgu semasi bozuktu; deger metinde birebir dogrulandi"
 
 
-# Kesilen chunk'i bolme sinirlari: en fazla 3 kez bolunur, parca en az 800 karakter.
+# Yanit uzunlugu girdi uzunluguyla orantili degildir: 1 KB'lik yogun bir
+# SQL kaydi bile cok sayida bulgu uretebilir. Kesilen parcalarin 200 karaktere
+# kadar kuculmesine izin ver; yalnizca length hatasi yeniden taranir. Derinlik
+# siniri ayni kalir (orijinal parca basina en fazla 15 istek), bitmeyen model
+# yanitlari yine dosyayi bloke eder.
 _MAX_SPLIT_DEPTH = 3
-_MIN_SPLIT_CHARS = 800
+_MIN_SPLIT_CHARS = 200
 
 
 _PROMPT_PATH = Path(__file__).with_name("llm_prompt.txt")

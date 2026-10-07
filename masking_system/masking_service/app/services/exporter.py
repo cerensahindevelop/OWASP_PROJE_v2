@@ -2437,7 +2437,7 @@ def _acquire_write_lock(db: Session, run_id: int) -> None:
     db.execute(sql_text("UPDATE maskeleme_calismalari SET durum = durum WHERE id = :id"), {"id": run_id})
 
 
-def _mark_run_failed(db: Session, run_id: int) -> None:
+def _mark_run_failed(db: Session, run_id: int) -> bool:
     """Ara commit'lerden sonra kalici olan run'i 'failed' yapar.
 
     Aksi halde 'in_progress' kalan run ayni proje/sicil/branch icin yeni
@@ -2445,9 +2445,11 @@ def _mark_run_failed(db: Session, run_id: int) -> None:
     run recover-output ile kapatilabilir.
     """
     try:
+        _acquire_write_lock(db, run_id)
         row = db.get(MaskingRun, run_id)
         if row is None or row.status != "in_progress":
-            return
+            db.commit()
+            return True
         row.status = "failed"
         row.completed_at = datetime.now(timezone.utc)
         db.add(AuditLog(
@@ -2455,8 +2457,10 @@ def _mark_run_failed(db: Session, run_id: int) -> None:
             detail="Export yarida kesildi; cikti yayimlanmadi, onceki hedef korundu.",
         ))
         db.commit()
+        return True
     except Exception:
         db.rollback()
+        return False
 
 
 # Export akisinin ana giris noktasi: bir proje klasorunu tarar, her dosyayi
@@ -2509,16 +2513,13 @@ async def export_project(
         raise ExportInProgressError(
             "bu proje/sicil/branch icin zaten devam eden export var (eszamanli istek tespit edildi)"
         ) from exc
-    except OperationalError as exc:
-        # SQLite kilit modeli geregi bazen IntegrityError yerine "database is
-        # locked" hatasi gelir - kullaniciya ayni temiz mesaj gosterilir.
+    except OperationalError:
+        # Baska bir projenin yazma kilidi, bu baglamda ikinci bir export
+        # oldugunu kanitlamaz. Asil DB hatasini yanlis bir conflict'e cevirme.
         db.rollback()
-        if "database is locked" in str(exc).lower():
-            raise ExportInProgressError(
-                "bu proje/sicil/branch icin zaten devam eden export var (eszamanli istek tespit edildi)"
-            ) from exc
         raise
 
+    run_id = run.id
     report = ExportReport(
         run_id=run.id,
         context_id=context.id,
@@ -2531,6 +2532,7 @@ async def export_project(
     )
 
     failed = False
+    failure_recorded = True
     publication = None
     next_detection: asyncio.Future | None = None
     # Faz A/C/E'de olusturulan gorevler bu baglami kopyalar ve ayni toplayiciya yazar.
@@ -2542,6 +2544,11 @@ async def export_project(
     previous_expire_on_commit = db.expire_on_commit
     db.expire_on_commit = False
     try:
+        # Run kalici olmadan kurtarma gunlugu olusmali. Bu yalnizca ayri
+        # staging dizinini hazirlar; mevcut hedef preflight/publish'e kadar
+        # degismez. Model kurulurken kapanan surec recover-output ile onarilir.
+        publication = OutputPublication(target, run.id)
+        db.commit()
         active_rules = load_active_rules(db)
         rule_names_by_id = {r.id: r.rule_name for r in active_rules}
         rules_by_name = {r.rule_name: r for r in active_rules}
@@ -2551,10 +2558,14 @@ async def export_project(
         active_presidio_rules = load_active_presidio_rules(db)
         category_restrictions = load_file_category_restrictions(db)
         decision_policy = LearnedDecisionPolicy.load(db, context.id)
+        # Kurallar ve kararlar bu ise ait deger nesneleridir. Pahali spaCy
+        # kurulumu boyunca DB transaction'i veya yazma kilidi tutma.
+        db.commit()
         orchestrator = build_orchestrator(
             active_rules, runtime_params, active_presidio_rules, category_restrictions,
             decision_policy=decision_policy,
         )
+        _acquire_write_lock(db, run.id)
         # Bir detector katmani (bkz. PresidioDetector.is_degraded) bu
         # calisma icin dusuk-kapasiteli fallback moda gectiyse, bunu
         # SESSIZCE gecmeyiz: run-genelinde bir AuditLog kaydi eklenir ve
@@ -2723,7 +2734,6 @@ async def export_project(
                 )
 
         # Cakisma preflight'i basarili olmadan mevcut hedefe dokunulmaz.
-        publication = OutputPublication(target, run.id)
         output_target = publication.stage
         # ARA COMMIT'LER: SQLite'ta ilk yazmadan commit'e kadar tek bir yazma
         # kilidi tutulur. Tum export tek transaction olsaydi kilit LLM
@@ -3137,12 +3147,13 @@ async def export_project(
         report.status = "failed"
         await _cancel_detection(next_detection)
         db.rollback()
-        _mark_run_failed(db, run.id)
+        failure_recorded = _mark_run_failed(db, run_id)
         raise
     finally:
         stop_llm_usage(llm_usage_token)
         db.expire_on_commit = previous_expire_on_commit
-        if publication is not None:
+        # DB'ye hata durumu yazilamazsa kurtarma gunlugunu silme.
+        if publication is not None and failure_recorded:
             publication.close()
         if failed:
             report.completed_at = datetime.now(timezone.utc)

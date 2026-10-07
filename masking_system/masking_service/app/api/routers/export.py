@@ -240,10 +240,14 @@ async def start_export_job_upload(
         source_path=str(source_dir), project_name=project_name, sicil_no=sicil_no,
         branch_name=branch_name, target_path=str(target_dir), initiated_by=initiated_by,
     )
-    job = export_jobs.start_job(
-        _export_job_work(kwargs, target_dir.name), _job_error,
-        cleanup=lambda: cleanup_temp_dir(source_dir),
-    )
+    try:
+        job = export_jobs.start_job(
+            _export_job_work(kwargs, target_dir.name), _job_error,
+            cleanup=lambda: cleanup_temp_dir(source_dir),
+        )
+    except BaseException:
+        cleanup_temp_dir(target_dir)
+        raise
     return ExportJobStartOut(job_id=job.job_id)
 
 

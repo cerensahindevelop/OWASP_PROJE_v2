@@ -138,6 +138,22 @@ kilitlememek için ayrı bir thread'de (aynı işlemin dosyaları arasında sır
 Uygulama bir export sırasında kapanırsa
 işlem `recover-output` ile kapatılır (bkz. 4. bölüm).
 
+Arka plan export kuyruğu tek backend sürecinde varsayılan olarak en fazla
+2 işi çalıştırır, 16 ek işi FIFO sırada bekletir. Arayüz bekleyen işler için
+“Sıradasınız” gösterir. Kuyruk dolduğunda yeni istek HTTP 429 ve
+`Retry-After: 30` alır; reddedilen yüklemenin geçici dosyaları temizlenir.
+Sınırlar `EXPORT_JOBS_MAX_RUNNING` ve `EXPORT_JOBS_MAX_QUEUED` ile ayarlanır
+ve backend yeniden başlatıldığında uygulanır. Bu sınırlar arka plan `/jobs`
+uçlarına aittir; eski senkron uçları veya CLI işlerini kapsamaz. Kuyruk ve
+ilerleme kaydı süreç belleğindedir; bu değişiklik çok-worker dağıtımı veya
+yeniden başlatmada otomatik devam desteği sağlamaz.
+
+İş başlangıcında kurtarma günlüğü oluşturulup çalışma kaydı kaydedilir;
+pahalı detector/model kurulumu açık bir DB transaction'ı olmadan yapılır.
+Kurulum hatasında çalışma `failed` olur, eski çıktı korunur. Hata durumu
+DB'ye yazılamazsa günlük offline kurtarma için saklanır. Eksik çıktıların
+dosya sayısı arayüzde ayrıca gösterilir.
+
 Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
 `VLLM_HOST` ve `VLLM_MODEL` değerlerini kendi sunucusunun sunduğu adla ayarlayın.
 
@@ -162,6 +178,13 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
   yeniden deneme ve karantina kuralları aynı kalır. `scripts/benchmark_llm.py`
   de her ölçüm grubunda bu yaşam döngüsünü kullanır. Gerçek hız kazancı model
   ve ağ gecikmesine bağlıdır; bu değişiklik modelin tespit doğruluğunu değiştirmez.
+- **Yoğun veride kesilen yanıt daha küçük parçalarla yeniden taranır.**
+  `finish_reason=length` yanıtında tespit ve son denetim aynı bölme yolunu
+  kullanır; 200 karakterlik alt sınır, kısa ama çok bulgulu SQL dosyalarının
+  da yeniden bölünmesini sağlar. En fazla 3 bölme seviyesi (başlangıç parçası
+  başına en fazla 15 tarama denemesi; geçici bağlantı hatalarının yeniden
+  denemeleri hariç) korunur. Bir alt parça bile tamamlanmazsa dosya
+  bloke edilir; kesilmiş model yanıtı veya kısmi bulgular temiz sonuç sayılmaz.
 - **Dağıtım imza kontrolü dekoratörleri tanır.** `llm_http_scope` importu doğrulanarak
   imzayı koruyan dekoratör olarak işlenir. Doğrudan kurulan veya bir kez yerel
   değişkene atanan servis nesnelerinin metotları da kontrol edilir. Bilinmeyen

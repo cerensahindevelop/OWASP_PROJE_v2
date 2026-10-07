@@ -188,9 +188,9 @@ def test_parallel_jobs_reset_counters_without_sharing_mappings(tmp_path, monkeyp
 def test_one_jobs_setup_failure_does_not_affect_a_concurrent_successful_job(tmp_path, monkeypatch):
     """Two different users' jobs run concurrently in separate threads/
     sessions. One job hits an unexpected crash mid-setup (simulated here via
-    build_orchestrator, which export_project calls inside its outer
-    `try/except BaseException: db.rollback(); raise` boundary) - its own
-    context/run/mapping rows must be fully rolled back, and this must have
+    build_orchestrator). The run is committed before the expensive setup so
+    no write lock is held during it; the crashed run must therefore be closed
+    as 'failed' with no mappings or published output, and this must have
     zero effect on the other, concurrently-running job's context, which
     should complete and persist normally."""
     fail_user = f"{_IDENTITY_PREFIX}-user-fail"
@@ -237,16 +237,25 @@ def test_one_jobs_setup_failure_does_not_affect_a_concurrent_successful_job(tmp_
         assert "ok" in outcomes and outcomes["ok"].status == "completed"
 
         with SessionLocal() as db:
-            # The crashed job's context must not exist at all: get_or_create_context
-            # and the MaskingRun insert both live in the same session/transaction
-            # that export_project's outer except rolled back before re-raising.
+            # The crashed job's run was committed before setup, so it persists -
+            # but closed as 'failed' (not left 'in_progress' to block retries)
+            # and without any mappings or published output.
             fail_row = db.execute(
                 sqltext(
                     "SELECT id FROM maskeleme_baglamlari WHERE proje_adi=:p AND personel_no=:pn AND branch_adi=:b"
                 ),
                 {"p": fail_project, "pn": fail_user, "b": "pytest-branch"},
             ).first()
-            assert fail_row is None, "basarisiz job'un baglam/mapping kaydi rollback edilmemis"
+            assert fail_row is not None
+            fail_statuses = db.execute(
+                sqltext("SELECT durum FROM maskeleme_calismalari WHERE baglam_id=:c"), {"c": fail_row[0]}
+            ).scalars().all()
+            assert fail_statuses == ["failed"], "basarisiz job'un calismasi failed olarak kapatilmamis"
+            fail_count = db.execute(
+                sqltext("SELECT count(*) FROM deger_eslemeleri WHERE baglam_id=:c"), {"c": fail_row[0]}
+            ).scalar()
+            assert fail_count == 0, "basarisiz job mapping yazmis"
+            assert not (tmp_path / "out_fail").exists(), "basarisiz job cikti yayimlamis"
 
             ok_row = db.execute(
                 sqltext(

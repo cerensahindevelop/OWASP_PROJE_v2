@@ -19,10 +19,9 @@ _ENV_FILE = Path(__file__).resolve().parent.parent.parent.parent / ".env"
 # Postgres'ten SQLite'a bilerek gecildi: intra deploy'da ayri bir DB
 # sunucusu/servisi (Docker, native kurulum, ag/firewall/pg_hba.conf
 # yapilandirmasi) kurmaya gerek kalmiyor - uygulama tek bir dosyaya
-# yaziyor. Coklu-yazici (concurrent write) senaryosu yoktur: export/unmask
-# DB'ye YAZAN kisimlar zaten sirali/tek-coroutine calisir (bkz.
-# app/services/exporter.py Faz B/D dokstring'i), bu yuzden SQLite'in
-# tek-yazarli kilit modeli bir kisitlama yaratmaz.
+# yaziyor. Bir isin yazma fazlari siralidir, ancak farkli isler ayni anda
+# yazabilir. Bu nedenle transaction'lar kisa tutulur; pahali model kurulumu
+# ve LLM cagrilari yazma kilidi disinda yapilir (bkz. exporter.py).
 #
 # `path` alaninin kod icinde VARSAYILAN DEGERI VAR (digre ayar gruplarindan
 # farkli olarak) - bir dosya yolu, host/parola gibi ortam-ozel/hassas bir
@@ -467,6 +466,13 @@ class LockfileSettings(BaseSettings):
         return tuple(part.strip().lower() for part in self.public_registry_hosts.split(",") if part.strip())
 
 
+class ExportJobSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="EXPORT_JOBS_", env_file=_ENV_FILE, extra="ignore")
+
+    max_running: int = Field(2, ge=1, le=32, description="Tek backend surecinde calisan export islerinin ust siniri.")
+    max_queued: int = Field(16, ge=0, le=1000, description="Calisan islere ek kabul edilecek bekleyen is sayisi.")
+
+
 class Settings:
     # Her alt ayar grubunu kendi ortam degiskenlerinden okuyarak baslatir.
     def __init__(self) -> None:
@@ -479,6 +485,7 @@ class Settings:
         self.encoding = EncodingSettings()
         self.scan = ScanSettings()
         self.lockfile = LockfileSettings()
+        self.export_jobs = ExportJobSettings()
 
     # Geriye donuk uyumluluk icin duz erisim: settings.database_url
     @property

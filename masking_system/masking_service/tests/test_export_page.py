@@ -21,6 +21,17 @@ def _report(**overrides):
     return SimpleNamespace(**values)
 
 
+def test_waiting_job_is_visible_to_user(monkeypatch):
+    states = iter([SimpleNamespace(status="queued"), SimpleNamespace(status="completed", result="done")])
+    messages = []
+    bar = SimpleNamespace(progress=lambda value, text: messages.append(text), empty=lambda: None)
+    monkeypatch.setattr(export_page.st, "progress", lambda *a, **kw: bar)
+    monkeypatch.setattr(export_page.api_client, "get_export_job", lambda _: next(states))
+    monkeypatch.setattr(export_page.time, "sleep", lambda _: None)
+    assert export_page._wait_for_export_job("queued-job") == "done"
+    assert any("Sıradasınız" in message for message in messages)
+
+
 def _zip(files: dict[str, str]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as zf:

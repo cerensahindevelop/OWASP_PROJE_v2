@@ -78,7 +78,9 @@ def _wait_for_export_job(job_id: str):
             if job.status == "failed":
                 raise ApiError(job.error_message or "Tarama tamamlanamadı.", job.error_detail,
                                job.error_status or 500)
-            if job.total:
+            if job.status == "queued":
+                bar.progress(0.0, text="Sıradasınız. Çalışan işlemler tamamlandığında taramanız başlayacak.")
+            elif job.total:
                 fraction = min(job.processed / job.total, 1.0)
                 if job.processed >= job.total:
                     text = f"{job.total} dosya işlendi — son tutarlılık ve bütünlük kontrolleri yapılıyor..."
@@ -260,6 +262,13 @@ def _render_result(result: dict) -> None:
         st.warning("Tarama tamamlandı ama dikkat edilmesi gereken noktalar var:")
     else:
         st.success("Tarama tamamlandı.")
+
+    ready = getattr(report, "files_ready", None)
+    if ready is not None and ready < report.files_scanned:
+        st.warning(
+            f"Çıktı eksik: taranan {report.files_scanned} dosyanın {ready} tanesi çıktıya hazır. "
+            "Diğer dosyaların neden eklenmediğini aşağıdaki uyarılardan kontrol edin."
+        )
 
     degraded_detectors = getattr(report, "degraded_detectors", None)
     if degraded_detectors:

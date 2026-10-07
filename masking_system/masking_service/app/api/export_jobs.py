@@ -14,10 +14,17 @@ recover-output ile kapatilir (bkz. output_publication.py).
 from __future__ import annotations
 
 import threading
+import queue
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from fastapi import HTTPException
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 _MAX_FINISHED_JOBS = 50
 
@@ -25,7 +32,7 @@ _MAX_FINISHED_JOBS = 50
 @dataclass
 class ExportJob:
     job_id: str
-    status: str = "running"  # running | completed | failed
+    status: str = "queued"  # queued | running | completed | failed
     processed: int = 0
     total: int = 0
     current_file: str | None = None
@@ -67,6 +74,10 @@ class ExportJobRegistry:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def discard(self, job_id: str) -> None:
+        with self._lock:
+            self._jobs.pop(job_id, None)
+
     def _prune(self) -> None:
         finished = sorted(
             (job for job in self._jobs.values() if job.finished_at is not None),
@@ -79,10 +90,56 @@ class ExportJobRegistry:
 registry = ExportJobRegistry()
 
 
+class ExportJobExecutor:
+    """FIFO admission with bounded total work and a fixed daemon worker pool.
+
+    Process-local, like the job registry. This does not enable multi-worker
+    deployment or restart persistence.
+    """
+    def __init__(self, max_running: int, max_queued: int):
+        if max_running < 1 or max_queued < 0:
+            raise ValueError("Invalid export queue limits")
+        self._capacity = threading.BoundedSemaphore(max_running + max_queued)
+        self._queue = queue.Queue()
+        self._max_running = max_running
+        self._threads = []
+        self._lock = threading.Lock()
+
+    def submit(self, work: Callable[[], None]) -> None:
+        if not self._capacity.acquire(blocking=False):
+            raise HTTPException(status_code=429, detail="İşlem kuyruğu dolu. Lütfen daha sonra tekrar deneyin.",
+                                headers={"Retry-After": "30"})
+        try:
+            with self._lock:
+                while len(self._threads) < self._max_running:
+                    thread = threading.Thread(target=self._worker, name="export-worker", daemon=True)
+                    thread.start()
+                    self._threads.append(thread)
+            self._queue.put_nowait(work)
+        except BaseException:
+            self._capacity.release()
+            raise
+
+    def _worker(self) -> None:
+        while True:
+            work = self._queue.get()
+            try:
+                work()
+            except BaseException:
+                # A callback must never kill a worker and strand the queue.
+                logger.error("Export worker callback failed", exc_info=False)
+            finally:
+                self._capacity.release()
+                self._queue.task_done()
+
+
+executor = ExportJobExecutor(settings.export_jobs.max_running, settings.export_jobs.max_queued)
+
+
 def start_job(work: Callable[[Callable[[int, int, str], None]], dict[str, Any]],
               on_error: Callable[[Exception], tuple[str, str | None, int]],
               cleanup: Callable[[], None] | None = None) -> ExportJob:
-    """Run `work(progress)` in a daemon thread; `work` returns the JSON result."""
+    """Queue work; reject excess admission before retaining uploads or job IDs."""
     job = registry.create()
 
     def progress(processed: int, total: int, current: str) -> None:
@@ -90,12 +147,18 @@ def start_job(work: Callable[[Callable[[int, int, str], None]], dict[str, Any]],
             job.processed, job.total, job.current_file = processed, total, current
 
     def runner() -> None:
+        with job.lock:
+            job.status = "running"
         try:
             result = work(progress)
             with job.lock:
                 job.result, job.status = result, "completed"
-        except Exception as exc:  # noqa: BLE001 - reported to the client
-            message, detail, status = on_error(exc)
+        except BaseException as exc:  # worker cancellation must also terminate the job
+            try:
+                message, detail, status = on_error(exc) if isinstance(exc, Exception) else (
+                    "Tarama kesildi.", None, 500)
+            except Exception:
+                message, detail, status = "Tarama tamamlanamadı.", None, 500
             with job.lock:
                 job.status = "failed"
                 job.error_message, job.error_detail, job.error_status = message, detail, status
@@ -108,5 +171,14 @@ def start_job(work: Callable[[Callable[[int, int, str], None]], dict[str, Any]],
             with job.lock:
                 job.finished_at = time.monotonic()
 
-    threading.Thread(target=runner, name=f"export-job-{job.job_id[:8]}", daemon=True).start()
+    try:
+        executor.submit(runner)
+    except BaseException:
+        registry.discard(job.job_id)
+        if cleanup is not None:
+            try:
+                cleanup()
+            except Exception:
+                logger.error("Rejected export upload cleanup failed", exc_info=False)
+        raise
     return job

@@ -155,10 +155,50 @@ def test_small_truncated_chunk_is_not_split(monkeypatch):
         return response(finish='length')
 
     monkeypatch.setattr(llm_recognizer, 'call_vllm', fake)
-    # 1500 karakter < 2 * _MIN_SPLIT_CHARS (800): bolunemez.
-    out = asyncio.run(LLMDetector(settings()).detect('ATLAS ' * 250, {'file_path': 'a.txt'}))
+    # 300 karakter < 2 * _MIN_SPLIT_CHARS (200): bolunemez.
+    out = asyncio.run(LLMDetector(settings()).detect('ATLAS ' * 50, {'file_path': 'a.txt'}))
     assert out.results == [] and 'VALIDATION_FAILED' in out.errors[0]
     assert len(calls) == 1
+
+
+def test_dense_short_input_splits_again_and_preserves_all_offsets(monkeypatch):
+    # Under the old 800-character floor the first ~1200-char child failed.
+    content = ''.join(f"INSERT INTO t VALUES ('SIR_{_letters(i, 3)}', '" + 'x' * 80 + "');\n"
+                      for i in range(20))
+    sent = []
+    values = [f"SIR_{_letters(i, 3)}" for i in range(20)]
+    async def fake(host, timeout, payload, api_key=None):
+        part = payload['messages'][1]['content']
+        sent.append(part)
+        if len(part) > 800:
+            return response(finish='length')
+        return response([finding(value) for value in values if value in part])
+    monkeypatch.setattr(llm_recognizer, 'call_vllm', fake)
+    out = asyncio.run(LLMDetector(settings()).detect(content))
+    assert not out.errors
+    assert [(r.deger, r.start, r.end) for r in out.results] == [
+        (value, content.index(value), content.index(value) + len(value)) for value in values]
+    assert any(400 <= len(part) < 1600 for part in sent)
+    assert len(sent) <= 15
+
+
+def test_dense_short_audit_rescans_every_part(monkeypatch):
+    from app.services import audit_reviewer
+    content = lines(40)
+    content = 'HEAD_KOD ' + content[9:-9] + ' TAIL_KOD'
+    sent = []
+    async def fake(host, timeout, payload, api_key=None):
+        part = payload['messages'][1]['content']
+        sent.append(part)
+        findings = [{'aciklama': 'sensitive', 'ilgili_bolum': value}
+                    for value in ('HEAD_KOD', 'TAIL_KOD') if value in part]
+        return {'choices': [{'finish_reason': 'length' if len(part) > 800 else 'stop',
+                             'message': {'content': json.dumps({'risk_var': bool(findings), 'bulgular': findings})}}]}
+    monkeypatch.setattr(audit_reviewer, 'call_vllm', fake)
+    verdict = asyncio.run(audit_reviewer.audit_masked_text(content, settings(), file_path='dense.sql'))
+    assert verdict.risky
+    assert {f.ilgili_bolum for f in verdict.findings} == {'HEAD_KOD', 'TAIL_KOD'}
+    assert len(sent) <= 15
 
 
 def test_one_failing_chunk_fails_whole_file_without_partial_results(monkeypatch):
