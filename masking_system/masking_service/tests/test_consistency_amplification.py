@@ -242,12 +242,3 @@ def test_reasoning_effort_is_sent_only_when_configured():
     assert "reasoning_effort" not in build_audit_request("t", "m", 1)
     assert build_detection_request("t", "m", 1, reasoning_effort="none")["reasoning_effort"] == "none"
     assert build_audit_request("t", "m", 1, reasoning_effort="none")["reasoning_effort"] == "none"
-
-
-def test_ollama_dev_profile_disables_thinking():
-    from app.core.config import VLLMSettings
-
-    settings = VLLMSettings(_env_file=None, profile="ollama-dev")
-    assert settings.disable_thinking is True
-    assert settings.reasoning_effort == "none"
-    assert VLLMSettings(_env_file=None, profile="ollama-dev", reasoning_effort="").reasoning_effort == ""

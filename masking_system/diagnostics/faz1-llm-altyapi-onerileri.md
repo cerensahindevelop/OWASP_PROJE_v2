@@ -7,11 +7,14 @@ dokunulmadı. Değerler bir başlangıç noktasıdır ve kurum içi GPU/model ü
 
 ## 1. Özet
 
+Not (7 Ekim 2026): `VLLM_PROFILE` kaldırıldı. Değerler `.env`'ye açıkça yazılır;
+aşağıdaki "`vllm-intra` profili" sütunu, `.env.example`'daki kurum içi vLLM
+bloğunun değerleridir.
+
 | Ayar | Kod varsayılanı | `.env.example` (etkin) | `vllm-intra` profili | Öneri |
 |---|---|---|---|---|
-| `VLLM_PROFILE` | – | – | – | `vllm-intra` |
 | `VLLM_MAX_CONCURRENT_REQUESTS` | 1 | (1) | 4 | **4'ten başla**, benchmark ile 1/2/4/8 arasından seç |
-| `VLLM_FILE_BATCH_SIZE` | 8 | (8) | 16 | 16 (profil) |
+| `VLLM_FILE_BATCH_SIZE` | 8 | (8) | 16 | 16 |
 | `VLLM_MAX_TOKENS` | 1024 | 2048 | 2048 | **2048** |
 | `VLLM_TRANSIENT_RETRIES` | 1 | (1) | 2 | **2** |
 | `VLLM_TIMEOUT_SECONDS` | 200 | (200) | (200) | ölçülen tek istek p99 × 3, en az 60 |

@@ -245,13 +245,12 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
   katmanın değiştirmediği ve LLM tespiti hatasız biten dosyalar ikinci LLM
   denetimine gönderilmez. Hız kazancı büyüktür ama ikinci bağımsız kontrol
   kalkar; varsayılan `true`.
-- **Hazır profiller.** `VLLM_PROFILE=ollama-dev` ya da `vllm-intra`, açıkça
-  verilmemiş `VLLM_*` ayarlarını doldurur (tek tek verilen değer her zaman
-  önceliklidir). Eşzamanlılık değerlerini `scripts/benchmark_llm.py` ile doğrulayın.
+- **Ortama göre ayarlar.** Ollama ve kurum içi vLLM için önerilen `VLLM_*`
+  değerleri `.env.example`'da yazılıdır; `.env`'ye açıkça girin. Eşzamanlılık
+  değerlerini `scripts/benchmark_llm.py` ile doğrulayın.
 - **Ollama'da Qwen3.x thinking.** Ollama `chat_template_kwargs`'ı yok sayar;
   `qwen3.6:35b` gibi modellerde thinking'i yalnızca `VLLM_REASONING_EFFORT=none`
-  kapatır (`ollama-dev` profili bunu doldurur). vLLM'de bu ayarı boş bırakıp
-  `VLLM_DISABLE_THINKING=true` kullanın.
+  kapatır. vLLM'de bu ayarı boş bırakıp `VLLM_DISABLE_THINKING=true` kullanın.
 - **vLLM prefix caching.** Sistem promptu her istekte aynı önekle başlar; vLLM'i
   `--enable-prefix-caching` ile başlatmak ilk token gecikmesini düşürür.
 

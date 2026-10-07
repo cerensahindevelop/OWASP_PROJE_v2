@@ -669,8 +669,7 @@ def _validate_and_log_syntax(
         relative_path = str(Path(relative_path).with_suffix(".json"))
     diagnostics: list[str] = []
     error = validate_masked_syntax(
-        relative_path, masked_text, original_text=original_text,
-        sql_dialect=settings.validation.sql_dialect, diagnostics=diagnostics,
+        relative_path, masked_text, original_text=original_text, diagnostics=diagnostics,
     )
     for notice in diagnostics:
         db.add(AuditLog(run_id=run_id, file_path=relative_path, action="skipped", detail=f"validation_warning; {notice}"))
@@ -2233,9 +2232,7 @@ def _try_remediation(
                 failure = FailedCheck.GERI_DONUS
         if failure is None and find_leaked_terms(db, text):
             failure = FailedCheck.ACIK_TERIM
-        if failure is None and validate_masked_syntax(
-            prep.rel, text, original_text=prep.text, sql_dialect=settings.validation.sql_dialect,
-        ):
+        if failure is None and validate_masked_syntax(prep.rel, text, original_text=prep.text):
             failure = FailedCheck.SOZDIZIMI
     except BaseException:
         savepoint.rollback()

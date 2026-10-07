@@ -64,28 +64,31 @@ def test_missing_script_parser_reports_lexical_fallback(monkeypatch):
     assert validate_masked_syntax("a.ts", "const x = (1;", "const x = 1;") is not None
 
 
-@pytest.mark.parametrize("dialect,text", [
-    ("postgres", "SELECT x::text FROM t WHERE x = 1"),
-    ("tsql", "SELECT TOP 1 [value] FROM [table]"),
-    ("mysql", "SELECT `value` FROM `table` LIMIT 1"),
-    ("oracle", "SELECT NVL(value, 0) FROM dual"),
+@pytest.mark.parametrize("text", [
+    "SELECT x::text FROM t WHERE x = 1",
+    "SELECT TOP 1 [value] FROM [table]",
+    "SELECT `value` FROM `table` LIMIT 1",
+    "SELECT NVL(value, 0) FROM dual",
+    "CREATE PROC p AS BEGIN SELECT 1 END",
 ])
-def test_sql_dialect_is_explicit(dialect, text):
-    result = inspect_masked_syntax("a.sql", text, text, sql_dialect=dialect)
+def test_sql_dialect_is_detected_from_source(text):
+    result = inspect_masked_syntax("a.sql", text, text)
     assert result.error is None
     assert result.mode == "parser-based"
     assert not result.warnings
 
 
-def test_unknown_sql_dialect_is_a_visible_fallback():
-    result = inspect_masked_syntax("a.sql", "SELECT 1", "SELECT 2", sql_dialect="unknown-dialect")
-    assert result.error is None
-    assert result.mode == "bracket/quote-based"
-    assert result.warnings
+def test_detected_dialect_catches_non_bracket_breakage():
+    # Ortak gramer T-SQL koseli parantezini cozemez; lehce bulunmazsa bu
+    # bozulma yalnizca bracket/quote kontrolune kalir ve yakalanmaz.
+    original = "SELECT TOP 1 [Ad] FROM [Personel] WHERE [Sicil] = 'A1'"
+    result = inspect_masked_syntax("a.sql", "SELECT TOP 1 [Ad] FROM [Personel] WHERE [Sicil] = = 'S_1'", original)
+    assert result.mode == "parser-based"
+    assert result.error is not None
 
 
 def test_sql_command_fallback_never_claims_parser_success_or_logs_source(caplog):
-    text = "CREATE PROC confidential_source AS BEGIN SELECT 1 END"
+    text = "CREATE OR REPLACE PACKAGE confidential_source AS END"
     result = inspect_masked_syntax("a.sql", text, text)
     assert result.error is None
     assert result.mode == "bracket/quote-based"
@@ -94,7 +97,7 @@ def test_sql_command_fallback_never_claims_parser_success_or_logs_source(caplog)
 
 
 def test_unsupported_sql_source_still_checks_new_bracket_breakage():
-    original = "CREATE PROC confidential_source AS BEGIN SELECT 1 END"
+    original = "CREATE OR REPLACE PACKAGE confidential_source AS END"
     result = inspect_masked_syntax("a.sql", original + "(", original)
     assert result.error is not None
     assert result.warnings

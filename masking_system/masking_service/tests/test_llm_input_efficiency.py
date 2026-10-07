@@ -4,7 +4,6 @@
 - LLM degeri kelime ortasinda eslenmez; cok kisa deger otomatik maskelenmez.
 - Sistem promptunun sonuna dosya baglami eklenir.
 - Denetim chunk'lari es zamanli ve deterministik taranir.
-- VLLM_PROFILE yalnizca acikca verilmemis alanlari doldurur.
 """
 from __future__ import annotations
 
@@ -14,7 +13,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.config import VLLMSettings
 from app.services import audit_reviewer, llm_recognizer
 from app.services.detectors import DetectionResult
 from app.services.llm_detector import LLMDetector
@@ -237,21 +235,3 @@ def test_audit_chunk_failure_cancels_siblings_and_raises(monkeypatch):
         asyncio.run(audit_reviewer.audit_masked_text(content, _settings(host="http://audit-fail.test")))
     assert "late" not in finished
 
-
-# --- Profiller ---------------------------------------------------------------
-
-def test_profile_fills_only_unset_fields(monkeypatch):
-    monkeypatch.setenv("VLLM_PROFILE", "vllm-intra")
-    monkeypatch.setenv("VLLM_MAX_TOKENS", "999")
-    for name in ("VLLM_MAX_CONCURRENT_REQUESTS", "VLLM_DISABLE_THINKING", "VLLM_ENABLED"):
-        monkeypatch.delenv(name, raising=False)
-    settings = VLLMSettings(_env_file=None)
-    assert settings.max_concurrent_requests == 4
-    assert settings.disable_thinking is True
-    assert settings.max_tokens == 999
-
-
-def test_unknown_profile_fails_fast(monkeypatch):
-    monkeypatch.setenv("VLLM_PROFILE", "turbo")
-    with pytest.raises(ValueError, match="VLLM_PROFILE"):
-        VLLMSettings(_env_file=None)

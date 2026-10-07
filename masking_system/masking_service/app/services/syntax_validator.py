@@ -20,7 +20,7 @@ from app.services.syntax_brackets import (
     _check_bracket_and_quote_balance,
     SyntaxValidationError,
 )
-from app.services.syntax_parsers import ParseResult, compare_json_types, parse_document
+from app.services.syntax_parsers import ParseResult, compare_json_types, detect_sql_dialect, parse_document
 from app.services.tabular_scan import csv_delimiter, csv_record_shape
 
 logger = logging.getLogger(__name__)
@@ -114,8 +114,6 @@ def inspect_masked_syntax(
     relative_path: str,
     masked_text: str,
     original_text: str | None = None,
-    *,
-    sql_dialect: str | None = None,
 ) -> SyntaxResult:
     suffix = Path(relative_path).suffix.lower().lstrip(".")
     mode = validation_mode(relative_path)
@@ -132,13 +130,18 @@ def inspect_masked_syntax(
         notices.append(BRACKET_ONLY_NOTICE)
     original: ParseResult | None = None
     masked: ParseResult | None = None
+    sql_dialect = ""
     if mode == "parser-based":
         # Parse the source once when available. SQL source coverage determines
-        # whether the two documents can be compared with this parser at all.
+        # whether the two documents can be compared with this parser at all;
+        # the dialect that parses the source also checks the masked text.
         if original_text is not None:
-            original = parse_document(suffix, original_text, sql_dialect=sql_dialect)
+            if suffix == "sql":
+                sql_dialect, original = detect_sql_dialect(original_text)
+            else:
+                original = parse_document(suffix, original_text)
         if suffix == "sql" and original is not None and (original.error or original.unavailable):
-            notices.append(original.unavailable or "Kaynak SQL secilen lehcede parse edilemedi; bracket/quote kontrolu kullanildi.")
+            notices.append(original.unavailable or "Kaynak SQL desteklenen lehcelerin hicbiriyle parse edilemedi; bracket/quote kontrolu kullanildi.")
         else:
             masked = original if original_text == masked_text and original is not None else parse_document(suffix, masked_text, sql_dialect=sql_dialect)
             unavailable = (original.unavailable if original else None) or masked.unavailable
@@ -188,10 +191,9 @@ def validate_masked_syntax(
     masked_text: str,
     original_text: str | None = None,
     *,
-    sql_dialect: str | None = None,
     diagnostics: list[str] | None = None,
 ) -> str | None:
-    result = inspect_masked_syntax(relative_path, masked_text, original_text, sql_dialect=sql_dialect)
+    result = inspect_masked_syntax(relative_path, masked_text, original_text)
     for notice in result.warnings:
         message = f"validation_mode={result.mode}; {notice}"
         if diagnostics is not None:

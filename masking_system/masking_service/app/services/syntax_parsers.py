@@ -126,6 +126,24 @@ def parse_sql(text: str, dialect: str | None) -> ParseResult:
     return ParseResult()
 
 
+# Kullanici lehce belirtmez. Once ortak gramer denenir; kaynak SQL onunla
+# cozulemezse yaygin lehceler sirayla denenir. Kaynagi temiz cozen ilk lehce
+# maskeli metnin denetiminde de kullanilir. Hicbiri tutmazsa ortak gramerin
+# sonucu doner ve bracket/quote kontrolune dusulur.
+SQL_DIALECT_CANDIDATES = ("", "tsql", "oracle", "postgres", "mysql")
+
+
+def detect_sql_dialect(text: str) -> tuple[str, ParseResult]:
+    fallback: ParseResult | None = None
+    for dialect in SQL_DIALECT_CANDIDATES:
+        result = parse_sql(text, dialect)
+        if not (result.error or result.unavailable):
+            return dialect, result
+        if fallback is None:
+            fallback = result
+    return "", fallback
+
+
 def parse_document(suffix: str, text: str, *, sql_dialect: str | None = None) -> ParseResult:
     if suffix in {"ts", "tsx", "js", "jsx"}:
         return parse_script(suffix, text)

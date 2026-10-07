@@ -82,43 +82,11 @@ class SecuritySettings(BaseSettings):
 # varsayilanla gelir: bu katman strictly opt-in'dir - VLLM_HOST/MODEL dolu
 # olsa bile enabled=false iken vLLM'e hic istek gitmez, mevcut
 # regex/checksum pipeline'i hicbir degisiklik olmadan calismaya devam eder.
-# Hazir ayar profilleri: VLLM_PROFILE ile secilir ve YALNIZCA .env'de/ortamda
-# acikca verilmemis alanlari doldurur - tek tek verilen her VLLM_* degeri
-# profilden onceliklidir. Degerler baslangic noktasidir; eszamanlilik
-# scripts/benchmark_llm.py ile kendi donaniminizda dogrulanmalidir.
-VLLM_PROFILES: dict[str, dict[str, object]] = {
-    # Gelistirici makinesi, Ollama (Parallel:1): tek istek, kucuk yanit butcesi.
-    "ollama-dev": {
-        "max_concurrent_requests": 1,
-        "file_batch_size": 4,
-        "max_file_chars": 6000,
-        "max_tokens": 512,
-        "timeout_seconds": 200.0,
-        # Ollama chat_template_kwargs'i yok sayar; Qwen3.x thinking'i yalnizca
-        # reasoning_effort=none kapatir.
-        "disable_thinking": True,
-        "reasoning_effort": "none",
-    },
-    # Kurum ici vLLM (continuous batching): paralel istek, thinking kapali.
-    "vllm-intra": {
-        "max_concurrent_requests": 4,
-        "file_batch_size": 16,
-        "max_file_chars": 6000,
-        "max_tokens": 2048,
-        "disable_thinking": True,
-        "transient_retries": 2,
-    },
-}
-
-
+# Ortama gore degerler (Ollama / kurum ici vLLM) .env'de acikca verilir; bkz.
+# .env.example. Eszamanlilik scripts/benchmark_llm.py ile kendi donaniminizda
+# dogrulanmalidir.
 class VLLMSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VLLM_", env_file=_ENV_FILE, extra="ignore")
-
-    profile: Literal["", "ollama-dev", "vllm-intra"] = Field(
-        "",
-        description="Hazir ayar profili (ollama-dev | vllm-intra). Yalnizca acikca verilmemis "
-        "VLLM_* alanlarini doldurur; bos ise kod varsayilanlari gecerlidir.",
-    )
 
     enabled: bool = Field(
         False,
@@ -242,19 +210,6 @@ class VLLMSettings(BaseSettings):
         "gecirilmez. Hiz kazanci buyuktur ama ikinci bagimsiz goz kalkar; varsayilan true.",
     )
 
-    # Secilen profilin degerlerini, acikca verilmemis alanlara yazar.
-    @model_validator(mode="before")
-    @classmethod
-    def apply_profile(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        profile = str(data.get("profile") or "").strip()
-        if profile and profile not in VLLM_PROFILES:
-            raise ValueError(f"VLLM_PROFILE bilinmiyor: {profile} (gecerli: {', '.join(VLLM_PROFILES)})")
-        for field_name, value in VLLM_PROFILES.get(profile, {}).items():
-            data.setdefault(field_name, value)
-        return data
-
     # LLM acikken (enabled=true) host/model bos ya da .env.example'daki
     # CHANGE_ME sablon degeriyle birakilmissa hata verir - aksi halde uygulama
     # baslar ama her dosya LLM hatasiyla karantinaya duser. Host sonundaki
@@ -372,9 +327,6 @@ class PresidioSettings(BaseSettings):
 # gruplara dokunmadan mumkun olur.
 class ValidationSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VALIDATION_", env_file=_ENV_FILE, extra="ignore")
-    sql_dialect: str = Field(
-        "", description="SQLGlot lehcesi: postgres, tsql, oracle, mysql vb.; bos ise ortak SQLGlot grameri."
-    )
     # block: maskelemenin sozdizimini bozdugu dosya ciktiya alinmaz (varsayilan).
     # warn: tum gizlilik kontrollerinden gecmis dosya uyariyla ciktiya alinir.
     # Otomatik duzeltme (exporter._try_remediation) ve Java .class her modda bloklar.

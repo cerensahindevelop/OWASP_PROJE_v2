@@ -373,7 +373,7 @@ def main() -> None:
 
     v = settings.vllm
     emit("server_config", job=None, port=args.port, db_path=str(settings.database.resolved_path),
-         vllm_enabled=v.enabled, vllm_host=v.host, vllm_model=v.model, vllm_profile=v.profile,
+         vllm_enabled=v.enabled, vllm_host=v.host, vllm_model=v.model,
          max_concurrent_requests=v.max_concurrent_requests, file_batch_size=v.file_batch_size,
          max_file_chars=v.max_file_chars, chunk_overlap_chars=v.chunk_overlap_chars,
          max_tokens=v.max_tokens, timeout_seconds=v.timeout_seconds, transient_retries=v.transient_retries,

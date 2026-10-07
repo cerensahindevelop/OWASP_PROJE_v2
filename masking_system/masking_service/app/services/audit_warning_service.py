@@ -464,10 +464,7 @@ class AuditWarningService:
         # Export'taki gibi orijinalle karsilastirilir: kaynakta zaten bulunan
         # bir sozdizimi hatasi (orn. yorumlu JSON) maskelemenin hatasi sayilmaz.
         original_text = reverse_text(content, reverse_map)[0]
-        syntax_error = validate_masked_syntax(
-            warning.file_path, content, original_text=original_text,
-            sql_dialect=settings.validation.sql_dialect,
-        )
+        syntax_error = validate_masked_syntax(warning.file_path, content, original_text=original_text)
         if syntax_error and settings.validation.syntax_failure_action == "warn":
             # Gizlilik kontrolleri (tutarlilik, acik terim) gecti; denetim asagida
             # yine calisir. Hata yalnizca uyari olarak kaydedilir.

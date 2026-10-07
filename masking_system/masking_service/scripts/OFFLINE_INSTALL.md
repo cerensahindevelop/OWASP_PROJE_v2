@@ -46,9 +46,10 @@ yeni bir uygulama ortamı kurmak yerine mevcut uygulamanın sanal ortamını se�
 
 - TS/TSX/JS/JSX: Tree-sitter ile yalnız sözdizimi. Import, tip kontrolü ve
   kaynak çalıştırma yoktur.
-- SQL: SQLGlot. `VALIDATION_SQL_DIALECT=tsql`, `postgres`, `oracle`, `mysql`
-  vb. seçilebilir. Boş değer ortak gramerdir. Desteklenmeyen kaynak lehçesi veya
-  eksik parser eski denge kontrolüne döner ve raporda açık uyarı oluşturur.
+- SQL: SQLGlot. Lehçe kaynak dosyadan otomatik bulunur: önce ortak gramer, sonra
+  `tsql`, `oracle`, `postgres`, `mysql` denenir. Hiçbiriyle parse edilemeyen
+  kaynak veya eksik parser eski denge kontrolüne döner ve raporda açık uyarı
+  oluşturur.
 - XML: dış entity/DTD çözümlemeden parse edilir.
 - JSON: kaynak geçerliyse member sırası üzerinden tür ve yapı karşılaştırılır;
   anahtarların maskelenmesi desteklenir. Sayı→string değişimi engellenir.
