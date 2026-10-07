@@ -1,0 +1,3 @@
+condition,rep,gpu,name,uuid,mem_total_mib,samples,util_mean,util_p95,util_max,mem_used_mean_mib,mem_used_max_mib,temp_mean,temp_max,power_mean_w,power_max_w,sm_clock_mean,sm_clock_max,throttle_samples
+R_startup_u10,1,0,NVIDIA RTX A5000,GPU-30667114-4567-bc4a-029b-3375d117048e,24564.0,376,29.319148936170212,39.0,80.0,12772.252659574468,12780.0,72.4813829787234,79.0,124.38351063829786,162.0,1687.6994680851064,1875.0,"{""none"": 339, ""gpu_idle"": 8, ""sw_power_cap"": 29}"
+R_startup_u10,1,1,NVIDIA RTX 4500 Ada Generation,GPU-fbe2dd5d-3644-5c37-3179-8ad50079b7d4,24570.0,376,20.42287234042553,27.0,75.0,17504.5,17512.0,56.56117021276596,70.0,64.2125,81.7,2548.6436170212764,2715.0,"{""none"": 365, ""gpu_idle"": 8, ""sw_power_cap"": 3}"

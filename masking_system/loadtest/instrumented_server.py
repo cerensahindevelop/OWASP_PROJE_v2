@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import contextvars
 import functools
 import json
@@ -229,15 +230,18 @@ def install() -> None:
     llm_detector.LLMDetector.detect = _span("llm_detect_file", file_of=meta_file, is_async=True)(llm_detector.LLMDetector.detect)
 
     def _analyze_serialized(self, content, entities):
-        # Ozgun govdeyle ayni (kilit + _analyze); yalnizca kilit beklemesi ayrica olculur.
+        # Ozgun govdeyle ayni (kilit + varsa spaCy memory_zone + _analyze);
+        # yalnizca kilit beklemesi ayrica olculur.
         t0 = time.monotonic()
         gauge("presidio_waiting", 1)
         with self._analyze_lock:
             t1 = time.monotonic()
             gauge("presidio_waiting", -1)
             gauge("presidio_running", 1)
+            zone = getattr(self, "_nlp_memory_zone", None)
             try:
-                return self._analyze(content, entities=entities)
+                with zone() if zone is not None else contextlib.nullcontext():
+                    return self._analyze(content, entities=entities)
             finally:
                 gauge("presidio_running", -1)
                 emit("presidio_analyze", t0=t0, t_lock=t1, t1=time.monotonic(), chars=len(content))

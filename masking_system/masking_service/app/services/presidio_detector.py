@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,6 +61,31 @@ except ImportError:  # pragma: no cover - exercised implicitly when dependency i
     PatternRecognizer = None
     RecognizerRegistry = None
     NlpArtifacts = None
+
+
+# spaCy modeli yuzlerce MB'dir ve yuklenmesi saniyeler surer. Her calisma kendi
+# kural setiyle AnalyzerEngine kurar, ama NLP motoru surec basina bir kez
+# yuklenip paylasilir. spaCy Language eszamanli cagri icin guvenli olmadigindan
+# motorla birlikte tek bir kilit paylasilir. Yukleme hatasi onbellege alinmaz;
+# sonraki calisma yeniden dener.
+_NLP_ENGINES: dict[tuple[str, str], tuple[object, threading.Lock]] = {}
+_NLP_ENGINES_LOCK = threading.Lock()
+
+
+def _shared_nlp_engine(language: str, spacy_model: str) -> tuple[object, threading.Lock]:
+    key = (language, spacy_model)
+    with _NLP_ENGINES_LOCK:
+        cached = _NLP_ENGINES.get(key)
+        if cached is None:
+            from presidio_analyzer.nlp_engine import NlpEngineProvider
+
+            configuration = {
+                "nlp_engine_name": "spacy",
+                "models": [{"lang_code": language, "model_name": spacy_model}],
+            }
+            engine = NlpEngineProvider(nlp_configuration=configuration).create_engine()
+            cached = _NLP_ENGINES[key] = (engine, threading.Lock())
+        return cached
 
 
 # DB'deki bir Presidio (Katman 2) kuralinin saf veri temsili - RuleSpec'e
@@ -147,6 +173,8 @@ class PresidioDetector:
         # ve analiz ayri thread'lerde yurur (bkz. detect). spaCy Language
         # nesnesi (vocab/StringStore) ve tldextract'in tembel onbellegi
         # eszamanli cagri icin guvenli degil; analyzer'a erisim tek tek yapilir.
+        # Paylasilan spaCy motoru kurulursa bu kilit, motorun kilidiyle
+        # degistirilir (bkz. _shared_nlp_engine).
         self._analyze_lock = threading.Lock()
         self._analyzer = self._build_analyzer()
 
@@ -282,13 +310,7 @@ class PresidioDetector:
             nlp_engine = None
             if self.spacy_model:
                 try:
-                    from presidio_analyzer.nlp_engine import NlpEngineProvider
-
-                    configuration = {
-                        "nlp_engine_name": "spacy",
-                        "models": [{"lang_code": self.language, "model_name": self.spacy_model}],
-                    }
-                    nlp_engine = NlpEngineProvider(nlp_configuration=configuration).create_engine()
+                    nlp_engine, self._analyze_lock = _shared_nlp_engine(self.language, self.spacy_model)
                 except Exception as exc:
                     # Sadece kurulum hatasinin tipini/mesajini logluyoruz (model
                     # adi, dil) - taranan dosya icerigi/hassas veri bu asamada
@@ -342,8 +364,18 @@ class PresidioDetector:
 
     # _analyze'i detector-genelindeki kilit altinda calistirir (bkz. __init__).
     def _analyze_serialized(self, content: str, entities: list[str] | None) -> list[_AnalyzerResult]:
-        with self._analyze_lock:
+        with self._analyze_lock, self._nlp_memory_zone():
             return self._analyze(content, entities=entities)
+
+    # Paylasilan spaCy modeli surec boyunca yasar; her analizde gorulen yeni
+    # kelimeler sozluge (StringStore) eklenip birikir. memory_zone() bu gecici
+    # kayitlari analiz bitince siler. Analizden yalnizca ofset/skor doner, Doc
+    # nesneleri bolge disina tasinmaz.
+    def _nlp_memory_zone(self):
+        nlp_engine = getattr(self._analyzer, "nlp_engine", None)
+        nlp = (getattr(nlp_engine, "nlp", None) or {}).get(self.language)
+        zone = getattr(nlp, "memory_zone", None)
+        return zone() if zone is not None else nullcontext()
 
     # Analyzer varsa metni parcalayip her parcayi Presidio ile tarar
     # (ortusen parcalardaki tekrar bulgulari `seen` ile eler); analyzer
