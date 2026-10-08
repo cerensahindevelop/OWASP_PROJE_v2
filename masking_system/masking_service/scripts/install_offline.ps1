@@ -13,22 +13,24 @@ if (!(Test-Path (Join-Path $ServicePath "app/services/syntax_validator.py"))) {
     throw "Project source missing. Set -ServicePath to the updated masking_service directory."
 }
 
+# Python kodu -c ile gonderilir; Windows PowerShell 5.1 arguman icindeki cift
+# tirnaklari siler. Bu yuzden kodda yalnizca tek tirnak kullanilir.
 $verify = @'
 import hashlib, json, pathlib, platform, sys
 p = pathlib.Path(sys.argv[1])
-m = json.loads(p.read_text(encoding="utf-8"))
-expected = tuple(map(int, m["python"].split(".")))
-if sys.version_info[:2] != expected or sys.platform != "win32":
-    raise SystemExit("This bundle requires Windows / Python " + m["python"])
+m = json.loads(p.read_text(encoding='utf-8'))
+expected = tuple(map(int, m['python'].split('.')))
+if sys.version_info[:2] != expected or sys.platform != 'win32':
+    raise SystemExit('This bundle requires Windows / Python ' + m['python'])
 machine = platform.machine().lower()
-allowed = {"win_amd64": {"amd64", "x86_64"}, "win_arm64": {"arm64", "aarch64"}}
-if machine not in allowed[m["platform"]]:
-    raise SystemExit("CPU architecture does not match bundle target")
-for name, digest in m["files"].items():
-    with (p.parent / "wheels" / name).open("rb") as f:
-        if hashlib.file_digest(f, "sha256").hexdigest() != digest:
-            raise SystemExit("Wheel checksum mismatch: " + name)
-print("Target and wheel checksums verified")
+allowed = {'win_amd64': {'amd64', 'x86_64'}, 'win_arm64': {'arm64', 'aarch64'}}
+if machine not in allowed[m['platform']]:
+    raise SystemExit('CPU architecture does not match bundle target')
+for name, digest in m['files'].items():
+    with (p.parent / 'wheels' / name).open('rb') as f:
+        if hashlib.file_digest(f, 'sha256').hexdigest() != digest:
+            raise SystemExit('Wheel checksum mismatch: ' + name)
+print('Target and wheel checksums verified')
 '@
 & $Python -c $verify $manifestPath
 if ($LASTEXITCODE -ne 0) { throw "Bundle preflight failed" }
