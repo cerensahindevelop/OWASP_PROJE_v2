@@ -119,23 +119,6 @@ def _delete_json(path: str, **kwargs: Any) -> Any:
 
 
 # --------------------------------------------------------------------------
-# Kurallar (filtre_kurallari)
-# --------------------------------------------------------------------------
-
-
-def list_rules(*, include_inactive: bool = True) -> list:
-    return _get_json("/rules", params={"include_inactive": include_inactive})
-
-
-def create_rule(**payload: Any):
-    return _post_json("/rules", json=payload)
-
-
-def set_rule_active(rule_name: str, is_active: bool):
-    return _patch_json(f"/rules/{rule_name}/active", json={"is_active": is_active})
-
-
-# --------------------------------------------------------------------------
 # Export (mask)
 # --------------------------------------------------------------------------
 

@@ -48,14 +48,19 @@ def wheel_inventory(directory: Path, python_version: str, platform: str) -> dict
     return inventory
 
 
-def missing_dependencies(inventory: dict, python_version: str, platform: str) -> list[str]:
-    from packaging.specifiers import SpecifierSet
+def _target_environment(python_version: str, platform: str) -> dict:
     env = default_environment()
     env.update(python_version=python_version, python_full_version=f"{python_version}.0",
                os_name="nt", sys_platform="win32", platform_system="Windows",
                platform_machine="AMD64" if platform == "win_amd64" else "ARM64",
                implementation_name="cpython", platform_python_implementation="CPython",
                implementation_version=f"{python_version}.0", platform_release="11", platform_version="")
+    return env
+
+
+def missing_dependencies(inventory: dict, python_version: str, platform: str) -> list[str]:
+    from packaging.specifiers import SpecifierSet
+    env = _target_environment(python_version, platform)
     extras = {name: {""} for name in inventory}
     missing = set()
     changed = True
@@ -79,6 +84,45 @@ def missing_dependencies(inventory: dict, python_version: str, platform: str) ->
     return sorted(missing)
 
 
+def requirement_roots(path: Path) -> dict[str, set[str]]:
+    """Distributions (with requested extras) a requirements file asks for; follows -r."""
+    roots: dict[str, set[str]] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("-r "):
+            for name, extras in requirement_roots(path.parent / line[3:].strip()).items():
+                roots.setdefault(name, {""}).update(extras)
+        elif line and not line.startswith("-"):
+            requirement = Requirement(line)
+            roots.setdefault(canonicalize_name(requirement.name), {""}).update(requirement.extras)
+    return roots
+
+
+def prune_unreachable(inventory: dict, roots: dict[str, set[str]], python_version: str, platform: str) -> list[str]:
+    """Delete wheels no requirement reaches, e.g. test tools left from earlier downloads."""
+    absent = set(roots) - set(inventory)
+    if absent:
+        raise SystemExit("Requested distributions missing from wheelhouse: " + ", ".join(sorted(absent)))
+    env = _target_environment(python_version, platform)
+    extras = {name: set(wanted) for name, wanted in roots.items()}
+    changed = True
+    while changed:
+        changed = False
+        for name in list(extras):
+            for requirement in inventory[name]["requirements"]:
+                if requirement.marker and not any(requirement.marker.evaluate({**env, "extra": extra}) for extra in extras[name]):
+                    continue
+                dependency = canonicalize_name(requirement.name)
+                wanted = {""} | requirement.extras
+                if dependency in inventory and not wanted <= extras.setdefault(dependency, set()):
+                    extras[dependency] |= wanted
+                    changed = True
+    removed = sorted(set(inventory) - set(extras))
+    for name in removed:
+        inventory.pop(name)["path"].unlink()
+    return removed
+
+
 def write_lock(output: Path, inventory: dict, python_version: str, platform: str) -> None:
     lines = ["# Fully pinned offline installation; verify wheel hashes before use."]
     manifest = {"python": python_version, "platform": platform, "files": {}}
@@ -91,19 +135,25 @@ def write_lock(output: Path, inventory: dict, python_version: str, platform: str
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
+# Intranette kurulum ve calisma icin gerekenlerin acik listesi. Testler, paket
+# hazirlama girdileri (requirements*.txt, constraints) ve yeni migrasyon
+# sablonu (script.py.mako) girmez; kurulum requirements.lock'u kullanir.
+# .env, veritabani ve yuklenmis projeler hicbir zaman pakete girmez.
+_RUNTIME_FILES = ("api_app.py", "streamlit_app.py", "start.py", "alembic.ini", ".streamlit/config.toml")
+_RUNTIME_SCRIPTS = ("benchmark_llm.py", "check_llm_preflight.py", "signature_consistency.py", "write_build_stamp.py")
+
+
 def copy_project_source(output: Path) -> None:
-    """Explicit source allow-list: never include .env, DBs or uploaded projects."""
-    destination = output / "source" / "masking_service"
-    destination.mkdir(parents=True, exist_ok=True)
-    for directory in ("app", "alembic", "tests", "scripts", ".streamlit"):
-        shutil.copytree(SERVICE / directory, destination / directory, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", "secrets.toml", ".env", "*.db"))
-    for filename in ("api_app.py", "streamlit_app.py", "start.py", "start.ps1", "alembic.ini", "pytest.ini",
-                     "requirements.txt", "requirements-intranet.txt", "requirements-validation.txt",
-                     "constraints-offline-windows.txt"):
-        shutil.copy2(SERVICE / filename, destination / filename)
-    for filename in (".env.example", "README.md"):
-        shutil.copy2(SERVICE.parent / filename, output / "source" / filename)
+    destination = output / "masking_service"
+    # Onceki paketten kalan (silinmis) dosyalar karismasin diye bastan kurulur.
+    shutil.rmtree(destination, ignore_errors=True)
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "script.py.mako")
+    for directory in ("app", "alembic"):
+        shutil.copytree(SERVICE / directory, destination / directory, ignore=ignore)
+    for relative in (*_RUNTIME_FILES, *(f"scripts/{name}" for name in _RUNTIME_SCRIPTS)):
+        (destination / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SERVICE / relative, destination / relative)
+    shutil.copy2(SERVICE.parent / ".env.example", output / ".env.example")
     # Surum damgasi: intranette git yok; backend ve preflight karisik surumu
     # bu damgayla yakalar (bkz. app/core/build_info.py).
     subprocess.run([sys.executable, str(SERVICE / "scripts" / "write_build_stamp.py"),
@@ -126,8 +176,8 @@ def main() -> None:
            "--platform", args.platform, "--python-version", args.python_version,
            "--implementation", "cp", "--abi", "cp" + args.python_version.replace(".", ""),
            "--dest", str(wheelhouse)]
+    requirements = SERVICE / ("requirements-validation.txt" if args.validation_only else "requirements-intranet.txt")
     if not args.finalize_only:
-        requirements = SERVICE / ("requirements-validation.txt" if args.validation_only else "requirements-intranet.txt")
         command = pip + ["--find-links", str(SERVICE.parent / "deployment" / "wheels"), "-r", str(requirements)]
         if not args.validation_only:
             command += ["-c", str(SERVICE / "constraints-offline-windows.txt")]
@@ -146,6 +196,10 @@ def main() -> None:
         subprocess.run(pip + ["-c", str(constraints), *missing], check=True)
     else:
         raise SystemExit("Dependency closure could not be resolved")
+    (output / "download-constraints.txt").unlink(missing_ok=True)
+    removed = prune_unreachable(inventory, requirement_roots(requirements), args.python_version, args.platform)
+    if removed:
+        print("Removed wheels no requirement uses: " + ", ".join(removed))
     write_lock(output, inventory, args.python_version, args.platform)
     for filename in ("install_offline.ps1", "verify_validation_offline.py"):
         shutil.copy2(SERVICE / "scripts" / filename, output / filename)

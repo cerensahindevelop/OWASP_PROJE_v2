@@ -1,6 +1,8 @@
 param(
     [string]$Python = "python",
-    [string]$ServicePath = (Join-Path $PSScriptRoot "source/masking_service"),
+    # Paket duzeni (source/masking_service) ya da proje duzeni (masking_service).
+    [string]$ServicePath = $(if (Test-Path (Join-Path $PSScriptRoot "source/masking_service")) {
+        Join-Path $PSScriptRoot "source/masking_service" } else { Join-Path $PSScriptRoot "masking_service" }),
     [string]$VenvPath = (Join-Path $ServicePath ".venv")
 )
 $ErrorActionPreference = "Stop"
@@ -43,4 +45,4 @@ if ($LASTEXITCODE -ne 0) { throw "Offline installation failed" }
 if ($LASTEXITCODE -ne 0) { throw "Dependency check failed" }
 & $venvPython (Join-Path $PSScriptRoot "verify_validation_offline.py") --service-path $ServicePath
 if ($LASTEXITCODE -ne 0) { throw "Offline parser smoke test failed" }
-Write-Host "Offline dependencies and parsers are ready. Configure source/.env, then apply migrations."
+Write-Host "Offline dependencies and parsers are ready. Configure .env in the parent folder of $ServicePath, then apply migrations."

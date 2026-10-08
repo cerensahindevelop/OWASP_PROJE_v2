@@ -254,186 +254,30 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
 - **vLLM prefix caching.** Sistem promptu her istekte aynı önekle başlar; vLLM'i
   `--enable-prefix-caching` ile başlatmak ilk token gecikmesini düşürür.
 
-## 1. İnternetsiz (offline/intra) ortamda kurulum — adım adım (PowerShell)
+## 1. İnternetsiz (offline/intra) ortamda kurulum
 
-Bu bölüm, hiçbir adımda internete çıkmadan, önceden hazırlanmış bir **offline
-kurulum paketini** (flash bellek/USB ile taşınan; projenin gerçek klasör
-yapısıyla birebir aynı — `masking_service\` doğrudan üst seviyede, yanında
-ayrı bir `wheels\` klasörü) hedef Windows makinede sıfırdan, sadece standart
-`pip` komutlarıyla kurmayı anlatır. Tüm komutlar PowerShell'dir.
+Intra makinede kurulum, güncelleme ve kullanım adımları paketle birlikte gelen
+kılavuzdadır: [`masking_service/scripts/OFFLINE_INSTALL.md`](masking_service/scripts/OFFLINE_INSTALL.md)
+(paketteki adı `README.md`).
 
-Paket düzeni (`masking\` = flash bellekteki üst klasör):
+Paketi internetli makinede hazırlamak için (`masking_service` klasöründe):
 
-```
-masking\
-  masking_service\        <- proje kaynak kodu (app, alembic, scripts, ...)
-  wheels\                 <- tum bagimliliklarin Windows/Python 3.14 wheel'leri
-  .env.example
-  README.md                <- bu dosya
+```bash
+.venv/bin/python scripts/build_offline_bundle.py --output <hedef>/masking_system
 ```
 
-### 1) Ön kontrol: Python sürümü ve mimarisi
-
-Hedef (internetsiz) makinede, sırayla çalıştırın:
-
-```powershell
-# Kurulu Python surumunu goster - "Python 3.14.x" DONMELI
-python --version
-```
-
-```powershell
-# CPU mimarisini goster - "AMD64" DONMELI
-python -c "import platform; print(platform.machine())"
-```
-
-İkisinden biri farklıysa **devam etmeyin** — `wheels\` klasörü yalnızca bu
-sürüm/mimari için hazırlandı, başka bir sürümde kurulum paket paket başarısız
-olur.
-
-### 2) Paketi flash bellekten yerel diske kopyala
-
-```powershell
-# Hedef klasoru olustur (zaten varsa hata vermez)
-New-Item -ItemType Directory -Force -Path C:\masking | Out-Null
-```
-
-```powershell
-# Paketin tamamini flash bellekten yerel diske kopyala
-# "E:\" harfini kendi flash belleginizinkiyle degistirin (Get-Volume ile kontrol edebilirsiniz)
-Copy-Item -Recurse -Force "E:\masking\*" C:\masking
-```
-
-```powershell
-# Calisma dizinini yerel kopyaya gecir
-cd C:\masking
-```
-
-```powershell
-# Kopyanin eksiksiz geldigini dogrula - asagidaki 4 ogeyi gormelisiniz:
-# masking_service, wheels, .env.example, README.md
-Get-ChildItem
-```
-
-Kurulumu **her zaman yerel diskten** yapın, flash bellek/USB üzerinde
-doğrudan çalıştırmayın — "Sorun giderme" bölümündeki "database is locked"
-notuna bakın (exFAT/FAT32 SQLite'ın ihtiyaç duyduğu dosya kilitlemeyi düzgün
-desteklemeyebilir).
-
-### 3) Sanal ortamı oluştur ve bağımlılıkları kur
-
-```powershell
-# masking_service klasorune gec
-cd masking_service
-```
-
-```powershell
-# Bos bir sanal ortam (venv) olustur - disaridan hicbir paket getirmez
-python -m venv .venv
-```
-
-```powershell
-# venv'in gercekten olustugunu dogrula - "True" DONMELI
-Test-Path .venv\Scripts\python.exe
-```
-
-```powershell
-# Tum bagimliliklari internete cikmadan, sadece yanindaki wheels/ klasorunden kur
-# --no-index: PyPI'a hic baglanma; --find-links: paketleri bu klasorden bul
-.venv\Scripts\pip.exe install --no-index --find-links ..\wheels -r requirements-intranet.txt
-```
-
-```powershell
-# Kurulan paketler arasinda surum celiskisi olmadigini dogrula - "No broken requirements found." DONMELI
-.venv\Scripts\pip.exe check
-```
-
-```powershell
-# Bir ust klasore geri don (4. adim icin gerekecek)
-cd ..
-```
-
-PowerShell script çalıştırma politikası (`python -m venv` bir script değil,
-gerçek bir program olduğu için genelde sorun çıkarmaz) engel olursa,
-kurumunuzun onaylı yöntemiyle tek seferlik izin verin:
-
-```powershell
-powershell -ExecutionPolicy Bypass -Command "python -m venv masking_service\.venv"
-```
-
-Mevcut bir kurulumu (aynı makinede önceki bir sürümü) güncelliyorsanız, yeni
-bir `.venv` açmayın — mevcut `masking_service\.venv` içindeyken sadece kurulum
-komutunu tekrar çalıştırmanız yeterlidir (üzerine yazar, bozmaz):
-
-```powershell
-cd masking_service
-.venv\Scripts\pip.exe install --no-index --find-links ..\wheels -r requirements-intranet.txt
-cd ..
-```
-
-### 4) `.env` dosyasını hazırla
-
-`.env` dosyası `masking_service\`'in İÇİNDE DEĞİL, onunla aynı seviyede
-(`masking\.env`) olmalıdır — `app/core/config.py` dosyayı repo kökünde arar.
-
-**Yeni kurulum** ise (mevcut bir kurulumu güncelliyorsanız bu adımı tamamen
-atlayıp 5. adıma geçin — mevcut `.env`'i asla üzerine yazmayın):
-
-```powershell
-# Sablon dosyayi gercek .env olarak kopyala
-Copy-Item .env.example .env
-```
-
-```powershell
-# Yeni bir sifreleme anahtari uret ve degiskene ata
-# (bu anahtar olmadan uygulama acilmaz, varsayilani yoktur)
-$key = & "masking_service\.venv\Scripts\python.exe" -c `
-    "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-```powershell
-# Uretilen anahtari .env icindeki SECURITY_ENCRYPTION_KEY satirina yaz
-(Get-Content .env) -replace '^SECURITY_ENCRYPTION_KEY=.*', "SECURITY_ENCRYPTION_KEY=$key" |
-    Set-Content .env
-```
-
-```powershell
-# Anahtarin gercekten yazildigini dogrula - CHANGE_ME DEGIL, uzun rastgele bir deger gormelisiniz
-Select-String -Path .env -Pattern "^SECURITY_ENCRYPTION_KEY="
-```
-
-**Mevcut bir kurulumu güncelliyorsanız** yukarıdaki 3 komutu çalıştırmayın —
-mevcut `.env` dosyasındaki şifreleme anahtarını ve `DB_PATH`'i **koruyun,
-üzerine yazmayın**; aksi halde o ana kadar maskelenmiş veriler geri
-çözülemez hale gelir.
-
-### 5) Veritabanını oluştur
-
-```powershell
-# masking_service klasorune gec
-cd masking_service
-```
-
-```powershell
-# Sema + baslangic kural setini veritabanina uygula (SQLite dosyasi yoksa olusturur)
-.venv\Scripts\python.exe -m alembic upgrade head
-```
-
-```powershell
-# Veritabani dosyasinin gercekten olustugunu dogrula
-Test-Path ..\masking.db
-```
-
-```powershell
-# Bir ust klasore geri don (2. bolumdeki adimlar icin gerekecek)
-cd ..
-```
+Betik Windows/Python 3.14 paketlerini indirir, hiçbir gereksinimin kullanmadığı
+paketleri ayıklar, `requirements.lock` ve `manifest.json`'u yazar ve yalnızca
+intranette gereken dosyaları kopyalar. Oluşan `masking_system` klasörünün tamamı
+flash belleğe kopyalanır. Geliştirme bağımlılıkları (testler dahil)
+`requirements-dev.txt` ile kurulur ve pakete girmez.
 
 ## 2. Çalıştırma (backend + UI, iki ayrı süreç)
 
 ### Hızlı başlatma (tek komut)
 
 ```powershell
-cd C:\masking\masking_service
+cd C:\masking_system\masking_service
 .\start.ps1            # ilk kurulumda: .\start.ps1 --migrate
 ```
 
@@ -496,7 +340,7 @@ sorunu varsa bu yöntem onu tamamen bypass eder). Aşağıdaki adımlar için
 
 ```powershell
 # masking_service klasorune gec
-cd C:\masking\masking_service
+cd C:\masking_system\masking_service
 ```
 
 ```powershell
@@ -513,7 +357,7 @@ Yeni bir PowerShell penceresi açın:
 
 ```powershell
 # masking_service klasorune gec (yeni pencere, venv henuz aktif degil)
-cd C:\masking\masking_service
+cd C:\masking_system\masking_service
 ```
 
 ```powershell

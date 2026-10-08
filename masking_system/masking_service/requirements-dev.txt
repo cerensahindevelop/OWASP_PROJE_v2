@@ -1,0 +1,6 @@
+# Gelistirme makinesi: calisma bagimliliklari + testler. Intra paketine girmez
+# (paket requirements-intranet.txt ile hazirlanir).
+-r requirements.txt
+
+# --- Test (regresyon testleri: overlap resolution, token boundary, ast.parse dogrulamasi) ---
+pytest>=8.0

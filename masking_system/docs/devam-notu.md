@@ -420,7 +420,7 @@ kurulu. Bağımlılıklar repo dışındaki bir venv'e kurulur (her yeni contain
 ```bash
 cd /home/user/OWASP_PROJE_v2/masking_system/masking_service
 python3 -m venv /tmp/venv-mask
-/tmp/venv-mask/bin/pip install -q -r requirements.txt
+/tmp/venv-mask/bin/pip install -q -r requirements-dev.txt
 /tmp/venv-mask/bin/python -m spacy download en_core_web_lg
 ```
 
@@ -430,7 +430,7 @@ python3 -m venv /tmp/venv-mask
 /tmp/venv-mask/bin/pip install -q uv
 /tmp/venv-mask/bin/uv python install 3.14
 /tmp/venv-mask/bin/uv venv -p 3.14 /tmp/venv314
-VIRTUAL_ENV=/tmp/venv314 /tmp/venv-mask/bin/uv pip install -r requirements.txt
+VIRTUAL_ENV=/tmp/venv314 /tmp/venv-mask/bin/uv pip install -r requirements-dev.txt
 /tmp/venv314/bin/python -m spacy download en_core_web_lg
 ```
 
