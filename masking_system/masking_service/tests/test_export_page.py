@@ -342,3 +342,29 @@ def test_size_uses_same_mb_as_scan_limit():
     # uyari onu sinirdan buyukmus gibi "51,9 MB" gostermemeli.
     assert export_page._format_mb(51_885_863) == "49,5 MB"
     assert export_page._format_mb(50 * 1024 * 1024) == "50,0 MB"
+
+
+def test_quarantined_file_button_opens_its_section_on_review_page(monkeypatch):
+    switched = []
+    monkeypatch.setattr(export_page.st, "switch_page", lambda page: switched.append(page))
+    outcome = SimpleNamespace(
+        relative_path="veri/Profiller.json", status="quarantined_pending_audit", final_state="SECURITY_QUARANTINE",
+        failed_check="llm_denetimi", error="",
+    )
+    report = _report(status="completed_with_warnings", outcomes=[outcome], run_id=49)
+    script = (
+        "from app.webapp import export_page\n"
+        "import streamlit as st\n"
+        "st.session_state['_nav_pages'] = {'review': 'onay-sayfasi'}\n"
+        "export_page._render_result(st.session_state['result'])\n"
+    )
+    app = AppTest.from_string(script, default_timeout=APP_TEST_TIMEOUT_SECONDS)
+    app.session_state["result"] = {"report": report, "pending_count": 0, "quarantined_count": 1}
+    app.run()
+
+    assert not app.exception
+    assert any("Onay Bekleyenler ekranının “Karantinadaki dosyalar” bölümünde" in m.value for m in app.markdown)
+    app.button(key="goto_quarantine_0").click().run()
+
+    assert switched == ["onay-sayfasi"]
+    assert app.session_state["review_focus"] == {"run_id": 49, "file_path": "veri/Profiller.json"}

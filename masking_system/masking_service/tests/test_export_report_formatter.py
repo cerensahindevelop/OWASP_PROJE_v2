@@ -155,7 +155,7 @@ def test_coverage_notices_are_info_not_warnings():
     text = format_export_report(report)
     assert "SOZDIZIMI DOGRULAMA UYARILARI" not in text
     assert "Bilgi notlari (dogrulama kapsami" in text
-    assert "1 dosya düz metin olduğu için ayrıca biçim denetimi yapılmadı" in text and "README.md." in text
+    assert "1 dosya çıktıya eklendi. Bunlar düz metin olduğu için" in text and "README.md." in text
     assert "Sorun yok" in text
 
 
@@ -183,8 +183,24 @@ def test_notice_summary_shows_original_names_on_screen_but_report_stays_masked()
     report.validation_warnings.append(f"{label}: validation_mode=structural-only; {STRUCTURAL_ONLY_NOTICE}")
 
     assert report.validation_notice_summary == [
-        "1 dosya düz metin olduğu için ayrıca biçim denetimi yapılmadı; içerik ve geri dönüş "
-        "kontrolleri tamam: cumhurbaskanligi_cevap.txt."
+        "1 dosya çıktıya eklendi. Bunlar düz metin olduğu için ayrıca biçim (sözdizimi) denetimi "
+        "yapılmadı; içerik ve geri dönüş kontrolleri tamam: cumhurbaskanligi_cevap.txt."
     ]
     text = format_export_report(report)
     assert "mask_kurumsal_ifade_3_cevap.txt." in text and "cumhurbaskanligi" not in text
+
+
+def test_notice_does_not_list_a_file_that_was_stopped_later():
+    # Not "ciktiya eklendi" der; sozdizimi asamasindan sonra (orn. yapay zeka
+    # denetiminde) durdurulan dosya bu listede gorunmemeli.
+    from app.services.syntax_validator import STRUCTURAL_ONLY_NOTICE
+
+    report = _base_report()
+    for name in ("README.md", "docs/gizli.md"):
+        report.file_labels[name] = f"{name}#ab12"
+        report.validation_warnings.append(f"{name}#ab12: validation_mode=structural-only; {STRUCTURAL_ONLY_NOTICE}")
+    report.record(FileOutcome("README.md", status="masked", final_state="READY"))
+    report.record(FileOutcome("docs/gizli.md", status="quarantined_pending_audit", final_state="SECURITY_QUARANTINE"))
+
+    [summary] = report.validation_notice_summary
+    assert summary.startswith("1 dosya çıktıya eklendi.") and summary.endswith(": README.md.")

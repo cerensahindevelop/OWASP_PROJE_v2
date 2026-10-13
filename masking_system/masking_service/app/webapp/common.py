@@ -18,6 +18,10 @@ from app.webapp.api_client import ApiError
 
 OPERATION_LABELS = {"mask": "Dışarı Çıkar", "unmask": "Geri Al"}
 
+# Dışarı Çıkar sonucundan Onay Bekleyenler'e geçerken açılacak dosya:
+# {"run_id": int, "file_path": str} ya da None.
+REVIEW_FOCUS_KEY = "review_focus"
+
 STATUS_LABELS = {
     "completed": "Başarılı",
     "completed_with_warnings": "Uyarılı tamamlandı",

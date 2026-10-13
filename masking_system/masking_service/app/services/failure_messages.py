@@ -28,11 +28,11 @@ _LOCK_HINT = (
 )
 _LLM_HINT = "LLM sunucusunun çalıştığını kontrol edip projeyi yeniden dışa aktarın."
 _TARGET_HINT = "Hedef klasörde yer ve yazma izni olduğunu kontrol edip projeyi yeniden dışa aktarın."
-_REVIEW_HINT = "Uyarılar ekranında bulunan değeri inceleyip karar verin."
+_REVIEW_HINT = "Onay Bekleyenler ekranının “Karantinadaki dosyalar” bölümünde bulunan değeri inceleyip karar verin."
 # Sozdizimi hatasi deterministiktir: ayni dosya ayni bulguyla yine bozulur.
 _SYNTAX_HINT = (
     "Projeyi yeniden dışa aktarmak sonucu değiştirmez; aynı maskeleme tekrar oluşur. Konumda gösterilen "
-    "değerin maskelenmesi yanlışsa ya da dosyayı bu haliyle kullanabilecekseniz uyarılar ekranında "
+    "değerin maskelenmesi yanlışsa ya da dosyayı bu haliyle kullanabilecekseniz Onay Bekleyenler ekranında "
     f"“{ACCEPT_SYNTAX_ACTION_LABEL}” seçin (diğer güvenlik kontrolleri yine yapılır). Değilse dosya adını "
     "ve satırı sistem sorumlusuna bildirin."
 )
@@ -74,7 +74,7 @@ _MESSAGES: dict[str, Explanation] = {
         "Kodlanmış veri: base64 ya da hex ile kodlanmış bir metnin içinde hassas bilgi (ör. parola, IP adresi) "
         "bulundu. Sistem kodlanmış bloğun içini maskeleyemediği için dosya çıktıya alınmadı.",
         "Kodlanmış değeri kaynakta kaldırıp projeyi yeniden dışa aktarın. Değer gerçekten hassas değilse "
-        "uyarılar ekranında “Sorun yok, çıktıya ekle” seçin.",
+        "Onay Bekleyenler ekranında “Sorun yok, çıktıya ekle” seçin.",
     ),
     FailedCheck.LLM_TESPIT: (
         "Yapay zekâ: tarama tamamlanamadı; dosyanın güvenliği doğrulanamadı.", _LLM_HINT,

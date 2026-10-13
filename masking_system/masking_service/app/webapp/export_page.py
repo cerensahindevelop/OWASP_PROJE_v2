@@ -23,7 +23,7 @@ import streamlit as st
 from app.webapp import api_client
 from app.webapp.api_client import ApiError
 # page_intro/show_error: ortak baslik ve hata gosterimi yardimcilari.
-from app.webapp.common import page_intro, show_error
+from app.webapp.common import REVIEW_FOCUS_KEY, page_intro, show_error
 # get_identity: aktif kullanicinin (sicil) kimligi; proje/branch bu ekranda
 # her islem icin secilir (render_project_branch_inputs).
 from app.webapp.identity import get_identity, render_project_branch_inputs, validate_project_branch
@@ -459,6 +459,13 @@ def _render_quick_text_result(result: dict) -> None:
         )
 
 
+# Onay Bekleyenler ekranina gecer. focus verilirse ({run_id, file_path}) o
+# dosyanin bolumu orada acik ve listenin basinda gosterilir (bkz. review_page).
+def _goto_review(focus: dict | None) -> None:
+    st.session_state[REVIEW_FOCUS_KEY] = focus
+    st.switch_page(st.session_state["_nav_pages"]["review"])
+
+
 # Rapordaki dosya sayilarindan ("N dosya tarandi, M dosyada bulgu bulundu, ...")
 # tek satirlik ozet bir Turkce cumle uretir.
 def _clean_copied_label(report) -> str:
@@ -558,16 +565,20 @@ def _render_result(result: dict) -> None:
     if quarantined_count:
         st.error(
             f"🔴 {quarantined_count} dosya güvenlik kontrolünde durduruldu ve hedef klasöre KOPYALANMADI. "
-            "Her dosyanın sebebi aşağıda; karar vermek için uyarılar ekranına gidin."
+            "Her dosyanın sebebi aşağıda; karar vermek için Onay Bekleyenler ekranına gidin."
         )
         quarantined = [o for o in report.outcomes if o.status == "quarantined_pending_audit"
                        and o.final_state != "VALIDATION_FAILED"]
         if quarantined:
             with st.expander(f"Durdurulan {len(quarantined)} dosyayı ve sebebini gör", expanded=True):
-                for outcome in quarantined:
-                    st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
-        if st.button("⚠️ Maskeleme Denetim Uyarılarını İncele →", type="primary", key="goto_audit_warnings"):
-            st.switch_page(st.session_state["_nav_pages"]["review"])
+                for index, outcome in enumerate(quarantined):
+                    reason_col, button_col = st.columns([5, 1.6], vertical_alignment="center")
+                    reason_col.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
+                    if button_col.button("Onay Bekleyenler'de incele →", key=f"goto_quarantine_{index}",
+                                         width="stretch"):
+                        _goto_review({"run_id": report.run_id, "file_path": outcome.relative_path})
+        if st.button("🔍 Maskeleme Denetim Uyarılarını İncele →", type="primary", key="goto_audit_warnings"):
+            _goto_review(None)
 
     # archive_unsupported/scan_only_sensitive: final_state == SECURITY_QUARANTINE
     # oldugu icin ne quarantined_count'a (audit_failed=False sarti) ne de
@@ -587,8 +598,8 @@ def _render_result(result: dict) -> None:
         with st.expander(f"Doğrulanamayan {len(unverifiable)} dosyayı ve nedenini gör", expanded=True):
             for outcome in unverifiable:
                 st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
-        if st.button("⚠️ Maskeleme Denetim Uyarılarını İncele →", type="primary", key="goto_unverifiable"):
-            st.switch_page(st.session_state["_nav_pages"]["review"])
+        if st.button("🔍 Maskeleme Denetim Uyarılarını İncele →", type="primary", key="goto_unverifiable"):
+            _goto_review(None)
 
     # validation_failed_count; asagidaki sozdizimi/round-trip/consistency
     # bloklarinin kapsadigi statuslerin YANI SIRA (skipped_too_large,
@@ -629,7 +640,8 @@ def _render_result(result: dict) -> None:
             for outcome in syntax_failed:
                 st.write(f"- `{outcome.relative_path}`{_syntax_position(outcome)}: {_validation_failure_reason(outcome)}")
         if st.button("Sözdizimi hatasının konumunu gör ve dosyayı yine de çıktıya ekle →", key="goto_syntax_failed"):
-            st.switch_page(st.session_state["_nav_pages"]["review"])
+            _goto_review({"run_id": report.run_id, "file_path": syntax_failed[0].relative_path}
+                         if len(syntax_failed) == 1 else None)
 
     round_trip_failed = [o for o in report.outcomes if o.status == "failed_round_trip_validation"]
     if round_trip_failed:
@@ -680,7 +692,7 @@ def _render_result(result: dict) -> None:
                     f"{len(syntax_failed) + len(round_trip_failed) + len(consistency_failed)} "
                     "dosya da yukarıdaki indirilen pakete DAHİL EDİLMEDİ — yukarıdaki listeye bakıp "
                     "manuel olarak inceleyin/düzeltin."
-                    + (" Sözdizimi hatalı dosyaları uyarılar ekranından bozuk haliyle pakete ekleyebilirsiniz; "
+                    + (" Sözdizimi hatalı dosyaları Onay Bekleyenler ekranından bozuk haliyle pakete ekleyebilirsiniz; "
                        "bu ekrana döndüğünüzde indirme paketi yenilenir." if syntax_failed else "")
                 )
         else:

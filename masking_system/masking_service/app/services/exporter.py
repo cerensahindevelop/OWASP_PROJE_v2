@@ -441,9 +441,19 @@ class ExportReport:
     # amaclidir: rapor ve ekranda gorunur ama ciktiyi eksik/hatali yapmaz,
     # bu yuzden durumu "uyarili"ya cevirmez. Diger dogrulama notlari (kaynakta
     # mevcut parser hatasi, uyariyla gecen sozdizimi hatasi vb.) uyari kalir.
+    # Not "kontroller tamam" anlamina gelir ve ekranda "ciktiya eklendi" diye
+    # okunur; not sozdizimi asamasinda yazildigi icin sonradan durdurulan
+    # (karantina, dogrulama hatasi) dosyanin notu burada elenir.
     @property
     def validation_notices(self) -> list[str]:
-        return [entry for entry in self.validation_warnings if _is_coverage_notice(entry)]
+        blocked = {
+            self.file_labels.get(Path(outcome.relative_path).as_posix(), outcome.relative_path)
+            for outcome in self.outcomes if outcome.final_state and outcome.final_state != "READY"
+        }
+        return [
+            entry for entry in self.validation_warnings
+            if _is_coverage_notice(entry) and entry.partition(": ")[0] not in blocked
+        ]
 
     # Ekran (API) icin: dosyalar orijinal adlariyla.
     @property

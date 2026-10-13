@@ -135,3 +135,28 @@ def test_syntax_failure_shows_exact_location_and_can_be_added_to_output(monkeypa
 
     assert not app.exception
     assert accepted == [31]
+
+
+def test_file_opened_from_export_result_is_first_and_expanded(monkeypatch):
+    monkeypatch.setattr(review_page, "get_identity", lambda: {
+        "project_name": "test", "sicil_no": "TEST-1", "branch_name": "test",
+    })
+
+    def warning(id_, path):
+        return SimpleNamespace(
+            id=id_, run_id=49, file_path=path, audit_failed=False, failed_check="llm_denetimi",
+            reasoning="risk", summary="Açık kalan bilgi.", location="Satır 1", next_step="Karar verin.",
+            evidence=[],
+        )
+
+    monkeypatch.setattr(review_page.api_client, "list_pending_audit_warnings",
+                        lambda **_: [warning(1, "a/ilk.md"), warning(2, "veri/Profiller.json")])
+    monkeypatch.setattr(review_page.api_client, "list_pending_reviews", lambda **_: [])
+    monkeypatch.setattr(review_page.api_client, "list_runs", lambda **_: [])
+    app = _review_app()
+    app.session_state["review_focus"] = {"run_id": 49, "file_path": "veri/Profiller.json"}
+    app.run()
+
+    assert not app.exception
+    labels = [(e.label, e.proto.expanded) for e in app.expander if "İncele ve karar ver" in e.label]
+    assert labels == [("📄 Profiller.json — İncele ve karar ver", True), ("📄 ilk.md — İncele ve karar ver", False)]

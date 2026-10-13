@@ -51,11 +51,13 @@ _HIDDEN_PATH = "<gizlendi>"
 
 
 _COVERAGE_SUMMARIES = (
-    (STRUCTURAL_ONLY_NOTICE, "{count} dosya düz metin olduğu için ayrıca biçim denetimi yapılmadı; "
-                             "içerik ve geri dönüş kontrolleri tamam"),
-    (BRACKET_ONLY_NOTICE, "{count} dosyada derleyici denetimi yok, parantez ve tırnak dengesi denetlendi; "
-                          "içerik ve geri dönüş kontrolleri tamam"),
-    (CLASS_COVERAGE, "{count} Java .class dosyasında metin sabitleri tarandı; sınıf çalıştırılmadı"),
+    # Once sonucu (ciktiya eklendi) sonra kapsami soyler: "denetim yapilmadi"
+    # ile baslayan eski metin dosyalarin ciktiya alinmadigi sanilmasina yol aciyordu.
+    (STRUCTURAL_ONLY_NOTICE, "{count} dosya çıktıya eklendi. Bunlar düz metin olduğu için ayrıca biçim "
+                             "(sözdizimi) denetimi yapılmadı; içerik ve geri dönüş kontrolleri tamam"),
+    (BRACKET_ONLY_NOTICE, "{count} dosya çıktıya eklendi. Bunlarda derleyici denetimi yok, parantez ve "
+                          "tırnak dengesi denetlendi; içerik ve geri dönüş kontrolleri tamam"),
+    (CLASS_COVERAGE, "{count} Java .class dosyası çıktıya eklendi. Metin sabitleri tarandı; sınıf çalıştırılmadı"),
 )
 
 

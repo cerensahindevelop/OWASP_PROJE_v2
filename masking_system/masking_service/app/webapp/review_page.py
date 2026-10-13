@@ -14,7 +14,7 @@ import streamlit as st
 from app.webapp import api_client
 from app.webapp.api_client import ApiError
 # Guven seviyesi renk/etiketleri, baslik ve hata gosterimi yardimcilari.
-from app.webapp.common import CONFIDENCE_COLORS, CONFIDENCE_LABELS, page_intro, show_error
+from app.webapp.common import CONFIDENCE_COLORS, CONFIDENCE_LABELS, REVIEW_FOCUS_KEY, page_intro, show_error
 # get_identity: sadece aktif kimlige ait onay kuyrugu kayitlarini listelemek icin.
 from app.webapp.identity import get_identity, render_project_branch_filter
 from app.services.audit_action_labels import (
@@ -164,6 +164,7 @@ def _run_single_audit_action(action: str, warning_id: int) -> None:
         else:
             flash_text = "✅ Yanlış alarm kararı kaydedildi; dosya yeniden doğrulanarak çıktıya eklendi."
         st.session_state["audit_flash"] = ("warning" if action == "confirm" else "success", flash_text)
+        st.session_state[REVIEW_FOCUS_KEY] = None
     else:
         st.session_state["audit_flash"] = ("warning", message)
     st.rerun()
@@ -241,6 +242,14 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
             row for row in rows
             if not row["audit_failed"] and not row["reasoning"].startswith("INCELEME_GEREKLI:")
         ]
+    # Dışarı Çıkar sonucundaki "Onay Bekleyenler'de incele" ile gelinen dosya:
+    # bölümü açık ve listenin başında gösterilir.
+    focus = st.session_state.get(REVIEW_FOCUS_KEY) or {}
+
+    def is_focused(row) -> bool:
+        return (row["run_id"], row["file_path"]) == (focus.get("run_id"), focus.get("file_path"))
+
+    quarantine_rows.sort(key=lambda row: not is_focused(row))
 
     ready_count = 0
     try:
@@ -289,7 +298,7 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
             if row["failed_check"] != FailedCheck.SOZDIZIMI or row["file_path"].lower().endswith(".class"):
                 continue
             file_name = row["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-            with st.expander(f"📄 {file_name} — sözdizimi hatasının konumu ve seçenekler"):
+            with st.expander(f"📄 {file_name} — sözdizimi hatasının konumu ve seçenekler", expanded=is_focused(row)):
                 st.caption(f"{row['project']} · {row['file_path']} · İşlem #{row['run_id']}")
                 st.markdown(f"**Sebep:** {row['summary']}")
                 st.markdown(f"**Konum:** {row['location']}")
@@ -316,7 +325,7 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
 
     for row in quarantine_rows:
         file_name = row["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-        with st.expander(f"📄 {file_name} — İncele ve karar ver"):
+        with st.expander(f"📄 {file_name} — İncele ve karar ver", expanded=is_focused(row)):
             header_col, badge_col = st.columns([4, 1.4])
             with header_col:
                 st.markdown(f"**📄 {file_name}**")
