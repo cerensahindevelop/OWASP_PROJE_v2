@@ -27,6 +27,7 @@ from app.webapp.common import page_intro, show_error
 # her islem icin secilir (render_project_branch_inputs).
 from app.webapp.identity import get_identity, render_project_branch_inputs, validate_project_branch
 from app.webapp.path_guard import allowed_roots_configured
+from app.webapp.uploads import upload_manifest
 # Hizli metin modu ve yan yana karsilastirma Geri Donustur ekraniyla ortak.
 from app.services.failure_messages import explain_failure
 from app.webapp.quick_text import (
@@ -79,6 +80,8 @@ _FINISHED_JOB_STATES = ("completed", "failed", "cancelled")
 # seye tiklansa da (Streamlit betigi bastan calistirir) ilerleme kaybolmaz.
 _ACTIVE_JOB_KEY = "export_active_job"
 _CONFLICT_KEY = "export_conflict"
+# Baslatilmadan once "uzun surebilir" onayi bekleyen istek ve buyuk dosyalar.
+_SLOW_KEY = "export_slow_files"
 
 
 class _JobCancelled(Exception):
@@ -124,6 +127,7 @@ def _start_export(request: dict) -> None:
     common = dict(
         project_name=request["project_name"], sicil_no=identity["sicil_no"],
         branch_name=request["branch_name"], initiated_by=identity["sicil_no"],
+        skip_paths=request.get("skip_paths") or [],
     )
     st.session_state["export_last_result"] = None
     try:
@@ -227,6 +231,89 @@ def _stop_and_wait(job_id: str) -> bool:
     return False
 
 
+# Taramayi uzun surdurecek buyuk metin dosyalarini backend'e sorar (bkz.
+# app/services/slow_files.py). Hizli metin modu yapistirilan kisa bir metindir,
+# sorulmaz. (esik_mb, buyuk_dosyalar) ya da hata gosterildiyse None doner.
+def _slow_files_for(request: dict) -> tuple[float, list] | None:
+    if request.get("quick_text") is not None:
+        return 0.0, []
+    try:
+        if request["kind"] == "path":
+            preflight = api_client.export_preflight_by_path(request["source_path"])
+        else:
+            manifest = upload_manifest(request["files"], is_directory_upload=request.get("is_directory_upload", False))
+            preflight = api_client.export_preflight_upload(manifest)
+    except ApiError as exc:
+        show_error(exc)
+        return None
+    return preflight.warn_mb, list(preflight.slow_files)
+
+
+# Buyuk dosya varsa taramayi baslatmadan once kullaniciya sorar; yoksa baslatir.
+def _request_export(request: dict) -> None:
+    st.session_state[_SLOW_KEY] = None
+    preflight = _slow_files_for(request)
+    if preflight is None:
+        return
+    warn_mb, slow_files = preflight
+    if slow_files:
+        st.session_state[_SLOW_KEY] = {"request": request, "slow_files": slow_files, "warn_mb": warn_mb}
+        return
+    _start_export(request)
+
+
+# 1 MB = 1.048.576 bayt: SCAN_MAX_FILE_MB / SCAN_SLOW_FILE_WARN_MB sinirlari ve
+# Windows Gezgini ayni birimi kullanir; boylece sinirin altindaki bir dosya
+# sinirdan buyuk gorunmez. (Streamlit'in yukleme kutusu 1.000.000 bayt kullanir;
+# o etiket kutunun kendi bileseni oldugu icin degistirilemez.)
+def _format_mb(size_bytes: int) -> str:
+    return f"{size_bytes / (1024 * 1024):.1f}".replace(".", ",") + " MB"
+
+
+# Onay bekleyen buyuk dosyalar icin uyari ve secim: dosyalari taramadan
+# cikarip baslat, hepsiyle baslat ya da vazgec. Cikarilan dosya backend'de
+# haric tutulan dosya gibi islenir (taranmaz, ciktiya alinmaz); kullanici
+# dosyayi silip yeniden yuklemek zorunda kalmaz.
+def _render_slow_files() -> None:
+    pending = st.session_state.get(_SLOW_KEY)
+    if not pending:
+        return
+    slow_files = pending["slow_files"]
+    paths = [item.path for item in slow_files]
+    slot = st.empty()
+    with slot.container():
+        st.warning(
+            f"**Uzun sürebilir:** {len(slow_files)} büyük metin dosyası taramayı uzatabilir. Bu dosyalar "
+            f"{pending['warn_mb']:g} MB sınırından büyük; veri dökümü, log ve CSV "
+            "gibi büyük metin dosyaları satır satır tarandığı için tek bir dosya taramayı dakikalarca, çok "
+            "büyükse saatlerce uzatabilir. Bu sürede projedeki diğer dosyalar da sırada bekler.\n\n"
+            "**Ne yapmalı:** Dosyanın maskelenmesi gerekmiyorsa (örneğin örnek veri ya da log) taramadan "
+            "çıkarın: tarama diğer dosyalarla hemen başlar, çıkarılan dosya taranmaz ve çıktıya eklenmez. "
+            "Maskelenmesi gerekiyorsa tümüyle devam edin; tarama arka planda sürer ve istediğiniz an "
+            "durdurabilirsiniz."
+        )
+        st.markdown("\n".join(f"- `{item.path}` — {_format_mb(item.size_bytes)}" for item in slow_files))
+        if len(paths) > 1:
+            to_skip = st.multiselect("Taramadan çıkarılacak dosyalar", paths, default=paths, key="export_slow_pick")
+        else:
+            to_skip = paths
+        skip_col, proceed_col, dismiss_col = st.columns(3)
+        skip = skip_col.button(
+            "Dosyayı çıkarıp başlat" if len(paths) == 1 else "Seçilenleri çıkarıp başlat",
+            type="primary", key="export_slow_skip", disabled=not to_skip,
+        )
+        proceed = proceed_col.button("Yine de tümüyle başlat", key="export_slow_continue")
+        dismiss = dismiss_col.button("Vazgeç", key="export_slow_dismiss")
+    if skip or proceed:
+        slot.empty()
+        st.session_state[_SLOW_KEY] = None
+        request = dict(pending["request"], skip_paths=list(to_skip)) if skip else pending["request"]
+        _start_export(request)
+    elif dismiss:
+        slot.empty()
+        st.session_state[_SLOW_KEY] = None
+
+
 # Ayni proje/branch icin calisan bir is varken taramaya basildiysa secenekleri gosterir.
 def _render_conflict() -> None:
     conflict = st.session_state.get(_CONFLICT_KEY)
@@ -259,7 +346,7 @@ def _render_conflict() -> None:
 
 # "Klasor Yolu" moduyla (sunucudaki bir yolu dogrudan girerek) baslatilan export.
 def _run_export(source_path: str, target_path: str, *, project_name: str, branch_name: str) -> None:
-    _start_export({
+    _request_export({
         "kind": "path", "source_path": source_path, "target_path": target_path,
         "project_name": project_name, "branch_name": branch_name,
     })
@@ -271,7 +358,7 @@ def _run_export_upload(
     uploaded_files: list, *, project_name: str, branch_name: str, is_directory_upload: bool = False,
     quick_text: dict | None = None,
 ) -> None:
-    _start_export({
+    _request_export({
         "kind": "upload", "files": list(uploaded_files), "is_directory_upload": is_directory_upload,
         "project_name": project_name, "branch_name": branch_name, "quick_text": quick_text,
     })
@@ -433,8 +520,16 @@ def _render_result(result: dict) -> None:
                 if outcome.status == "skipped_unsupported":
                     st.write(f"{outcome.relative_path}: {outcome.error}")
     extra_notes = []
-    if report.files_excluded:
-        extra_notes.append(f"{report.files_excluded} dosya hariç tutma kuralı gereği atlandı (hiç kopyalanmadı).")
+    user_skipped = list(getattr(report, "user_skipped_paths", None) or [])
+    if report.files_excluded - len(user_skipped):
+        extra_notes.append(
+            f"{report.files_excluded - len(user_skipped)} dosya hariç tutma kuralı gereği atlandı (hiç kopyalanmadı)."
+        )
+    if user_skipped:
+        extra_notes.append(
+            f"Taramadan çıkardığınız {len(user_skipped)} büyük dosya taranmadı ve çıktıya eklenmedi: "
+            + ", ".join(f"`{path}`" for path in user_skipped)
+        )
     if report.files_skipped_symlink:
         extra_notes.append(f"{report.files_skipped_symlink} kısayol (symlink) atlandı.")
     if report.files_copied_undecodable:
@@ -697,6 +792,7 @@ def render() -> None:
                 # _run_export bunu ApiError -> show_error ile gosterir.
                 _run_export(source_path.strip(), target_path.strip(), **target)
 
+    _render_slow_files()
     _render_conflict()
     _follow_active_job()
 

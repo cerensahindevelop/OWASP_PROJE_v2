@@ -165,7 +165,8 @@ def export_upload(
 
 
 def start_export_job_by_path(
-    *, source_path: str, target_path: str, project_name: str, sicil_no: str, branch_name: str, initiated_by: str
+    *, source_path: str, target_path: str, project_name: str, sicil_no: str, branch_name: str, initiated_by: str,
+    skip_paths: list[str] | None = None,
 ) -> str:
     return _post_json(
         "/export/jobs",
@@ -176,6 +177,7 @@ def start_export_job_by_path(
             "sicil_no": sicil_no,
             "branch_name": branch_name,
             "initiated_by": initiated_by,
+            "skip_paths": list(skip_paths or []),
         },
     ).job_id
 
@@ -188,6 +190,7 @@ def start_export_job_upload(
     sicil_no: str,
     branch_name: str,
     initiated_by: str,
+    skip_paths: list[str] | None = None,
 ) -> str:
     files = [("files", (uf.name, uf.getvalue(), "application/octet-stream")) for uf in uploaded_files]
     data = {
@@ -196,8 +199,20 @@ def start_export_job_upload(
         "branch_name": branch_name,
         "initiated_by": initiated_by,
         "is_directory_upload": "true" if is_directory_upload else "false",
+        # Taramadan cikarilan dosyalar: ayni alan adiyla tekrarlanan form alani.
+        "skip_paths": list(skip_paths or []),
     }
     return _post_json("/export/upload/jobs", data=data, files=files).job_id
+
+
+# Export oncesi "uzun surebilir" tahmini: .slow_files ve .warn_mb doner.
+def export_preflight_by_path(source_path: str):
+    return _post_json("/export/preflight", json={"source_path": source_path})
+
+
+# manifest: uploads.upload_manifest ciktisi (icerik degil, yol/boyut/metin-mi).
+def export_preflight_upload(manifest: list[dict]):
+    return _post_json("/export/upload/preflight", json={"files": manifest})
 
 
 def get_export_job(job_id: str):

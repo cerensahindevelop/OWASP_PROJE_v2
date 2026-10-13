@@ -25,6 +25,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from app.services.file_type import PEEK_SIZE, classify_bytes
 from app.services.long_paths import extended_length_path
 
 UPLOADS_OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "uploads_output"
@@ -114,6 +115,33 @@ def save_uploaded_files_to_temp_dir(uploaded_files: list, *, is_directory_upload
     except Exception:
         cleanup_temp_dir(tmp_dir)
         raise
+
+
+# Yuklemenin, save_uploaded_files_to_temp_dir'in olusturacagi klasordeki
+# goreli yol/boyut/metin-mi listesi (icerik degil) - export oncesi "uzun
+# surebilir" tahmini icin backend'e bu gonderilir, dosyalar ikinci kez
+# yuklenmez (bkz. app/services/slow_files.py). Yol kurallari yukaridaki
+# kaydetme fonksiyonuyla AYNI olmali.
+def upload_manifest(uploaded_files: list, *, is_directory_upload: bool = False) -> list[dict]:
+    def entry(path: str, size: int, head: bytes) -> dict:
+        return {"path": path, "size_bytes": size, "is_text": classify_bytes(head)[0]}
+
+    if not is_directory_upload and len(uploaded_files) == 1 and uploaded_files[0].name.lower().endswith(".zip"):
+        manifest = []
+        with zipfile.ZipFile(io.BytesIO(uploaded_files[0].getvalue())) as zf:
+            for member in zf.infolist():
+                if member.is_dir():
+                    continue
+                with zf.open(member) as source:
+                    manifest.append(entry(member.filename, member.file_size, source.read(PEEK_SIZE)))
+        return manifest
+    manifest = []
+    for uploaded in uploaded_files:
+        name = uploaded.name.replace("\\", "/")
+        data = uploaded.getvalue()
+        path = name.lstrip("/") if is_directory_upload else Path(name).name
+        manifest.append(entry(path, len(data), data[:PEEK_SIZE]))
+    return manifest
 
 
 # Sonucun tek bir dosya olarak (zip'lemeden) indirilebilir olup olmadigini

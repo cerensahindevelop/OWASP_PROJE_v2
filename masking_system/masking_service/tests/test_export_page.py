@@ -230,3 +230,115 @@ def test_quick_text_defaults_to_auto_detect():
     app.radio(key="export_mode").set_value(export_page._MODE_TEXT).run()
     assert app.selectbox(key="export_text_type").value == AUTO_DETECT_LABEL
 
+
+def _run_upload_script() -> AppTest:
+    # file_uploader AppTest'te surulemedigi icin yukleme akisini dogrudan cagiririz.
+    script = (
+        "from app.webapp import export_page\n"
+        "from app.webapp.quick_text import InMemoryUpload\n"
+        "import streamlit as st\n"
+        "if not st.session_state.get('submitted'):\n"
+        "    st.session_state['submitted'] = True\n"
+        "    export_page._run_export_upload([InMemoryUpload('veri.csv', b'1,ayse\\n' * 10)],\n"
+        "                                   project_name='test', branch_name='main')\n"
+        "export_page._render_slow_files()\n"
+    )
+    return AppTest.from_string(script, default_timeout=APP_TEST_TIMEOUT_SECONDS).run()
+
+
+def _patch_preflight(monkeypatch, slow_files):
+    manifests, starts = [], []
+
+    def fake_preflight(manifest):
+        manifests.append(manifest)
+        return SimpleNamespace(warn_mb=2.0, slow_files=[SimpleNamespace(**item) for item in slow_files])
+
+    monkeypatch.setattr(export_page, "get_identity", lambda: IDENTITY)
+    monkeypatch.setattr(export_page.api_client, "export_preflight_upload", fake_preflight)
+    monkeypatch.setattr(export_page.api_client, "start_export_job_upload",
+                        lambda files, **kwargs: starts.append(kwargs) or "job-1")
+    return manifests, starts
+
+
+def test_large_file_asks_before_starting_and_can_continue(monkeypatch):
+    manifests, starts = _patch_preflight(monkeypatch, [{"path": "veri.csv", "size_bytes": 12 * 1024 * 1024}])
+
+    app = _run_upload_script()
+
+    assert not app.exception
+    # Dosyanin kendisi degil yalnizca yol/boyut/metin-mi bilgisi gonderilir.
+    assert manifests == [[{"path": "veri.csv", "size_bytes": 70, "is_text": True}]]
+    assert starts == []
+    warning = " ".join(w.value for w in app.warning)
+    assert "Uzun sürebilir" in warning and "Ne yapmalı" in warning and "2 MB sınırından" in warning
+    assert any("veri.csv" in m.value and "12,0 MB" in m.value for m in app.markdown)
+
+    app.button(key="export_slow_continue").click().run()
+
+    assert not app.exception
+    assert len(starts) == 1
+    assert starts[0]["skip_paths"] == []
+    assert app.session_state["export_active_job"]["job_id"] == "job-1"
+    assert not any("Uzun sürebilir" in w.value for w in app.warning)
+
+
+def test_large_file_can_be_skipped_without_reuploading(monkeypatch):
+    _manifests, starts = _patch_preflight(monkeypatch, [{"path": "veri.csv", "size_bytes": 12 * 1024 * 1024}])
+
+    app = _run_upload_script()
+    assert app.button(key="export_slow_skip").label == "Dosyayı çıkarıp başlat"
+    app.button(key="export_slow_skip").click().run()
+
+    assert not app.exception
+    assert len(starts) == 1
+    assert starts[0]["skip_paths"] == ["veri.csv"]
+
+
+def test_user_picks_which_large_files_to_skip(monkeypatch):
+    slow = [{"path": "veri/a.csv", "size_bytes": 12 * 1024 * 1024}, {"path": "kontrol/b.jsonl", "size_bytes": 49 * 1024 * 1024}]
+    _manifests, starts = _patch_preflight(monkeypatch, slow)
+
+    app = _run_upload_script()
+    assert app.multiselect(key="export_slow_pick").value == ["veri/a.csv", "kontrol/b.jsonl"]
+    app.multiselect(key="export_slow_pick").unselect("veri/a.csv").run()
+    app.button(key="export_slow_skip").click().run()
+
+    assert not app.exception
+    assert starts[0]["skip_paths"] == ["kontrol/b.jsonl"]
+
+
+def test_result_names_files_the_user_skipped(monkeypatch):
+    report = _report(files_excluded=3, user_skipped_paths=["veri/a.csv"])
+    monkeypatch.setattr(export_page.st, "caption", lambda text: captions.append(text))
+    captions = []
+    export_page._render_result({"report": report, "pending_count": 0, "quarantined_count": 0})
+    assert any("2 dosya hariç tutma kuralı" in c for c in captions)
+    assert any("Taramadan çıkardığınız 1 büyük dosya" in c and "veri/a.csv" in c for c in captions)
+
+
+def test_large_file_warning_can_be_dismissed(monkeypatch):
+    _manifests, starts = _patch_preflight(monkeypatch, [{"path": "veri.csv", "size_bytes": 12 * 1024 * 1024}])
+
+    app = _run_upload_script()
+    app.button(key="export_slow_dismiss").click().run()
+
+    assert not app.exception
+    assert starts == []
+    assert not any("Uzun sürebilir" in w.value for w in app.warning)
+
+
+def test_small_upload_starts_without_asking(monkeypatch):
+    _manifests, starts = _patch_preflight(monkeypatch, [])
+
+    app = _run_upload_script()
+
+    assert not app.exception
+    assert len(starts) == 1
+    assert not app.warning
+
+
+def test_size_uses_same_mb_as_scan_limit():
+    # 51.885.863 bayt, SCAN_MAX_FILE_MB=50 (50 x 1.048.576) sinirinin altindadir;
+    # uyari onu sinirdan buyukmus gibi "51,9 MB" gostermemeli.
+    assert export_page._format_mb(51_885_863) == "49,5 MB"
+    assert export_page._format_mb(50 * 1024 * 1024) == "50,0 MB"

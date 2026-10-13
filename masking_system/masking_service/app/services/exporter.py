@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, replace
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Collection
 
 # sqlalchemy: DB sorgulari, eszamanli export'lari yakalamak icin
 # IntegrityError ve run/context islemleri icin Session.
@@ -46,6 +46,7 @@ from app.services.consistency_masking import (
     find_consistency_occurrences,
 )
 from app.services.exclude_admin import load_active_exclude_specs
+from app.services.exclude_engine import ExcludeSpec
 from app.services.export_report_formatter import _RULE_DISPLAY_NAMES, format_export_report, summarize_coverage_notices
 from app.services.failed_checks import REPORT_ONLY_CHECKS, UNKNOWN_FAILED_CHECK, FailedCheck, failed_check_label
 from app.services.identifier_parts import contains_term
@@ -95,6 +96,24 @@ from app.services.syntax_validator import BRACKET_ONLY_NOTICE, STRUCTURAL_ONLY_N
 logger = logging.getLogger("uvicorn.error.export")
 
 DEFAULT_ENABLE_PATH_MASKING = True
+
+# Kullanicinin "uzun surebilir" uyarisinda taramadan cikardigi dosyalar (bkz.
+# app/services/slow_files.py) haric tutulan dosyalarla AYNI yoldan gecer:
+# taranmaz, yolu maskelenmez, hedefe kopyalanmaz. Istemciden gelen yollar
+# yalnizca taranan dosya listesiyle karsilastirilir; kapsam yalnizca daralir.
+_USER_SKIP_PATTERN = "kullanici_secimi"
+
+
+def _apply_user_skips(files: list, skip_paths, report: "ExportReport") -> list:
+    wanted = {path.replace("\\", "/").lstrip("/") for path in skip_paths}
+    result = []
+    for scanned in files:
+        relative = scanned.relative_path.as_posix()
+        if relative in wanted and scanned.excluded_by is None and not scanned.is_symlink:
+            scanned = replace(scanned, excluded_by=ExcludeSpec(0, _USER_SKIP_PATTERN, relative, "file"))
+            report.user_skipped_paths.append(relative)
+        result.append(scanned)
+    return result
 
 _REPORT_BUCKETS = {
     "masked": "files_masked",
@@ -257,6 +276,10 @@ class ExportReport:
     # maskelenen terimin maskeli yolda acik kaldigi dosya etiketi -> terim
     # sayisi. Dosya engellenmez; bkz. _measure_path_content_mismatch.
     path_content_mismatch: dict[str, int] = field(default_factory=dict)
+    # Kullanicinin "uzun surebilir" uyarisinda taramadan cikardigi dosyalar
+    # (kaynak goreli yol; files_excluded'a da sayilir). Yollari yalnizca
+    # kullanicinin kendi ekrani gosterir; rapor metni sayisini yazar (kural 7).
+    user_skipped_paths: list[str] = field(default_factory=list)
 
     # Rapora/loga yazilacak dosya etiketi; bilinmiyorsa kaynak yol degil sabit metin.
     def file_label(self, relative_path: str) -> str:
@@ -1204,15 +1227,14 @@ def _prepare_file(
     )
 
     if read_outcome.status == ReadStatus.EXCLUDED:
-        db.add(
-            AuditLog(
-                run_id=run_id,
-                file_path=rel,
-                action="skipped",
-                detail=f"guvenlik politikasi geregi haric tutuldu (desen: {scanned.excluded_by.pattern_name} "
-                f"'{scanned.excluded_by.glob_pattern}'), hedefe kopyalanmadi",
+        if scanned.excluded_by.pattern_name == _USER_SKIP_PATTERN:
+            detail = "kullanici secimiyle taramadan cikarildi (buyuk dosya uyarisi), hedefe kopyalanmadi"
+        else:
+            detail = (
+                f"guvenlik politikasi geregi haric tutuldu (desen: {scanned.excluded_by.pattern_name} "
+                f"'{scanned.excluded_by.glob_pattern}'), hedefe kopyalanmadi"
             )
-        )
+        db.add(AuditLog(run_id=run_id, file_path=rel, action="skipped", detail=detail))
         return _FilePrep(scanned, dest_path, rel, outcome=FileOutcome(rel, status="excluded"))
 
     if read_outcome.status == ReadStatus.SKIPPED_SYMLINK:
@@ -2533,6 +2555,7 @@ async def export_project(
     enable_path_masking: bool = DEFAULT_ENABLE_PATH_MASKING,
     progress_callback: Callable[[int, int, str], None] | None = None,
     cancel_event: threading.Event | None = None,
+    skip_paths: Collection[str] = (),
 ) -> ExportReport:
     # Karisik surum (TypeError olayi) ya da yeniden baslatilmamis backend:
     # hicbir DB/dosya yazmasindan once fail-closed (API, is ve CLI yollari).
@@ -2699,6 +2722,8 @@ async def export_project(
         audit_slots = asyncio.Semaphore(batch_size)
 
         all_files = list(iter_project_files(source, exclude_specs, prune_ignored=True))
+        if skip_paths:
+            all_files = _apply_user_skips(all_files, skip_paths, report)
         total_files = len(all_files)
         processed = 0
         _raise_if_cancelled(cancel_event)

@@ -272,8 +272,12 @@ def format_export_report(report: "ExportReport") -> str:
                 info.append(f"{report.file_label(outcome.relative_path)}: {outcome.error}")
     if report.files_skipped_symlink:
         info.append(f"{report.files_skipped_symlink} dosya symlink oldugu icin atlandi")
-    if report.files_excluded:
-        info.append(f"{report.files_excluded} dosya haric tutma kurali geregi atlandi (hic kopyalanmadi)")
+    user_skipped = len(getattr(report, "user_skipped_paths", ()))
+    if report.files_excluded - user_skipped:
+        info.append(f"{report.files_excluded - user_skipped} dosya haric tutma kurali geregi atlandi (hic kopyalanmadi)")
+    if user_skipped:
+        # Yollar yazilmaz: haric tutulan dosyanin yolu maskelenmez (kural 7).
+        info.append(f"{user_skipped} buyuk dosya kullanici secimiyle taramadan cikarildi (ciktiya alinmadi)")
 
     attention: list[str] = []
     if report.files_copied_binary:

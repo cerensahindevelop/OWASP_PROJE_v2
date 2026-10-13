@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -33,14 +34,21 @@ from starlette.concurrency import run_in_threadpool
 from app.api import export_jobs
 from app.api.deps import get_request_db
 from app.api.errors import _status_for
-from app.api.schemas import ExportJobOut, ExportJobStartOut, ExportPathRequest, ExportReportOut, ExportResultOut
+from app.api.schemas import (
+    ExportJobOut, ExportJobPathRequest, ExportJobStartOut, ExportPathRequest, ExportPreflightOut,
+    ExportPreflightPathRequest,
+    ExportPreflightUploadRequest, ExportReportOut, ExportResultOut, SlowFileOut,
+)
 from app.core.build_info import ensure_export_allowed
+from app.core.config import settings
 from app.core.exceptions import ExportInProgressError
 from app.core.error_translation import friendly_error
 from app.db.session import SessionLocal
 from app.services.audit_warning_service import AuditWarningService
+from app.services.exclude_admin import load_active_exclude_specs
 from app.services.exporter import export_project
 from app.services.review_service import ReviewService
+from app.services.slow_files import FileEntry, SlowFile, directory_entries, find_slow_files
 from app.webapp.path_guard import ensure_path_allowed
 from app.webapp.uploads import cleanup_temp_dir, save_uploaded_files_to_temp_dir, uploaded_output_dir
 
@@ -175,6 +183,43 @@ async def export_upload(
 
 
 # --------------------------------------------------------------------------
+# Export oncesi tahmin: taramayi uzun surdurecek buyuk metin dosyalari (bkz.
+# app/services/slow_files.py). Hicbir sey taranmaz/yazilmaz; arayuz sonuca
+# gore kullaniciya "yine de devam edilsin mi" diye sorar.
+# --------------------------------------------------------------------------
+
+
+def _preflight_out(slow_files: list[SlowFile]) -> ExportPreflightOut:
+    return ExportPreflightOut(
+        slow_files=[SlowFileOut(path=f.path, size_bytes=f.size_bytes) for f in slow_files],
+        warn_mb=settings.scan.slow_file_warn_mb,
+    )
+
+
+# Sunucudaki bir klasor icin: dosyalar burada yerinde incelenir.
+@router.post("/preflight", response_model=ExportPreflightOut)
+def preflight_by_path(payload: ExportPreflightPathRequest, db: Session = Depends(get_request_db)) -> ExportPreflightOut:
+    ensure_path_allowed(payload.source_path, label="Kaynak Klasör")
+    exclude_specs = load_active_exclude_specs(db)
+    warn_bytes = settings.scan.slow_file_warn_bytes
+    entries = directory_entries(Path(payload.source_path), exclude_specs, warn_bytes=warn_bytes)
+    return _preflight_out(find_slow_files(
+        entries, exclude_specs, warn_bytes=warn_bytes, max_bytes=settings.scan.max_file_bytes,
+    ))
+
+
+# Yukleme icin: dosyalar degil, arayuzun cikardigi yol/boyut listesi gelir
+# (bkz. app/webapp/uploads.py::upload_manifest).
+@router.post("/upload/preflight", response_model=ExportPreflightOut)
+def preflight_upload(payload: ExportPreflightUploadRequest, db: Session = Depends(get_request_db)) -> ExportPreflightOut:
+    entries = [FileEntry(item.path, item.size_bytes, item.is_text) for item in payload.files]
+    return _preflight_out(find_slow_files(
+        entries, load_active_exclude_specs(db),
+        warn_bytes=settings.scan.slow_file_warn_bytes, max_bytes=settings.scan.max_file_bytes,
+    ))
+
+
+# --------------------------------------------------------------------------
 # Arka plan isleri: export ayri thread'de calisir, arayuz ilerlemeyi sorgular.
 # Mevcut bloklayan uclar (POST /export, /export/upload) geriye donuk uyumluluk
 # icin korunur.
@@ -222,13 +267,14 @@ def _reject_if_active(project_name: str, sicil_no: str, branch_name: str) -> tup
 # Sunucu uzerindeki bir klasor icin arka planda export baslatir.
 @router.post("/jobs", response_model=ExportJobStartOut, status_code=202,
              dependencies=[Depends(ensure_export_allowed)])
-def start_export_job_by_path(payload: ExportPathRequest) -> ExportJobStartOut:
+def start_export_job_by_path(payload: ExportJobPathRequest) -> ExportJobStartOut:
     ensure_path_allowed(payload.source_path, label="Kaynak Klasör")
     ensure_path_allowed(payload.target_path, label="Hedef Klasör")
     identity = _reject_if_active(payload.project_name, payload.sicil_no, payload.branch_name)
     kwargs = dict(
         source_path=payload.source_path, project_name=payload.project_name, sicil_no=payload.sicil_no,
         branch_name=payload.branch_name, target_path=payload.target_path, initiated_by=payload.initiated_by,
+        skip_paths=payload.skip_paths,
     )
     job = export_jobs.start_job(_export_job_work(kwargs, None), _job_error, identity=identity)
     return ExportJobStartOut(job_id=job.job_id)
@@ -244,6 +290,8 @@ async def start_export_job_upload(
     initiated_by: str = Form(...),
     is_directory_upload: bool = Form(False),
     files: list[UploadFile] = File(...),
+    # "Uzun surebilir" uyarisinda taramadan cikarilan dosyalar (bkz. ExportJobPathRequest).
+    skip_paths: list[str] = Form([]),
 ) -> ExportJobStartOut:
     identity = _reject_if_active(project_name, sicil_no, branch_name)
     adapted = [_UploadedFileAdapter(f.filename or "", await f.read()) for f in files]
@@ -256,6 +304,7 @@ async def start_export_job_upload(
     kwargs = dict(
         source_path=str(source_dir), project_name=project_name, sicil_no=sicil_no,
         branch_name=branch_name, target_path=str(target_dir), initiated_by=initiated_by,
+        skip_paths=skip_paths,
     )
     try:
         job = export_jobs.start_job(

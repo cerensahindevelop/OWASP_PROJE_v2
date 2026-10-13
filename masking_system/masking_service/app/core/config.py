@@ -352,6 +352,17 @@ class ScanSettings(BaseSettings):
     def max_file_bytes(self) -> int:
         return self.max_file_mb * 1024 * 1024
 
+    slow_file_warn_mb: float = Field(
+        2.0, ge=0,
+        description="Bu boyut (MB) ve ustundeki metin dosyalari icin tarama baslamadan once "
+        "'uzun surebilir' uyarisi gosterilir; kullanici yine de devam edebilir. Olcum: 11,9 MB'lik "
+        "bir CSV saatler surdu, 2 MB'lik yogun bir CSV ~15 dk. 0 = uyari kapali.",
+    )
+
+    @property
+    def slow_file_warn_bytes(self) -> int:
+        return int(self.slow_file_warn_mb * 1024 * 1024)
+
     encoded_blob_min_chars: int = Field(
         512, ge=0,
         description="Bu uzunluk ve ustundeki gomulu ikili veri bloklari (orn. .resx icindeki "

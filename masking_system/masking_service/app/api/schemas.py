@@ -302,12 +302,19 @@ class ExportReportOut(BaseModel):
     degraded_detectors: list[str] = []
     blocked_by_check: dict[str, int] = {}
     llm_usage_summary: dict[str, float] = {}
+    user_skipped_paths: list[str] = []
 
 
 class ExportPathRequest(IdentityMixin):
     source_path: str
     target_path: str
     initiated_by: str
+
+
+# Arka plan isi: kullanicinin "uzun surebilir" uyarisinda taramadan
+# cikardigi dosyalar (kaynak koke gore goreli yol).
+class ExportJobPathRequest(ExportPathRequest):
+    skip_paths: list[str] = []
 
 
 class ExportResultOut(BaseModel):
@@ -324,6 +331,32 @@ class ExportResultOut(BaseModel):
 
 class ExportJobStartOut(BaseModel):
     job_id: str
+
+
+# Export oncesi "uzun surebilir" tahmini (bkz. app/services/slow_files.py).
+class ExportPreflightPathRequest(BaseModel):
+    source_path: str
+
+
+# Yuklenecek bir dosyanin icerigi degil, yalnizca tahmin icin gereken bilgisi.
+class UploadManifestEntry(BaseModel):
+    path: str
+    size_bytes: int = Field(ge=0)
+    is_text: bool
+
+
+class ExportPreflightUploadRequest(BaseModel):
+    files: list[UploadManifestEntry]
+
+
+class SlowFileOut(BaseModel):
+    path: str
+    size_bytes: int
+
+
+class ExportPreflightOut(BaseModel):
+    slow_files: list[SlowFileOut]
+    warn_mb: float
 
 
 class ExportJobOut(BaseModel):
