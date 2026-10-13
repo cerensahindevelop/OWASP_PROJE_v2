@@ -170,6 +170,8 @@ class AuditWarningOut(BaseModel):
     project_name: str | None = None
     branch_name: str | None = None
     revalidating: bool = False
+    # Dosyayi ciktidan alikoyan kontrolun kodu (bkz. app/services/failed_checks.py).
+    failed_check: str | None = None
     summary: str = ""
     location: str = ""
     next_step: str = ""

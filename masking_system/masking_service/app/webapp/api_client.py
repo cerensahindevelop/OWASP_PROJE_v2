@@ -401,5 +401,9 @@ def mask_review_file(review_id: int):
     return _post_json(f"/reviews/{review_id}/mask-file")
 
 
+def accept_syntax_audit_warning(warning_id: int):
+    return _post_json(f"/audit-warnings/{warning_id}/accept-syntax")
+
+
 def mask_audit_warning(warning_id: int):
     return _post_json(f"/audit-warnings/{warning_id}/mask")

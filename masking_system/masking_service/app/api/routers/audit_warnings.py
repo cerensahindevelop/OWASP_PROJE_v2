@@ -72,6 +72,14 @@ def dismiss_audit_warning(warning_id: int, db: Session = Depends(get_request_db)
     return _present(item, db)
 
 
+# Sozdizimi hatasiyla durdurulan dosyayi kullanici karariyla, diger final
+# kontrollerden gecerse cikti klasorune yazar.
+@router.post("/{warning_id}/accept-syntax", response_model=AuditWarningOut)
+def accept_syntax_audit_warning(warning_id: int, db: Session = Depends(get_request_db)) -> AuditWarningOut:
+    item = asyncio.run(AuditWarningService(db).accept_syntax_error(warning_id))
+    return _present(item, db)
+
+
 @router.post("/{warning_id}/mask", response_model=AuditWarningOut)
 def mask_audit_warning(warning_id: int, db: Session = Depends(get_request_db)) -> AuditWarningOut:
     item = asyncio.run(AuditWarningService(db).mask(warning_id))

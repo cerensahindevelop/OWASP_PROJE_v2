@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -61,6 +62,19 @@ _VALIDATION_FAILURE_FALLBACKS: dict[str, str] = {
 
 # Dosyayi ciktidan alikoyan sebep ve yapilacak is. Kayitli kontrol kodu varsa
 # inceleme ekraniyla AYNI aciklama kullanilir (bkz. failure_messages).
+# Sozdizimi dogrulayicisinin yazdigi konum ("satir 31, sutun 70"); parser
+# mesajinin kendisi kaynak parcasi tasiyabildigi icin yalnizca sayilar alinir.
+_SYNTAX_POSITION_RE = re.compile(r"satir (\d+)(?:, sutun (\d+))?", re.IGNORECASE)
+
+
+def _syntax_position(outcome) -> str:
+    position = _SYNTAX_POSITION_RE.search(getattr(outcome, "error", None) or "")
+    if position is None:
+        return ""
+    text = f" (maskelenmiş dosyada satır {position.group(1)}"
+    return text + (f", sütun {position.group(2)})" if position.group(2) else ")")
+
+
 def _validation_failure_reason(outcome) -> str:
     explained = explain_failure(getattr(outcome, "failed_check", None), outcome.error)
     if explained is not None:
@@ -611,9 +625,11 @@ def _render_result(result: dict) -> None:
             f"🔴 {len(syntax_failed)} dosya, maskeleme SÖZDİZİMİNİ bozduğu için hedef klasöre "
             "KOPYALANMADI (başarısız_dosyalar/ klasörüne taşındı) — manuel incelemeniz gerekiyor."
         )
-        with st.expander(f"Sözdizimi hatası olan {len(syntax_failed)} dosyayı gör"):
+        with st.expander(f"Sözdizimi hatası olan {len(syntax_failed)} dosyayı gör", expanded=True):
             for outcome in syntax_failed:
-                st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
+                st.write(f"- `{outcome.relative_path}`{_syntax_position(outcome)}: {_validation_failure_reason(outcome)}")
+        if st.button("Sözdizimi hatasının konumunu gör ve dosyayı yine de çıktıya ekle →", key="goto_syntax_failed"):
+            st.switch_page(st.session_state["_nav_pages"]["review"])
 
     round_trip_failed = [o for o in report.outcomes if o.status == "failed_round_trip_validation"]
     if round_trip_failed:
@@ -664,6 +680,8 @@ def _render_result(result: dict) -> None:
                     f"{len(syntax_failed) + len(round_trip_failed) + len(consistency_failed)} "
                     "dosya da yukarıdaki indirilen pakete DAHİL EDİLMEDİ — yukarıdaki listeye bakıp "
                     "manuel olarak inceleyin/düzeltin."
+                    + (" Sözdizimi hatalı dosyaları uyarılar ekranından bozuk haliyle pakete ekleyebilirsiniz; "
+                       "bu ekrana döndüğünüzde indirme paketi yenilenir." if syntax_failed else "")
                 )
         else:
             # `None` yalnizca indirme isteginin teknik olarak basarisiz

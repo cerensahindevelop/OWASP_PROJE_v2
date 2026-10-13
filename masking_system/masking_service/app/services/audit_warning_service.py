@@ -10,6 +10,9 @@ ayri: buradaki "onayla/reddet" anlami TERSTIR -
   - dismiss(): dar kapsamli suppression karari olusturur; sozluk, syntax,
     placeholder/restore ve AI final denetimini yeniden calistirir. Yalnizca
     hepsi gecerse maskelenmis icerigi hedef klasore yazar.
+  - accept_syntax_error(): yalnizca sozdizimi hatasiyla durdurulan dosya
+    icin; kullanici dosyayi bozuk sozdizimiyle istiyorsa dismiss() ile ayni
+    final kontrolleri (sozdizimi haric) calistirip yayinlar.
 
 dismiss()/mask() uc asamada calisir:
   A. Aday icerik bir SAVEPOINT icinde hazirlanir (maskeleme, tutarlilik,
@@ -58,6 +61,7 @@ from app.services.file_type import write_text_preserving_encoding
 from app.services.learned_decisions import LearnedDecisionPolicy, covered_by_values, remember_decision
 from app.services.llm_recognizer import LLMRecognitionError
 from app.services.rule_engine import PLACEHOLDER_RE
+from app.services.failed_checks import FailedCheck
 from app.services.syntax_validator import validate_masked_syntax
 from app.services.term_upload import find_leaked_terms
 
@@ -160,6 +164,27 @@ class AuditWarningService:
             warning, run, mask_values=[], suppressions=suppressions,
             failure_message="Dosya yeniden doğrulamadan geçemedi ve çıktıya eklenmedi",
             decision_detail="user_decision=false_alarm",
+        )
+
+    @llm_http_scope()
+    async def accept_syntax_error(self, warning_id: int) -> AuditWarning:
+        """Sozdizimi bozuk maskeli dosyayi kullanici karariyla yayinlar.
+
+        Yalnizca sozdizimi kontrolu engel olmaktan cikar (SYNTAX_FAILURE_ACTION=warn
+        ile ayni davranis, ama tek dosya icin); tutarlilik, kurumsal terim,
+        geri donus ve LLM final denetimi aynen calisir, biri gecmezse dosya
+        yine cikmaz. Java .class bozuk haliyle yeniden kurulamaz (bkz. _offline_checks).
+        """
+        warning = self._pending_warning(warning_id, message="Bu dosya kararı zaten işlenmiş veya bulunamadı.")
+        if warning.failed_check != FailedCheck.SOZDIZIMI:
+            raise ValueError("Bu seçenek yalnızca sözdizimi hatası nedeniyle çıktıya alınmayan dosyalar içindir.")
+        run = self.db.get(MaskingRun, warning.run_id)
+        if run is None:
+            raise ValueError("İlgili maskeleme işlemi bulunamadı.")
+        return await self._release_with_revalidation(
+            warning, run, mask_values=[], suppressions=[],
+            failure_message="Dosya yeniden doğrulamadan geçemedi ve çıktıya eklenmedi",
+            decision_detail="user_decision=accept_syntax_error", allow_syntax_error=True,
         )
 
     @llm_http_scope()
@@ -322,7 +347,7 @@ class AuditWarningService:
         self, warning: AuditWarning, run: MaskingRun, *,
         mask_values: list[tuple[str, str]], suppressions: list[str],
         failure_message: str, decision_detail: str, revalidation_token: str | None = None,
-        learned_sensitive: Sequence[str] = (),
+        learned_sensitive: Sequence[str] = (), allow_syntax_error: bool = False,
     ) -> AuditWarning:
         warning_id = warning.id
         release_location = (run.target_path, warning.file_path, warning.output_path, warning.encoding)
@@ -330,7 +355,7 @@ class AuditWarningService:
         # A: aday icerik; hicbir yazma kalici degil, kilit LLM'den once birakilir.
         savepoint = self.db.begin_nested()
         try:
-            candidate = self._prepare_candidate(warning, run, mask_values)
+            candidate = self._prepare_candidate(warning, run, mask_values, allow_syntax_error=allow_syntax_error)
         finally:
             savepoint.rollback()
         self.db.commit()
@@ -350,7 +375,7 @@ class AuditWarningService:
             self.db.refresh(run)
             if (run.target_path, warning.file_path, warning.output_path, warning.encoding) != release_location:
                 raise _StaleCandidate("çıktı konumu doğrulama sırasında değişti; işlemi tekrarlayın")
-            again = self._prepare_candidate(warning, run, mask_values)
+            again = self._prepare_candidate(warning, run, mask_values, allow_syntax_error=allow_syntax_error)
             if again.error is not None or again.content != candidate.content:
                 raise _StaleCandidate(again.error or "dosya ya da eşlemeler doğrulama sırasında değişti; işlemi tekrarlayın")
             warning = self.audit_warnings.transition_pending(
@@ -435,7 +460,7 @@ class AuditWarningService:
 
     def _prepare_candidate(
         self, warning: AuditWarning, run: MaskingRun, mask_values: list[tuple[str, str]],
-        *, content: str | None = None, raise_mask_errors: bool = False,
+        *, content: str | None = None, raise_mask_errors: bool = False, allow_syntax_error: bool = False,
     ) -> _Candidate:
         from app.services.review_masking import mask_review_values
 
@@ -449,10 +474,12 @@ class AuditWarningService:
                 return _Candidate(content, 0, str(exc))
         content, count, error = self._with_run_consistency(content, warning, run)
         if error is None:
-            error = self._offline_checks(content, warning, run)
+            error = self._offline_checks(content, warning, run, allow_syntax_error=allow_syntax_error)
         return _Candidate(content, count, error)
 
-    def _offline_checks(self, content: str, warning: AuditWarning, run: MaskingRun) -> str | None:
+    def _offline_checks(
+        self, content: str, warning: AuditWarning, run: MaskingRun, *, allow_syntax_error: bool = False,
+    ) -> str | None:
         if warning.encoding == "java-class-v1":
             return "Java class dosyası için orijinal projeyi yeniden tarayın; metin önizlemesinden bytecode oluşturulamaz"
         if not run.target_path:
@@ -481,12 +508,13 @@ class AuditWarningService:
         # bir sozdizimi hatasi (orn. yorumlu JSON) maskelemenin hatasi sayilmaz.
         original_text = reverse_text(content, reverse_map)[0]
         syntax_error = validate_masked_syntax(warning.file_path, content, original_text=original_text)
-        if syntax_error and settings.validation.syntax_failure_action == "warn":
+        if syntax_error and (allow_syntax_error or settings.validation.syntax_failure_action == "warn"):
             # Gizlilik kontrolleri (tutarlilik, acik terim) gecti; denetim asagida
             # yine calisir. Hata yalnizca uyari olarak kaydedilir.
+            decision = "user_decision=accept_syntax_error" if allow_syntax_error else "syntax_failure_action=warn"
             self.db.add(AuditLog(
                 run_id=run.id, file_path=warning.file_path, action="skipped",
-                detail=f"validation_warning; syntax_failure_action=warn; {syntax_error}",
+                detail=f"validation_warning; {decision}; {syntax_error}",
             ))
         elif syntax_error:
             return f"sözdizimi doğrulaması başarısız: {syntax_error}"

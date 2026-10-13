@@ -5,3 +5,4 @@
 MASK_ACTION_LABEL = "Maskele ve çıktıya ekle"
 DISMISS_ACTION_LABEL = "Sorun yok, çıktıya ekle"
 CONFIRM_ACTION_LABEL = "Çıktıya ekleme"
+ACCEPT_SYNTAX_ACTION_LABEL = "Sözdizimi bozuk haliyle çıktıya ekle"

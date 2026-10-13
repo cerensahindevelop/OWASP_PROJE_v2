@@ -235,6 +235,12 @@ class PresidioDetector:
             # kisitlamasindan BAGIMSIZ, ek bir savunma katmani.
             if item.entity_type in NATURAL_LANGUAGE_ENTITY_TYPES and is_high_entropy(value, self.entropy_threshold):
                 continue
+            # Ingilizce spaCy modeli Turkce kelimeleri tarih sanabiliyor (gozlenen:
+            # Python'da `islemler=[]` icindeki `islemler=` DATE_TIME/0.85 cikti ve
+            # yer tutucu `=` isaretini yutup dosyanin sozdizimini bozdu). Kodda
+            # hassas sayilacak bir tarih (dogum tarihi vb.) her zaman rakam icerir.
+            if item.rule is None and item.entity_type == "DATE_TIME" and not any(ch.isdigit() for ch in value):
+                continue
             rule = item.rule
             if rule is None:
                 rule = synthetic_llm_rule(item.entity_type)

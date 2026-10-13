@@ -16,7 +16,7 @@ from app.services.audit_reviewer import AuditFindingVerifier, code_symbol_name
 from app.services.failed_checks import FailedCheck
 from app.services.failure_messages import explain_failure
 from app.services.mapping_service import mapping_scope_for_run
-from app.services.rule_engine import reverse_text
+from app.services.rule_engine import PLACEHOLDER_RE, reverse_text
 from app.services.term_upload import find_leaked_terms
 
 
@@ -131,11 +131,41 @@ def _recorded_term_values(reason: str) -> dict[tuple[int, int], str]:
 
 
 
+# Sozdizimi hatasinin bildirildigi satirda, hata sutunundan once gelen en yakin
+# yer tutucu (sutun yoksa satirdaki ilki) ve yerine gectigi deger. Ayrinti
+# parser mesajindan degil, maskeli icerik ve eslemelerden uretilir: parser
+# mesajlari kaynak parcasi tasiyabilir (bkz. asagidaki sozdizimi dali).
+def _syntax_break_evidence(
+    db: Session | None, warning: AuditWarning, line_no: int, column: int | None,
+) -> tuple[str, dict] | tuple[None, None]:
+    lines = (warning.masked_content or "").splitlines()
+    if not 1 <= line_no <= len(lines):
+        return None, None
+    line = lines[line_no - 1]
+    placeholders = list(PLACEHOLDER_RE.finditer(line))
+    if not placeholders:
+        return None, None
+    before = [m for m in placeholders if column is None or m.start() < column]
+    match = (before or placeholders)[-1] if column is not None else placeholders[0]
+    value = _run_reverse_map(db, warning).get(match.group(0))
+    if value is None:
+        return None, None
+    excerpt = line.strip()
+    excerpt = excerpt.replace(match.group(0), f"⟦{match.group(0)}⟧", 1)
+    if len(excerpt) > 240:
+        excerpt = excerpt[:237] + "…"
+    return match.group(0), {
+        "line": line_no, "column": column, "found_value": value,
+        "label": "Sözdizimini bozan maskeleme", "excerpt": excerpt,
+    }
+
+
 def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit: int | None = 6) -> dict[str, object]:
     reason = warning.reasoning or ""
     if warning.audit_failed:
         lowered = reason.casefold()
         location = "Dosya geneli — belirli bir satır tespit edilmedi."
+        evidence: list[dict] = []
         if "round-trip" in lowered or "geri dönüş" in lowered:
             summary = "Geri dönüş (round-trip) doğrulaması tamamlanamadı."
             if "karsilik bulunamadi" in lowered or "çözülemiyor" in lowered:
@@ -163,6 +193,16 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
                 if position.group(2):
                     location += f", sütun {position.group(2)}"
                 location += "."
+                line_no = int(position.group(1))
+                column = int(position.group(2)) if position.group(2) else None
+                placeholder, syntax_evidence = _syntax_break_evidence(db, warning, line_no, column)
+                if syntax_evidence:
+                    value = syntax_evidence["found_value"]
+                    location += (
+                        f" Bu satırda `{placeholder}` yer tutucusu `{value}` değerinin yerine konmuş; "
+                        "yapı büyük olasılıkla bu değişiklikle bozuldu."
+                    )
+                    evidence.append(syntax_evidence)
         elif "boyut" in lowered:
             summary = "Dosya boyut sınırını aştığı için güvenlik taraması tamamlanamadı."
         elif "binary" in lowered or "metin dışı" in lowered:
@@ -179,7 +219,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
         explained = explain_failure(getattr(warning, "failed_check", None), reason)
         if explained is not None:
             summary, next_step = explained
-        return {"summary": summary, "location": location, "next_step": next_step, "evidence": []}
+        return {"summary": summary, "location": location, "next_step": next_step, "evidence": evidence}
 
     if getattr(warning, "failed_check", None) == FailedCheck.KODLANMIS_VERI:
         lines = list(dict.fromkeys(re.findall(r"(?:satir|satır) (\d+)", reason, re.IGNORECASE)))

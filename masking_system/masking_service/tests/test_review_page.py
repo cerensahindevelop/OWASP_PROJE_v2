@@ -94,3 +94,44 @@ def test_automatic_file_action_uses_backend_without_text_editor(monkeypatch):
     assert calls == [9]
     assert not app.text_input and not app.text_area
     assert any("çıktıya eklendi" in item.value for item in app.success)
+
+
+def test_syntax_failure_shows_exact_location_and_can_be_added_to_output(monkeypatch):
+    monkeypatch.setattr(review_page, "get_identity", lambda: {
+        "project_name": "test", "sicil_no": "TEST-1", "branch_name": "test",
+    })
+    syntax = SimpleNamespace(
+        id=31, run_id=47, file_path="araclar/veri_uret.py", audit_failed=True, failed_check="sozdizimi",
+        reasoning="Sözdizimi doğrulaması başarısız: Python sozdizimi hatasi (satir 31, sutun 70)",
+        summary="Sözdizimi: maskeleme sonrası dosya Python kurallarına uymuyor.",
+        location="Maskelenmiş dosyada satır 31, sütun 70. Bu satırda `mask_date_time_1` yer tutucusu "
+                 "`islemler=` değerinin yerine konmuş.",
+        next_step="Projeyi yeniden dışa aktarmak sonucu değiştirmez.",
+        evidence=[SimpleNamespace(line=31, column=70, found_value="islemler=", label="Sözdizimini bozan maskeleme",
+                                  excerpt="kartlar=[]; ⟦mask_date_time_1⟧[]; sayac=0")],
+    )
+    other = SimpleNamespace(
+        id=32, run_id=47, file_path="lib/App.class", audit_failed=True, failed_check="sozdizimi",
+        reasoning="ClassFormatError", summary="Sözdizimi: maskeleme dosyanın yapısını bozdu.",
+        location="Dosya geneli.", next_step="Bildirin.", evidence=[],
+    )
+    monkeypatch.setattr(review_page.api_client, "list_pending_audit_warnings", lambda **_: [syntax, other])
+    monkeypatch.setattr(review_page.api_client, "list_pending_reviews", lambda **_: [])
+    monkeypatch.setattr(review_page.api_client, "list_runs", lambda **_: [])
+    accepted = []
+    monkeypatch.setattr(review_page.api_client, "accept_syntax_audit_warning", accepted.append)
+
+    app = _review_app().run()
+
+    assert not app.exception
+    table = app.dataframe[0].value
+    assert "Konum" in table.columns and "satır 31, sütun 70" in table["Konum"][0]
+    assert any("`islemler=`" in m.value for m in app.markdown)
+    assert any("⟦mask_date_time_1⟧" in code.value for code in app.code)
+    # Java .class bozuk haliyle yeniden kurulamaz: secenek yalnizca .py dosyasinda.
+    assert [b.key for b in app.button if b.key.startswith("audit_accept_syntax_")] == ["audit_accept_syntax_31"]
+
+    app.button(key="audit_accept_syntax_31").click().run()
+
+    assert not app.exception
+    assert accepted == [31]

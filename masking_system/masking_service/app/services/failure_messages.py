@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from app.services.audit_action_labels import ACCEPT_SYNTAX_ACTION_LABEL
 from app.services.failed_checks import FailedCheck
 
 _RERUN = "Projeyi yeniden dışa aktarın; tekrar ederse sistem kayıtlarını inceleyin."
@@ -28,6 +29,13 @@ _LOCK_HINT = (
 _LLM_HINT = "LLM sunucusunun çalıştığını kontrol edip projeyi yeniden dışa aktarın."
 _TARGET_HINT = "Hedef klasörde yer ve yazma izni olduğunu kontrol edip projeyi yeniden dışa aktarın."
 _REVIEW_HINT = "Uyarılar ekranında bulunan değeri inceleyip karar verin."
+# Sozdizimi hatasi deterministiktir: ayni dosya ayni bulguyla yine bozulur.
+_SYNTAX_HINT = (
+    "Projeyi yeniden dışa aktarmak sonucu değiştirmez; aynı maskeleme tekrar oluşur. Konumda gösterilen "
+    "değerin maskelenmesi yanlışsa ya da dosyayı bu haliyle kullanabilecekseniz uyarılar ekranında "
+    f"“{ACCEPT_SYNTAX_ACTION_LABEL}” seçin (diğer güvenlik kontrolleri yine yapılır). Değilse dosya adını "
+    "ve satırı sistem sorumlusuna bildirin."
+)
 
 Explanation = tuple[str, str]
 
@@ -87,7 +95,7 @@ _MESSAGES: dict[str, Explanation] = {
         "Açık kalan kurumsal terim: sözlükteki bir terim maskeli çıktıda açık kaldı.",
         "Maskeleme kurallarını kontrol edip projeyi yeniden dışa aktarın.",
     ),
-    FailedCheck.SOZDIZIMI: ("Sözdizimi: maskeleme dosyanın yapısını bozdu.", _REPORT),
+    FailedCheck.SOZDIZIMI: ("Sözdizimi: maskeleme dosyanın yapısını bozdu.", _SYNTAX_HINT),
     FailedCheck.YAZMA: ("Yazma hatası: maskelenmiş dosya çıktı klasörüne yazılamadı.", _TARGET_HINT),
     FailedCheck.GERI_DONUS: (
         "Geri dönüş: maskeli dosya asıl haline birebir çevrilemedi.", _PLACEHOLDER_HINT,

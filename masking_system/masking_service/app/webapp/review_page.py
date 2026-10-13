@@ -17,7 +17,10 @@ from app.webapp.api_client import ApiError
 from app.webapp.common import CONFIDENCE_COLORS, CONFIDENCE_LABELS, page_intro, show_error
 # get_identity: sadece aktif kimlige ait onay kuyrugu kayitlarini listelemek icin.
 from app.webapp.identity import get_identity, render_project_branch_filter
-from app.services.audit_action_labels import CONFIRM_ACTION_LABEL, DISMISS_ACTION_LABEL, MASK_ACTION_LABEL
+from app.services.audit_action_labels import (
+    ACCEPT_SYNTAX_ACTION_LABEL, CONFIRM_ACTION_LABEL, DISMISS_ACTION_LABEL, MASK_ACTION_LABEL,
+)
+from app.services.failed_checks import FailedCheck
 from app.services.learned_decisions import normalize_value, security_scope
 
 _APPROVE_NOTE = (
@@ -125,6 +128,8 @@ def _apply_audit_action(action: str, warning_id: int) -> tuple[str, str]:
             api_client.confirm_audit_warning(warning_id)
         elif action == "mask":
             api_client.mask_audit_warning(warning_id)
+        elif action == "accept_syntax":
+            api_client.accept_syntax_audit_warning(warning_id)
         else:
             api_client.dismiss_audit_warning(warning_id)
         _invalidate_export_download()
@@ -143,6 +148,12 @@ def _run_single_audit_action(action: str, warning_id: int) -> None:
             flash_text = (
                 "🔴 Risk doğrulandı: bu dosya dışa aktarılmış klasöre HÂLÂ kopyalanmadı. Bu proje "
                 "için maskeleme kurallarını düzeltip yeniden dışa aktarmanız gerekir."
+            )
+        elif action == "accept_syntax":
+            flash_text = (
+                "✅ Dosya diğer güvenlik kontrollerinden (tutarlılık, kurumsal terim, geri dönüş, yapay zekâ "
+                "denetimi) geçti ve sözdizimi bozuk haliyle çıktıya eklendi. İndirdiğiniz pakette bu dosyanın "
+                "derlenmeyebileceğini unutmayın."
             )
         elif action == "mask":
             flash_text = (
@@ -210,6 +221,7 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
             "file_path": item.file_path,
             "reasoning": item.reasoning,
             "audit_failed": item.audit_failed,
+            "failed_check": getattr(item, "failed_check", None),
             "run_id": item.run_id,
             "summary": getattr(item, "summary", "") or "Denetim ayrıntısını inceleyin.",
             "location": getattr(item, "location", "") or "Konum bilgisi kaydedilmemiş.",
@@ -260,13 +272,36 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
 
     if validation_rows:
         st.markdown("### Hatalı dosyalar")
+        syntax_note = (
+            " Sözdizimi hatası olan dosyaları aşağıdaki ayrıntıdan isterseniz bozuk haliyle çıktıya ekleyebilirsiniz."
+            if any(row["failed_check"] == FailedCheck.SOZDIZIMI for row in validation_rows) else ""
+        )
         st.error("Bu dosyalar teknik bir kontrolden geçemediği için çıktıya alınmadı. "
-                 "Sebebi ve ne yapmanız gerektiği her satırda yazıyor.")
+                 "Sebebi, konumu ve ne yapmanız gerektiği her satırda yazıyor." + syntax_note)
         st.dataframe([
             {"İşlem": row["run_id"], "Dosya": row["file_path"], "Sebep": row["summary"],
-             "Ne yapmalı": row["next_step"]}
+             "Konum": row["location"], "Ne yapmalı": row["next_step"]}
             for row in validation_rows
         ], hide_index=True, width="stretch")
+        # Sozdizimi hatasi: dosya maskelenmis ve diger kontrollere hazir; kullanici
+        # bozuk haliyle de isteyebilir. Java .class bozuk haliyle yeniden kurulamaz.
+        for row in validation_rows:
+            if row["failed_check"] != FailedCheck.SOZDIZIMI or row["file_path"].lower().endswith(".class"):
+                continue
+            file_name = row["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
+            with st.expander(f"📄 {file_name} — sözdizimi hatasının konumu ve seçenekler"):
+                st.caption(f"{row['project']} · {row['file_path']} · İşlem #{row['run_id']}")
+                st.markdown(f"**Sebep:** {row['summary']}")
+                st.markdown(f"**Konum:** {row['location']}")
+                for evidence in row["evidence"]:
+                    where = f"Satır {evidence.line}" if getattr(evidence, "line", None) else "Satır"
+                    if getattr(evidence, "column", None):
+                        where += f", sütun {evidence.column}"
+                    st.caption(f"{where} — maskelenmiş hali (⟦ ⟧ işaretli yer tutucu sorunlu maskeleme)")
+                    st.code(evidence.excerpt, language=None)
+                st.info(row["next_step"])
+                if st.button(ACCEPT_SYNTAX_ACTION_LABEL, key=f"audit_accept_syntax_{row['id']}", width="stretch"):
+                    _run_single_audit_action("accept_syntax", row["id"])
 
     if not quarantine_rows:
         if validation_rows:
