@@ -25,6 +25,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from app.services.long_paths import extended_length_path
+
 UPLOADS_OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "uploads_output"
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ def _is_within(base: Path, candidate: Path) -> bool:
 # Bir zip arsivini, her girdinin cozulmus yolu hedef klasorun disina
 # cikmadigini onceden dogrulayarak acar ('zip slip' saldirisina karsi).
 def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: Path) -> None:
-    resolved_target = target_dir.resolve()
+    resolved_target = extended_length_path(target_dir.resolve())
     for member in zf.namelist():
         member_path = (resolved_target / member).resolve()
         if not _is_within(resolved_target, member_path):
@@ -94,7 +96,7 @@ def save_uploaded_files_to_temp_dir(uploaded_files: list, *, is_directory_upload
     tmp_dir = Path(tempfile.mkdtemp(prefix="osw_upload_src_"))
     try:
         if is_directory_upload:
-            resolved_root = tmp_dir.resolve()
+            resolved_root = extended_length_path(tmp_dir.resolve())
             for uploaded in uploaded_files:
                 dest = _safe_relative_path(resolved_root, uploaded.name)
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +130,7 @@ def is_single_plain_file_upload(uploaded_files: list, *, is_directory_upload: bo
 # arsivinin bayt dizisine paketler; st.download_button ile dogrudan
 # indirilebilir sonucu uretmek icin kullanilir.
 def zip_directory_to_bytes(source_dir: Path) -> bytes:
+    source_dir = extended_length_path(source_dir)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(source_dir.rglob("*")):

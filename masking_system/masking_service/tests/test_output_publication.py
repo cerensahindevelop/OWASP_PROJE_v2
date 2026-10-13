@@ -99,6 +99,10 @@ def test_offline_recovery_at_each_rename_boundary(db_session, tmp_path, phase):
         publication.promote()
     with pytest.raises(ValueError, match="application-stopped"):
         recover_output(db_session, target)
+    # Yazici hala calisiyor (kilit tutuluyor): kurtarma ona dokunmaz.
+    with pytest.raises(ValueError, match="calisan bir islem"):
+        recover_output(db_session, target, application_stopped=True)
+    publication.release_lock()  # surecin kapanmasini taklit eder
     recover_output(db_session, target, application_stopped=True)
     assert (target / "old").read_text() == "old"
     assert not (target / "new").exists()

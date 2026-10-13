@@ -336,6 +336,7 @@ class ExportJobOut(BaseModel):
     error_message: str | None = None
     error_detail: str | None = None
     error_status: int | None = None
+    cancel_requested: bool = False
 
 
 # --------------------------------------------------------------------------

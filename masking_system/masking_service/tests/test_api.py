@@ -184,13 +184,19 @@ def test_audit_warning_api_exposes_summary_and_location_without_file_content(cli
     assert "private file content" not in response.text
 
 
-def test_export_in_progress_maps_to_409_not_400(client, db_session):
+def test_export_in_progress_maps_to_409_not_400(client, db_session, tmp_path):
     """ExportInProgressError bir ValueError DEGIL bir MaskingSystemError'dur -
     genel bir except ValueError'a yakalanip yanlislikla 400/'beklenmeyen
     hata' donmemeli (bkz. app/core/error_translation.py docstring'i,
     gecmiste tam olarak bu hataya dusulmustu)."""
+    from app.services.output_publication import OutputPublication
+
     context = _make_context(db_session, "in-progress")
-    _make_run(db_session, context, operation_type="mask", status="in_progress")
+    running_target = tmp_path / "calisan-hedef"
+    run = _make_run(db_session, context, operation_type="mask", status="in_progress",
+                    target_path=str(running_target.resolve()))
+    # Calisan yazici: kurtarma gunlugunun kilidi tutuluyor (terk edilmis degil).
+    publication = OutputPublication(running_target, run.id)
 
     files = {"files": ("ornek.txt", b"merhaba", "text/plain")}
     data = {
@@ -200,7 +206,10 @@ def test_export_in_progress_maps_to_409_not_400(client, db_session):
         "initiated_by": context.sicil_no,
         "is_directory_upload": "false",
     }
-    resp = client.post("/export/upload", data=data, files=files)
+    try:
+        resp = client.post("/export/upload", data=data, files=files)
+    finally:
+        publication.close()
 
     assert resp.status_code == 409
     body = resp.json()

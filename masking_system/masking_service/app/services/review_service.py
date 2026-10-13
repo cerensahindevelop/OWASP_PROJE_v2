@@ -108,7 +108,8 @@ class ReviewService:
         self.db.refresh(hold)
         written = hold.status == "dismissed"
         return {"run_id": item.run_id, "file_path": item.file_path, "written": written,
-                "message": ("Riskli ifadeler sistem tarafından maskelendi, eşlemeler kaydedildi ve dosya çıktıya eklendi."
+                "message": ("Riskli ifadeler sistem tarafından maskelendi, eşlemeler kaydedildi ve dosya çıktıya eklendi. "
+                            "Bu ifadeler proje genelinde hassas olarak öğrenildi ve sonraki maskelemelerde otomatik gizlenecek."
                             if written else "İfadeler maskelendi ve kaydedildi; dosya son doğrulamadan geçemedi. " + hold.reasoning)}
 
     # Bulguyu reddeder ve yalnizca ayni context+varlik tipi+dosya kapsami icin suppression ogrenilir.

@@ -48,7 +48,7 @@ from app.services.java_classfile import ClassFormatError
 from app.services.rule_engine import reverse_text
 from app.services.path_placeholders import PathPlaceholderResolver, UnsafeUnmaskPathError
 from app.services.scanner import iter_project_files
-from app.services.output_publication import OutputPublication, publish_run
+from app.services.output_publication import OutputPublication, publish_run, recover_abandoned_output
 from app.services.integrity_manifest import MANIFEST_NAME, peek_manifest_job_id, read_manifest, file_digest, source_tag
 from app.services.mapping_service import mapping_scope_for_run
 from app.services.roundtrip_validator import text_digest
@@ -550,6 +550,9 @@ def unmask_project(
         allow_legacy=manifest is not None and manifest["version"] == 1,
     )
 
+    # Hedefte cokmus bir islemden kalmis terk edilmis gunluk varsa kurtarilir
+    # (bkz. output_publication.recover_abandoned_output); calisan isleme dokunulmaz.
+    recover_abandoned_output(db, target)
     run = MaskingRun(
         context_id=context.id,
         operation_type="unmask",

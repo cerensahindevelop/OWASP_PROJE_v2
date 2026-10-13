@@ -38,8 +38,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.db.models import AuditLog, AuditWarning, FilterRule, MaskingContext, MaskingRun, ValueMapping
-from app.services.consistency_masking import SensitiveValueRegistry, find_consistency_occurrences
+from app.services.consistency_masking import SensitiveValueRegistry, find_consistency_occurrences, registry_authority
 from app.core.exceptions import ReviewAlreadyProcessedError
+from app.services.long_paths import extended_length_path
 from app.services.integrity_manifest import manifest_lock, read_manifest, write_manifest, file_digest, source_tag
 from app.services.mapping_service import load_active_rules, mapping_scope_for_run, mask_relative_path
 from app.services.roundtrip_validator import text_digest
@@ -179,8 +180,12 @@ class AuditWarningService:
         values = [(value, "POST_MASK_AUDIT") for value in self._evidence_values(warning)]
         if not values:
             raise ValueError("Denetim dosyada birebir bulunan bir ifade belirtmedi; otomatik maskeleme yapılamadı.")
+        # Kullanicinin "maskele" karari, onay kuyrugundaki onay gibi projede
+        # hatirlanir. Tek tikla tum alintilar maskelendigi icin yalnizca
+        # yayilabilir alintilar (>=4 karakter, generic olmayan) ogrenilir.
+        learned = [value for value, _ in values if registry_authority(value, "llm_audit") is not None]
         return await self._release_with_revalidation(
-            warning, run, mask_values=values, suppressions=[],
+            warning, run, mask_values=values, suppressions=[], learned_sensitive=learned,
             failure_message="Otomatik maskeleme sonrası dosya çıktıya eklenmedi",
             decision_detail="user_decision=automatic_mask",
         )
@@ -317,6 +322,7 @@ class AuditWarningService:
         self, warning: AuditWarning, run: MaskingRun, *,
         mask_values: list[tuple[str, str]], suppressions: list[str],
         failure_message: str, decision_detail: str, revalidation_token: str | None = None,
+        learned_sensitive: Sequence[str] = (),
     ) -> AuditWarning:
         warning_id = warning.id
         release_location = (run.target_path, warning.file_path, warning.output_path, warning.encoding)
@@ -360,8 +366,18 @@ class AuditWarningService:
                 ).id
                 for value in suppressions
             ]
+            sensitive_ids = [
+                remember_decision(
+                    self.db, context_id=run.context_id, decision_type="sensitive",
+                    value=value, entity_type="POST_MASK_AUDIT", file_path=warning.file_path,
+                    source_review_id=None,
+                ).id
+                for value in learned_sensitive
+            ]
             self._release_to_target(warning)
             suppression_detail = f" suppression_rule_ids={learned_ids}" if suppressions else ""
+            if sensitive_ids:
+                suppression_detail += f" learned_rule_ids={sensitive_ids}"
             self.db.add(AuditLog(
                 run_id=run.id, file_path=warning.file_path,
                 action="replaced" if mask_values else "skipped",
@@ -595,7 +611,8 @@ class AuditWarningService:
         run = self.db.get(MaskingRun, warning.run_id)
         if run is None or not run.target_path:
             raise ValueError("Export hedef klasörü bulunamadı; dosya çıktıya yazılamaz")
-        target = Path(run.target_path).resolve()
+        # Windows: hedefteki uzun yollar MAX_PATH sinirina takilmasin.
+        target = extended_length_path(Path(run.target_path).resolve())
         output_rel = self._output_relative_path(warning, run)
         dest_path = (target / output_rel).resolve()
         try:
@@ -622,7 +639,7 @@ class AuditWarningService:
         original_text, _resolved, _unresolved = reverse_text(warning.masked_content, self._run_reverse_map(run))
         mode = 0o644
         if run.source_path:
-            source_file = Path(run.source_path) / warning.file_path
+            source_file = extended_length_path(Path(run.source_path) / warning.file_path)
             try:
                 mode = source_file.stat().st_mode & 0o777
             except OSError:

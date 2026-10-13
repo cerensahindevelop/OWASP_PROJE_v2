@@ -58,6 +58,30 @@ def test_quick_text_mode_shows_masked_and_restored_side_by_side(monkeypatch):
     assert kwargs["sicil_no"] == "TEST-1" and "project_name" not in kwargs
     assert [code.value for code in app.code] == ["db.password=__SECRET_1__", "db.password=gercek-parola"]
     assert any("Orijinaline Dönüştürülmüş" in markdown.value for markdown in app.markdown)
+    assert not any("Algılanan dosya türü" in caption.value for caption in app.caption)
+
+
+def test_quick_text_mode_auto_detects_masked_text_type(monkeypatch):
+    calls = []
+
+    def fake_unmask_upload(uploaded_files, **kwargs):
+        calls.append(uploaded_files[0].name)
+        return SimpleNamespace(
+            report=_report(), download_base64=base64.b64encode(uploaded_files[0].getvalue()).decode("ascii"),
+            download_filename=f"geri_donusturulmus_{uploaded_files[0].name}",
+        )
+
+    monkeypatch.setattr(import_page, "get_identity", lambda: IDENTITY)
+    monkeypatch.setattr(import_page.api_client, "unmask_upload", fake_unmask_upload)
+
+    app = _import_app().run()
+    app.radio(key="import_mode").set_value(import_page._MODE_TEXT).run()
+    app.text_area(key="import_text_input").input("spring:\n  datasource:\n    password: mask_parola_1")
+    app.button[0].click().run()
+
+    assert not app.exception
+    assert calls == ["hizli_metin.yml"]
+    assert any("Algılanan dosya türü" in caption.value and "YAML" in caption.value for caption in app.caption)
 
 
 def test_zip_preview_pairs_only_changed_text_files_by_path():

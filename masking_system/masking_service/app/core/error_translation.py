@@ -15,7 +15,9 @@ from __future__ import annotations
 # guvenli mesaja cevirmek icin yakalanir (baglanti kopmasi, kisit ihlali vb.).
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.exceptions import ExportInProgressError, MaskingSystemError, ReviewAlreadyProcessedError
+from app.core.exceptions import (
+    ExportCancelledError, ExportInProgressError, MaskingSystemError, ReviewAlreadyProcessedError,
+)
 from app.services.exporter import ExportValidationError
 from app.services.term_file_parser import TermFileError
 from app.services.term_upload import TermUploadValidationError
@@ -40,6 +42,8 @@ def friendly_error(exc: Exception) -> tuple[str, str | None]:
             "bitmesini bekleyip tekrar deneyin.",
             str(exc),
         )
+    if isinstance(exc, ExportCancelledError):
+        return ("Tarama durduruldu. Yarım kalan çıktı silindi; varsa önceki çıktı korundu.", None)
     if isinstance(exc, ReviewAlreadyProcessedError):
         return ("Bu kayıt başka biri tarafından zaten işlenmiş. Liste güncellendi.", str(exc))
     if isinstance(exc, ExportValidationError):

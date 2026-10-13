@@ -37,11 +37,14 @@ class ApiError(Exception):
     """Backend'den donen bir hata yaniti (ya da backend'e hic ulasilamamasi) -
     `message`/`detail` zaten Turkce/kullaniciya-hazirdir (bkz. modul docstring'i)."""
 
-    def __init__(self, message: str, detail: str | None, status_code: int) -> None:
+    def __init__(self, message: str, detail: str | None, status_code: int,
+                 active_job_id: str | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.detail = detail
         self.status_code = status_code
+        # 409: ayni proje/sicil/branch icin calisan isin kimligi (varsa).
+        self.active_job_id = active_job_id
 
 
 def _to_namespace(value: Any) -> Any:
@@ -95,10 +98,12 @@ def _request(method: str, path: str, **kwargs: Any) -> httpx.Response:
             body = resp.json()
             message = body.get("message") or f"HTTP {resp.status_code}"
             detail = body.get("detail")
+            active_job_id = body.get("active_job_id")
         except ValueError:
             message = resp.text or f"HTTP {resp.status_code}"
             detail = None
-        raise ApiError(message, detail, resp.status_code)
+            active_job_id = None
+        raise ApiError(message, detail, resp.status_code, active_job_id)
     return resp
 
 
@@ -197,6 +202,10 @@ def start_export_job_upload(
 
 def get_export_job(job_id: str):
     return _get_json(f"/export/jobs/{job_id}")
+
+
+def cancel_export_job(job_id: str):
+    return _post_json(f"/export/jobs/{job_id}/cancel")
 
 
 def download_export_output(output_token: str) -> bytes:

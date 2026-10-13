@@ -24,6 +24,7 @@ from pathlib import Path
 # tutulacagini (orn. .git, .env, *.pem) belirleyen kural motoru.
 from app.services.exclude_engine import ExcludeSpec, matches_exclude
 from app.services.file_classifier import ignored_directory_reason
+from app.services.long_paths import extended_length_path
 
 
 # Taramada bulunan tek bir dosyayi (tam yol, kok'e gore goreli yol,
@@ -42,7 +43,8 @@ class ScannedFile:
 def iter_project_files(
     root: Path, exclude_specs: list[ExcludeSpec] | None = None, *, prune_ignored: bool = False,
 ):
-    root = Path(root).resolve()
+    # Windows: kokten turetilen tum yollar MAX_PATH sinirina takilmasin.
+    root = extended_length_path(Path(root).resolve())
     exclude_specs = exclude_specs or []
     def builtin_exclusion(path: Path) -> ExcludeSpec | None:
         reason = ignored_directory_reason(path.relative_to(root)) if prune_ignored else None

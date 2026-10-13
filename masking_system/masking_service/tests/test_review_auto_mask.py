@@ -10,6 +10,7 @@ from app.core.exceptions import ReviewAlreadyProcessedError
 from app.db.models import AuditWarning, MaskingContext, MaskingRun, ReviewQueue, ValueMapping
 from app.services.audit_reviewer import AuditVerdict
 from app.services.audit_warning_service import AuditWarningService
+from app.services.learned_decisions import LearnedDecisionPolicy
 from app.services.review_service import ReviewService
 from app.services.rule_engine import reverse_text
 
@@ -102,6 +103,32 @@ def test_audit_failure_rolls_back_masking_and_keeps_file_pending(db_session, tmp
     assert warning.masked_content == "SECRET=ApolloPrivate"
     assert not mapping_values(db_session, run)
     assert not (tmp_path / "output" / ".env").exists()
+    assert not learned_sensitive_values(db_session, run)
+
+
+def learned_sensitive_values(db, run):
+    return {entry.value for entry in LearnedDecisionPolicy.load(db, run.context_id).sensitive}
+
+
+def test_audit_mask_decision_is_learned_for_later_runs(db_session, tmp_path):
+    # Onay kuyrugundaki onay gibi, denetim uyarisindaki "maskele" karari da
+    # sonraki calismalarda LearnedSensitiveDetector ile yakalanir.
+    run, warning, _ = make_file(db_session, tmp_path, "TEAM=PoseidonCore", audit=True, values=("PoseidonCore",))
+    asyncio.run(AuditWarningService(db_session).mask(warning.id))
+    assert warning.status == "dismissed"
+    assert learned_sensitive_values(db_session, run) == {"PoseidonCore"}
+
+
+def test_audit_mask_does_not_learn_generic_or_short_values(db_session, tmp_path):
+    # Kisa deger bu dosyada maskelenir ama projeye kalici kural olarak
+    # yayilmaz; genel kelime (client) zaten hic maskelenmez.
+    values = ("PoseidonCore", "client", "Ali")
+    text = "TEAM=PoseidonCore\nKIND=client\nOWNER=Ali"
+    run, warning, _ = make_file(db_session, tmp_path, text, audit=True, values=values)
+    asyncio.run(AuditWarningService(db_session).mask(warning.id))
+    output = (tmp_path / "output" / ".env").read_text()
+    assert "PoseidonCore" not in output and "Ali" not in output
+    assert learned_sensitive_values(db_session, run) == {"PoseidonCore"}
 
 
 @pytest.mark.parametrize("kind", ["technical", "unlocated", "lock"])

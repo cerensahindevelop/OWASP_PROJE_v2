@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import ast
 import re
+from typing import Callable
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditWarning
+from app.core.crypto import decrypt_value
+from app.db.models import AuditWarning, MaskingRun, ValueMapping
 from app.services.audit_action_labels import DISMISS_ACTION_LABEL, MASK_ACTION_LABEL
 from app.services.audit_reviewer import AuditFindingVerifier, code_symbol_name
+from app.services.failed_checks import FailedCheck
+from app.services.failure_messages import explain_failure
+from app.services.mapping_service import mapping_scope_for_run
+from app.services.rule_engine import reverse_text
 from app.services.term_upload import find_leaked_terms
 
 
@@ -24,7 +31,36 @@ _LABEL_WORDS = {
 }
 
 
+# Model aciklamasi serbest metindir ("parolanin url icinde acik olarak
+# gorunmesi"); bilinen bir ture uyuyorsa ekranda o turun sabit etiketi
+# gosterilir. Sira onemlidir: "ip adresi" "adres"ten, "kurum adi" genel
+# "kurum"dan once denenir.
+_TR_ASCII = str.maketrans("çğıöşü", "cgiosu")
+_LABEL_CATEGORIES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern), label) for pattern, label in (
+        (r"\bip\b", "IP adresi"),
+        (r"parola|sifre|password|passwd", "Parola"),
+        (r"connection|baglanti (dizesi|bilgisi)", "Bağlantı bilgisi"),
+        (r"api (anahtar|key)|token|gizli anahtar|private key|secret|anahtar", "Anahtar / token"),
+        (r"e-?posta|email|mail adresi", "E-posta"),
+        (r"telefon", "Telefon numarası"),
+        (r"iban", "IBAN"),
+        (r"kimlik|tckn|\btc\b", "Kimlik numarası"),
+        (r"kisi|ad soyad|soyad|isim", "Kişi adı"),
+        (r"sunucu|host", "Sunucu adı"),
+        (r"\burl\b|alan adi|domain", "URL / alan adı"),
+        (r"adres", "Adres"),
+        (r"kurum adi|sirket", "Kurum adı"),
+        (r"kurum|proje|kod adi|servis|urun|envanter|jargon", "Kurumsal ad"),
+    )
+)
+
+
 def friendly_label(description: str) -> str:
+    folded = description.casefold().translate(_TR_ASCII)
+    for pattern, label in _LABEL_CATEGORIES:
+        if pattern.search(folded):
+            return label
     words = description.strip().rstrip(".").split()
     while words and words[0].casefold() in _LABEL_PREFIXES:
         words.pop(0)
@@ -34,11 +70,41 @@ def friendly_label(description: str) -> str:
     return ("İ" if text[0] == "i" else text[0].upper()) + text[1:]
 
 
-def _line_excerpt(content: str, line_number: int, value: str = "") -> str:
+def _run_reverse_map(db: Session | None, warning: AuditWarning) -> dict[str, str]:
+    run_id = getattr(warning, "run_id", None)
+    run = db.get(MaskingRun, run_id) if db is not None and run_id is not None else None
+    if run is None:
+        return {}
+    rows = db.scalars(select(ValueMapping).where(
+        ValueMapping.context_id == run.context_id,
+        ValueMapping.run_id == mapping_scope_for_run(db, run.id),
+    )).all()
+    return {row.placeholder_value: row.original_value_plain or decrypt_value(row.original_value_encrypted)
+            for row in rows}
+
+
+# Alintidaki yer tutuculari asil degerlerine cevirir: inceleyen kisi satirin
+# ne oldugunu anlayabilsin. Yalnizca ekran icindir; eslemeler ilk alintida
+# bir kez yuklenir.
+def _excerpt_reverser(db: Session | None, warning: AuditWarning) -> Callable[[str], str]:
+    cache: dict[str, str] | None = None
+
+    def reverse(line: str) -> str:
+        nonlocal cache
+        if cache is None:
+            cache = _run_reverse_map(db, warning)
+        return reverse_text(line, cache)[0] if cache else line
+
+    return reverse
+
+
+def _line_excerpt(content: str, line_number: int, value: str = "", reverse: Callable[[str], str] | None = None) -> str:
     lines = content.splitlines()
     if line_number < 1 or line_number > len(lines):
         return ""
     line = lines[line_number - 1].strip()
+    if reverse is not None:
+        line = reverse(line)
     if value and value in line:
         line = line.replace(value, f"⟦{value}⟧", 1)
     if len(line) > 240:
@@ -61,6 +127,8 @@ def _recorded_term_values(reason: str) -> dict[tuple[int, int], str]:
         if isinstance(value, str):
             values[(int(line), int(column))] = value
     return values
+
+
 
 
 def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit: int | None = 6) -> dict[str, object]:
@@ -105,10 +173,21 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
             summary = "Final tutarlılık kontrolü tamamlanamadı."
         else:
             summary = "Yapay zekâ kontrolü tamamlanamadı; dosyanın güvenliği doğrulanamadı."
+        next_step = "Teknik nedeni giderip projeyi yeniden dışa aktarın."
+        # Kayitli kontrol kodu gercek sebebi soyler; yukaridaki metin aramasi
+        # yalnizca kodu olmayan eski kayitlar ve konum bilgisi icindir.
+        explained = explain_failure(getattr(warning, "failed_check", None), reason)
+        if explained is not None:
+            summary, next_step = explained
+        return {"summary": summary, "location": location, "next_step": next_step, "evidence": []}
+
+    if getattr(warning, "failed_check", None) == FailedCheck.KODLANMIS_VERI:
+        lines = list(dict.fromkeys(re.findall(r"(?:satir|satır) (\d+)", reason, re.IGNORECASE)))
+        summary, next_step = explain_failure(FailedCheck.KODLANMIS_VERI, reason)
         return {
             "summary": summary,
-            "location": location,
-            "next_step": "Teknik nedeni giderip projeyi yeniden dışa aktarın.",
+            "location": ("Kodlanmış değerin satırı: " + ", ".join(lines[:6])) if lines else "Konum belirlenemedi.",
+            "next_step": next_step,
             "evidence": [],
         }
 
@@ -138,6 +217,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
         categories = list(dict.fromkeys(category.split(" (")[0].replace("_", " ") for _, _, category in locations))
         live_by_location = {(t.line_number, t.column_number): t for t in live_terms}
         recorded_values = _recorded_term_values(reason)
+        reverse = _excerpt_reverser(db, warning)
         evidence = []
         for line, column in unique[:evidence_limit]:
             line_no, column_no = int(line), int(column)
@@ -149,7 +229,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
                 "line": line_no,
                 "column": column_no,
                 "found_value": value,
-                "excerpt": _line_excerpt(warning.masked_content, line_no, value),
+                "excerpt": _line_excerpt(warning.masked_content, line_no, value, reverse),
                 "label": "Kurumsal terim",
             })
         return {
@@ -163,6 +243,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
     # A cited variable name is shown as the clear value assigned to it.
     content = warning.masked_content
     verifier = AuditFindingVerifier(content, warning.file_path)
+    reverse = _excerpt_reverser(db, warning)
     evidence: list[dict[str, object]] = []
     seen: set[tuple[int, str]] = set()
     names_without_value: list[str] = []
@@ -184,7 +265,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
                         "line": line_number,
                         "column": offset - content.rfind("\n", 0, offset),
                         "found_value": value,
-                        "excerpt": _line_excerpt(content, line_number, value),
+                        "excerpt": _line_excerpt(content, line_number, value, reverse),
                         "label": label,
                     })
                     seen.add(key)

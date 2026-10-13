@@ -4,9 +4,9 @@ from app.services.audit_warning_details import describe_audit_warning
 from app.services.term_upload import commit_term_upload
 
 
-def warning(reasoning, masked_content="", audit_failed=False, file_path="src/sample.cs"):
+def warning(reasoning, masked_content="", audit_failed=False, file_path="src/sample.cs", failed_check=None):
     return SimpleNamespace(reasoning=reasoning, masked_content=masked_content, audit_failed=audit_failed,
-                           file_path=file_path)
+                           file_path=file_path, failed_check=failed_check)
 
 
 def test_saved_term_locations_need_no_rescan():
@@ -124,3 +124,90 @@ def test_findings_are_labelled_in_plain_language():
         ("Kişi adı", "Ayşe Yılmaz"), ("Telefon numarası", "05321234567"),
     ]
     assert detail["summary"] == "Bu dosyada gizlenmemiş görünen 2 bilgi var: kişi adı, telefon numarası."
+
+
+def test_excerpt_shows_original_values_instead_of_placeholders(db_session):
+    # Inceleyen kisi satiri anlayabilsin: yer tutucular asil degerlerine cevrilir.
+    from app.db.models import AuditWarning, MaskingContext, MaskingRun
+    from app.services.detectors import synthetic_llm_rule
+    from app.services.mapping_service import get_or_create_mapping
+
+    context = MaskingContext(project_name="pytest-excerpt", sicil_no="T", branch_name="test")
+    db_session.add(context)
+    db_session.flush()
+    run = MaskingRun(context_id=context.id, operation_type="mask", source_path="src", target_path="out",
+                     initiated_by="T", status="completed_with_warnings", mapping_version=2)
+    db_session.add(run)
+    db_session.flush()
+    host, _ = get_or_create_mapping(db_session, context.id, synthetic_llm_rule("HOSTNAME"), "nordivia", run_id=run.id)
+    repo, _ = get_or_create_mapping(db_session, context.id, synthetic_llm_rule("PROJE_KOD_ADI"), "kartalon", run_id=run.id)
+    masked = f'REPO="https://deploy_bot:Nrd7vPass2026x@git.{host.placeholder_value}.internal/{repo.placeholder_value}.git"'
+    item = AuditWarning(run_id=run.id, file_path="infra/deploy.sh", masked_content=masked, encoding="utf-8",
+                        reasoning="Parola URL icinde (ilgili bolum: 'Nrd7vPass2026x')", audit_failed=False)
+    db_session.add(item)
+    db_session.flush()
+
+    detail = describe_audit_warning(item, db_session)
+
+    assert detail["evidence"][0]["excerpt"] == (
+        'REPO="https://deploy_bot:⟦Nrd7vPass2026x⟧@git.nordivia.internal/kartalon.git"'
+    )
+
+
+def test_archive_and_lock_failures_show_their_real_reason():
+    # Gerekce metninde anahtar kelime olmasa da kayitli kontrol kodu gercek sebebi soyler.
+    archive = describe_audit_warning(warning(
+        "Arşiv/paket formatı bu sürümde açılıp taranmıyor (recursive extraction desteklenmiyor)",
+        audit_failed=True, failed_check="arsiv",
+    ), None)
+    assert archive["summary"].startswith("Desteklenmeyen format: arşiv dosyası")
+    assert "arşivi projeden çıkarın" in archive["next_step"]
+    lock = describe_audit_warning(warning(
+        "Bağımlılık/lock dosyasında hassas olabilecek içerik bulundu: satır 2, sütun 13 (kart)",
+        audit_failed=True, failed_check="lock_bulgu",
+    ), None)
+    assert lock["summary"].startswith("Lock dosyası: hassas olabilecek içerik var")
+    assert "Yapay zekâ" not in lock["summary"]
+    assert "lock dosyasını yeniden üretin" in lock["next_step"]
+
+
+def test_detailed_roundtrip_reason_is_kept_with_check_specific_next_step():
+    detail = describe_audit_warning(warning(
+        "final consistency round-trip dogrulamasi basarisiz: final geri cozum kaynak metnin SHA-256/uzunluk "
+        "referansiyla uyusmuyor: orijinal uzunluk=249, geri cozulmus uzunluk=265",
+        audit_failed=True, failed_check="tutarlilik",
+    ), None)
+    assert detail["summary"] == "Tutarlılık: maskeli dosya asıl haline birebir çevrilemedi."
+    assert "`mask_`" in detail["next_step"]
+
+
+def test_every_failed_check_used_by_exporter_has_a_message():
+    import re
+    from pathlib import Path
+    from app.services.failed_checks import FailedCheck
+    from app.services.failure_messages import explained_checks
+    source = Path(__file__).resolve().parents[1].joinpath("app/services/exporter.py").read_text(encoding="utf-8")
+    used = set(re.findall(r"failed_check\s*=\s*FailedCheck\.(\w+)", source))
+    assert used, "exporter.py icinde failed_check atamasi bulunamadi"
+    missing = {name for name in used if FailedCheck[name] not in explained_checks()}
+    assert not missing
+
+
+def test_encoded_leak_shows_its_real_reason_and_line():
+    detail = describe_audit_warning(warning(
+        "Kodlanmış (base64/hex/bayt dizisi) bir değerin içinde hassas veri bulundu; değer kodlanmış blok içinde "
+        "otomatik maskelenemediği için dosya çıktıya alınmadı: satir 7: base64 ile kodlanmis metin",
+        failed_check="kodlanmis_veri",
+    ), None)
+    assert detail["summary"].startswith("Kodlanmış veri: base64 ya da hex")
+    assert "bulunamadı" not in detail["summary"]
+    assert detail["location"] == "Kodlanmış değerin satırı: 7"
+
+
+def test_free_text_model_description_becomes_a_plain_category_label():
+    from app.services.audit_warning_details import friendly_label
+    assert friendly_label("parolanin url icinde acik olarak gorunmesi") == "Parola"
+    assert friendly_label("maskelenmemis kisi adi ve soyadi") == "Kişi adı"
+    assert friendly_label("maskelenmemis ic IP adresi") == "IP adresi"
+    assert friendly_label("ic proje kod adi") == "Kurumsal ad"
+    assert friendly_label("garip bir sey") == "Garip bir sey"

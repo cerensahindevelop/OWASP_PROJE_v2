@@ -33,7 +33,8 @@ from app.webapp.path_guard import allowed_roots_configured
 from app.webapp.uploads import is_single_plain_file_upload
 # Hizli metin modu ve yan yana karsilastirma Disari Cikar ekraniyla ortak.
 from app.webapp.quick_text import (
-    QUICK_TEXT_TYPES, InMemoryUpload, quick_text_file_name, render_side_by_side,
+    InMemoryUpload, quick_text_file_name, quick_text_type_label, render_quick_text_type_select,
+    render_side_by_side, resolve_quick_text_type,
 )
 
 _MODE_UPLOAD = "📦 Dosya / .ZIP Yükle"
@@ -196,6 +197,11 @@ def _run_import_text(masked_text: str, extension: str, *, job_id: int | None = N
 # butonu) ekrana basar.
 def _render_result(result: dict) -> None:
     report = result["report"]
+    if result.get("detected_type"):
+        st.caption(
+            f"Algılanan dosya türü: **{result['detected_type']}**. Yanlışsa \"Dosya türü\" listesinden "
+            "doğrusunu seçip tekrar çalıştırın."
+        )
 
     if report.has_unresolved_placeholders:
         st.error(
@@ -366,11 +372,9 @@ def render() -> None:
                 placeholder="Maskelenmiş kod parçasını veya metni buraya yapıştırın.",
                 key="import_text_input",
             )
-            type_label = st.selectbox(
-                "Dosya türü",
-                list(QUICK_TEXT_TYPES),
-                help="Metin bu türde tek bir dosya olarak işlenir; sonucu dosya olarak da indirebilirsiniz.",
+            type_label = render_quick_text_type_select(
                 key="import_text_type",
+                help="Metin bu türde tek bir dosya olarak işlenir; sonucu dosya olarak da indirebilirsiniz.",
             )
             submitted = st.form_submit_button("Geri Dönüştür", type="primary", width="stretch")
 
@@ -380,7 +384,11 @@ def render() -> None:
             elif not masked_text.strip():
                 st.error("Geri dönüştürülecek metin boş bırakılamaz.")
             else:
-                _run_import_text(masked_text, QUICK_TEXT_TYPES[type_label], job_id=job_id)
+                extension, detected = resolve_quick_text_type(type_label, masked_text)
+                _run_import_text(masked_text, extension, job_id=job_id)
+                result = st.session_state.get("import_last_result")
+                if result is not None and detected:
+                    result["detected_type"] = quick_text_type_label(extension)
     else:
         with st.form("import_form"):
             source_path = st.text_input(

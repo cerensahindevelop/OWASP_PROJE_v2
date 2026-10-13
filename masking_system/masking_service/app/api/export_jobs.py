@@ -23,16 +23,18 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 from app.core.config import settings
+from app.core.exceptions import ExportCancelledError
 
 logger = logging.getLogger(__name__)
 
 _MAX_FINISHED_JOBS = 50
+_CANCELLED_MESSAGE = "Tarama durduruldu. Yarım kalan çıktı silindi; varsa önceki çıktı korundu."
 
 
 @dataclass
 class ExportJob:
     job_id: str
-    status: str = "queued"  # queued | running | completed | failed
+    status: str = "queued"  # queued | running | completed | failed | cancelled
     processed: int = 0
     total: int = 0
     current_file: str | None = None
@@ -41,6 +43,10 @@ class ExportJob:
     error_detail: str | None = None
     error_status: int | None = None
     finished_at: float | None = None
+    # (project_name, sicil_no, branch_name): ayni hedefe ikinci isi engellemek
+    # ve arayuzun calisan isi bulup durdurabilmesi icin.
+    identity: tuple[str, str, str] | None = None
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
@@ -55,6 +61,7 @@ class ExportJob:
                 "error_message": self.error_message,
                 "error_detail": self.error_detail,
                 "error_status": self.error_status,
+                "cancel_requested": self.cancel_event.is_set(),
             }
 
 
@@ -63,8 +70,8 @@ class ExportJobRegistry:
         self._jobs: dict[str, ExportJob] = {}
         self._lock = threading.Lock()
 
-    def create(self) -> ExportJob:
-        job = ExportJob(job_id=uuid.uuid4().hex)
+    def create(self, identity: tuple[str, str, str] | None = None) -> ExportJob:
+        job = ExportJob(job_id=uuid.uuid4().hex, identity=identity)
         with self._lock:
             self._prune()
             self._jobs[job.job_id] = job
@@ -73,6 +80,32 @@ class ExportJobRegistry:
     def get(self, job_id: str) -> ExportJob | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def find_active(self, identity: tuple[str, str, str]) -> ExportJob | None:
+        """Ayni proje/sicil/branch icin sirada bekleyen ya da calisan is."""
+        with self._lock:
+            jobs = list(self._jobs.values())
+        for job in jobs:
+            with job.lock:
+                if job.identity == identity and job.status in ("queued", "running"):
+                    return job
+        return None
+
+    def cancel(self, job_id: str) -> ExportJob | None:
+        """Durdurma ister. Siradaki is hic baslamadan iptal edilir; calisan is
+        bir sonraki durdurma noktasinda guvenli sekilde kesilir."""
+        job = self.get(job_id)
+        if job is None:
+            return None
+        with job.lock:
+            if job.status in ("completed", "failed", "cancelled"):
+                return job
+            job.cancel_event.set()
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.error_message = _CANCELLED_MESSAGE
+                job.finished_at = time.monotonic()
+        return job
 
     def discard(self, job_id: str) -> None:
         with self._lock:
@@ -136,11 +169,12 @@ class ExportJobExecutor:
 executor = ExportJobExecutor(settings.export_jobs.max_running, settings.export_jobs.max_queued)
 
 
-def start_job(work: Callable[[Callable[[int, int, str], None]], dict[str, Any]],
+def start_job(work: Callable[[Callable[[int, int, str], None], threading.Event], dict[str, Any]],
               on_error: Callable[[Exception], tuple[str, str | None, int]],
-              cleanup: Callable[[], None] | None = None) -> ExportJob:
+              cleanup: Callable[[], None] | None = None,
+              identity: tuple[str, str, str] | None = None) -> ExportJob:
     """Queue work; reject excess admission before retaining uploads or job IDs."""
-    job = registry.create()
+    job = registry.create(identity)
 
     def progress(processed: int, total: int, current: str) -> None:
         with job.lock:
@@ -148,11 +182,26 @@ def start_job(work: Callable[[Callable[[int, int, str], None]], dict[str, Any]],
 
     def runner() -> None:
         with job.lock:
-            job.status = "running"
+            if job.status == "cancelled":  # sirada beklerken durduruldu
+                skipped = True
+            else:
+                skipped = False
+                job.status = "running"
+        if skipped:
+            if cleanup is not None:
+                try:
+                    cleanup()
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         try:
-            result = work(progress)
+            result = work(progress, job.cancel_event)
             with job.lock:
                 job.result, job.status = result, "completed"
+        except ExportCancelledError:
+            with job.lock:
+                job.status = "cancelled"
+                job.error_message, job.error_detail, job.error_status = _CANCELLED_MESSAGE, None, None
         except BaseException as exc:  # worker cancellation must also terminate the job
             try:
                 message, detail, status = on_error(exc) if isinstance(exc, Exception) else (

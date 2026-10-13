@@ -140,7 +140,9 @@ def write_lock(output: Path, inventory: dict, python_version: str, platform: str
 # sablonu (script.py.mako) girmez; kurulum requirements.lock'u kullanir.
 # .env, veritabani ve yuklenmis projeler hicbir zaman pakete girmez.
 _RUNTIME_FILES = ("api_app.py", "streamlit_app.py", "start.py", "alembic.ini", ".streamlit/config.toml")
-_RUNTIME_SCRIPTS = ("benchmark_llm.py", "check_llm_preflight.py", "signature_consistency.py", "write_build_stamp.py")
+_RUNTIME_SCRIPTS = (
+    "benchmark_llm.py", "check_llm_preflight.py", "diagnose_term.py", "signature_consistency.py", "write_build_stamp.py",
+)
 
 
 def copy_project_source(output: Path) -> None:

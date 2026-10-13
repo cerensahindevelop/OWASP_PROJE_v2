@@ -50,7 +50,11 @@ async def _masking_system_exception_handler(request: Request, exc: Exception) ->
     status_code = _status_for(exc)
     if status_code == 500:
         logger.exception("Beklenmeyen hata: %s %s", request.method, request.url.path)
-    return JSONResponse({"message": message, "detail": detail}, status_code=status_code)
+    body = {"message": message, "detail": detail}
+    active_job_id = getattr(exc, "active_job_id", None)
+    if active_job_id:
+        body["active_job_id"] = active_job_id
+    return JSONResponse(body, status_code=status_code)
 
 
 # Bu global hata yakalayiciyi FastAPI uygulamasina kaydeder.

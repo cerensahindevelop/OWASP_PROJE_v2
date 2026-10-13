@@ -21,7 +21,7 @@ from app.services.audit_action_labels import CONFIRM_ACTION_LABEL, DISMISS_ACTIO
 from app.services.learned_decisions import normalize_value, security_scope
 
 _APPROVE_NOTE = (
-    "Bu değer proje/sicil/branch bağlamında hassas olarak öğrenildi ve sonraki eşdeğer bulgularda "
+    "Bu değer proje genelinde (tüm sicil/branch'ler) hassas olarak öğrenildi ve sonraki eşdeğer bulgularda "
     "otomatik gizlenecek. Dosyadaki tüm bekleyen kararlar tamamlanınca güvenlik kontrolleri otomatik yeniden çalışır."
 )
 
@@ -145,7 +145,11 @@ def _run_single_audit_action(action: str, warning_id: int) -> None:
                 "için maskeleme kurallarını düzeltip yeniden dışa aktarmanız gerekir."
             )
         elif action == "mask":
-            flash_text = "✅ Riskli ifadeler sistem tarafından maskelendi, eşlemeler veritabanına kaydedildi ve dosya çıktıya eklendi."
+            flash_text = (
+                "✅ Riskli ifadeler sistem tarafından maskelendi, eşlemeler veritabanına kaydedildi ve dosya çıktıya eklendi."
+                "\n\nBu ifadeler proje genelinde hassas olarak öğrenildi ve sonraki maskelemelerde otomatik gizlenecek "
+                "(kısa ve genel ifadeler hariç). Bu çalışmada daha önce çıktıya yazılmış dosyalar değişmez."
+            )
         else:
             flash_text = "✅ Yanlış alarm kararı kaydedildi; dosya yeniden doğrulanarak çıktıya eklendi."
         st.session_state["audit_flash"] = ("warning" if action == "confirm" else "success", flash_text)
@@ -256,9 +260,11 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
 
     if validation_rows:
         st.markdown("### Hatalı dosyalar")
-        st.error("Bu teknik hatalar kullanıcı kararı beklemez. Dosyalar çıktıya alınmadı; proje yeniden çalıştırılmalıdır.")
+        st.error("Bu dosyalar teknik bir kontrolden geçemediği için çıktıya alınmadı. "
+                 "Sebebi ve ne yapmanız gerektiği her satırda yazıyor.")
         st.dataframe([
-            {"İşlem": row["run_id"], "Dosya": row["file_path"], "Teknik sorun": row["summary"]}
+            {"İşlem": row["run_id"], "Dosya": row["file_path"], "Sebep": row["summary"],
+             "Ne yapmalı": row["next_step"]}
             for row in validation_rows
         ], hide_index=True, width="stretch")
 
@@ -314,7 +320,8 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
             if row["next_step"]:
                 st.info(row["next_step"])
             st.markdown(
-                f"- **{MASK_ACTION_LABEL}:** Bulunan değerleri sistem gizler, dosyayı yeniden kontrol edip çıktıya ekler.\n"
+                f"- **{MASK_ACTION_LABEL}:** Bulunan değerleri sistem gizler, dosyayı yeniden kontrol edip çıktıya ekler. "
+                "Değerler sonraki maskelemelerde de otomatik gizlenir.\n"
                 f"- **{DISMISS_ACTION_LABEL}:** Bunlar gerçek veri değilse seçin. Dosya yeniden kontrol edilip çıktıya eklenir.\n"
                 f"- **{CONFIRM_ACTION_LABEL}:** Dosya dışarı çıkmaz. Maskeleme kurallarını düzeltip projeyi yeniden dışa aktarmanız gerekir."
             )

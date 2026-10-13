@@ -221,8 +221,11 @@ Birkaç dakika sürer; 1, 2, 4 ve 8 değerleri sırayla denenir.
 
 ### A17. Ölçüm sonucunu okuyun
 
+A16'daki gibi `masking_service` klasöründeyken çalıştırın; sonuç dosyası bir üst
+klasördedir:
+
 ```powershell
-(Get-Content -Raw C:\masking_system\bench-c.json | ConvertFrom-Json) | ForEach-Object { "{0} -> {1} sn, hatali dosya: {2}" -f $_.concurrency, $_.elapsed_seconds, @($_.files | Where-Object status -ne 'ok').Count }
+(Get-Content -Raw ..\bench-c.json | ConvertFrom-Json) | ForEach-Object { "{0} -> {1} sn, hatali dosya: {2}" -f $_.concurrency, $_.elapsed_seconds, @($_.files | Where-Object status -ne 'ok').Count }
 ```
 
 Ekranda 4 satır görünür. Aşağıdaki sayılar yalnızca örnektir:
@@ -510,6 +513,19 @@ cd C:\masking_system\masking_service
 .venv\Scripts\python.exe -m app.cli llm-is-yuku --kaynak <proje-klasörü>
 ```
 
+### C6. Çalışan bir taramayı durdurmak için
+
+Tarama sürerken **Dışarı Çıkar** ekranındaki **⏹ Taramayı Durdur** düğmesine
+basın. Tarama güvenli şekilde durur: yarım kalan çıktı silinir, varsa önceki
+tamamlanmış çıktı korunur. Ardından hemen yeniden tarayabilirsiniz.
+
+- Sayfayı yenileseniz ya da başka ekrana geçip dönseniz de ilerleme çubuğu ve
+  Durdur düğmesi geri gelir.
+- Aynı proje ve branch için tarama sürerken yeniden **Taramayı Başlat**'a
+  basarsanız **Öncekini durdur ve yeniden başlat** seçeneği çıkar.
+- O sırada bir dosya LLM'den yanıt bekliyorsa durma birkaç saniye sürebilir.
+- Son yayımlama adımı başladıysa tarama durmaz, tamamlanır.
+
 ---
 
 ## Bölüm D – Komut satırından kullanım (isteğe bağlı)
@@ -582,11 +598,15 @@ Kurallar silinmez, yalnızca açılıp kapatılır; geçmiş eşlemeler bozulmaz
 
 ### D9. Yarıda kalan bir export'u kurtarmak için
 
-Uygulama bir export sırasında kapandıysa:
+Uygulama bir export sırasında kapandıysa, aynı proje ve branch için yapılan bir
+sonraki tarama yarım kalan işlemi **kendiliğinden** kapatır; önceki çıktı geri
+yüklenir. Elle kurtarmak isterseniz uygulamayı durdurup (C3) şunu çalıştırın:
 
 ```powershell
-.venv\Scripts\python.exe -m app.cli recover-output --hedef <çıktı-klasörü>
+.venv\Scripts\python.exe -m app.cli recover-output --hedef <çıktı-klasörü> --application-stopped
 ```
+
+Hedef üzerinde hâlâ çalışan bir işlem varsa komut ona dokunmaz ve bunu söyler.
 
 ---
 
@@ -677,3 +697,55 @@ değilse **Onay Bekleyenler** ekranında "Yanlış Alarm" ile serbest bırakın.
 2. Gereksiz ağır dosyaları (ör. sıkıştırılmış JavaScript kütüphaneleri) projeden
    çıkarın.
 3. Eşzamanlılık ölçümünü (A16–A19) yapmadıysanız yapın.
+
+### E12. Sözlüğe eklenen bir kurumsal terim çıktıda açık kalıyorsa
+
+Teşhis betiği terimin sözlük kaydını ve dosyadaki geçişlerini kontrol eder.
+Hiçbir şeyi değiştirmez. Çıktıda terim, dosya içeriği ya da dosya yolu
+yazmaz; yalnızca evet/hayır sonuçları ve satır numaraları yazar.
+
+1. `masking_service` klasörüne geçin:
+
+   ```powershell
+   cd C:\masking_system\masking_service
+   ```
+
+2. Betiği çalıştırın. `--term` için terimi sözlükteki gibi yazın. `--file`
+   için maskelenmemiş **orijinal** projedeki dosyanın tam yolunu verin:
+
+   ```powershell
+   .venv\Scripts\python.exe scripts\diagnose_term.py --term "terim" --file "C:\proje\config\app.env"
+   ```
+
+3. Çıktıyı okuyun:
+
+   - `sozluk_kaydi_sayisi=0`: Terim sözlükte yok. **Kurumsal Terimler**
+     ekranından ekleyin.
+   - `aktif=False`: Terim pasif. `pasif_nedeni` alanı nedenini yazar.
+     Terimi **Kurumsal Terimler** ekranından aktif yapın.
+   - `kayitli_yazim_nfc=False` ya da `dosyadaki_ayrisik_isaret_sayisi` 0'dan
+     büyük: Türkçe harfler (ç, ş, ğ, ı, ö, ü) farklı bir Unicode biçiminde
+     kaydedilmiş. Ekranda aynı görünür ama eşleşmez. Bu durum genellikle
+     terim Word, PDF ya da Excel'den kopyalandığında oluşur.
+   - `dosya_haric_tutma_kuralina_uyuyor=True`: Dosya hariç tutma kuralına
+     takılıyor ve hiç taranmıyor.
+   - `desenin_kacirdigi` 0'dan büyük: Terim dosyada geçiyor ama tarama
+     deseni bu satırları yakalamıyor. `kacirilan_satirlar` hangi satırlar
+     olduğunu gösterir.
+
+Çıktıyı geliştirici ekibe iletebilirsiniz; içinde hassas bilgi yoktur.
+
+Terim ekledikten sonra uygulamayı yeniden başlatmanız gerekmez. Yeni tarama
+güncel sözlüğü kullanır.
+
+### E13. "Bu proje/sicil/branch için zaten devam eden bir işlem var" diyorsa
+
+Aynı proje ve branch için başka bir tarama gerçekten çalışıyordur.
+
+- Tarama aynı uygulamadan başlatıldıysa ekranda **Öncekini durdur ve yeniden
+  başlat** ya da **Devam eden taramayı izle** seçeneği çıkar (bkz. C6).
+- Tarama komut satırından (Bölüm D) başlatıldıysa o komutun bitmesini bekleyin
+  ya da o pencerede `Ctrl+C`'ye basın.
+
+Uygulama bir tarama sırasında kapandıysa bu hata çıkmaz: yarım kalan işlem bir
+sonraki taramada kendiliğinden kapatılır (bkz. D9).

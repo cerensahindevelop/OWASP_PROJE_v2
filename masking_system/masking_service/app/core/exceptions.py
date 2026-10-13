@@ -16,7 +16,19 @@ class GecersizEslesmeHatasi(MaskingSystemError):
 
 
 class ExportInProgressError(MaskingSystemError):
-    """The same project/sicil/branch export is already running."""
+    """The same project/sicil/branch export is already running.
+
+    active_job_id: ayni backend surecindeki calisan isin kimligi (biliniyorsa);
+    arayuz bununla "durdur ve yeniden baslat" secenegi sunar.
+    """
+
+    def __init__(self, message: str = "", *, active_job_id: str | None = None) -> None:
+        super().__init__(message)
+        self.active_job_id = active_job_id
+
+
+class ExportCancelledError(MaskingSystemError):
+    """The user stopped a running export; nothing was published."""
 
 
 class ReviewAlreadyProcessedError(MaskingSystemError):

@@ -15,7 +15,9 @@ signed integrity manifest and selects the mappings on unmask.
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
+import threading
 from dataclasses import dataclass, field, replace
 import hashlib
 from datetime import datetime, timezone
@@ -35,7 +37,7 @@ from sqlalchemy.orm import Session
 from app.core.build_info import ensure_export_allowed
 from app.core.config import settings
 from app.core.crypto import decrypt_value
-from app.core.exceptions import ExportInProgressError
+from app.core.exceptions import ExportCancelledError, ExportInProgressError
 from app.db.models import AuditLog, AuditWarning, MaskingContext, MaskingRun, ValueMapping
 from app.services.audit_reviewer import AuditVerdict, audit_masked_text, audit_record_key, encode_audit_record
 from app.services.consistency_masking import (
@@ -59,9 +61,12 @@ from app.services.llm_runtime import (
 )
 from app.services.learned_decisions import LearnedDecisionPolicy
 from app.services.lockfile_policy import plan_lockfile, structured_format
+from app.services.long_paths import extended_length_path
 from app.services.roundtrip_validator import text_digest, verify_round_trip, verify_round_trip_digest
 from app.services.rule_engine import JSON_NUMERIC_PLACEHOLDER_RE, PLACEHOLDER_RE, Match, reverse_text
-from app.services.output_publication import OutputPublication, publish_run
+from app.services.output_publication import (
+    RECOVERY_ACTIVE, RECOVERY_MISSING, OutputPublication, publish_run, recover_abandoned_output,
+)
 from app.services.integrity_manifest import MANIFEST_NAME, write_manifest, file_digest, source_tag
 from app.services.path_placeholders import PathPlaceholderResolver, UnsafeUnmaskPathError
 from app.services.term_upload import find_leaked_terms
@@ -86,6 +91,8 @@ from app.services.runtime_params import build_runtime_params
 from app.services.log_refs import UNKNOWN_FILE_LABEL, file_label, file_ref, log_file_label
 from app.services.scanner import iter_project_files
 from app.services.syntax_validator import BRACKET_ONLY_NOTICE, STRUCTURAL_ONLY_NOTICE, validate_masked_syntax
+
+logger = logging.getLogger("uvicorn.error.export")
 
 DEFAULT_ENABLE_PATH_MASKING = True
 
@@ -476,22 +483,71 @@ def _validate_paths(source: Path, target: Path) -> None:
 
 # Ayni context icin devam eden bir export var mi diye erken/hizli kontrol eder
 # (asil kesin koruma DB'deki UNIQUE index - bkz. export_project'teki except bloklari).
+# Sureci kapanmis (cokmus/yeniden baslatilmis) bir export'un 'in_progress' kaydi
+# burada kendiliginden kapatilir: kurtarma gunlugunun isletim sistemi kilidi
+# alinabiliyorsa yazicisi yasamiyordur (bkz. output_publication.recover_abandoned_output).
 def _ensure_no_in_progress_run(db: Session, context_id: int) -> None:
-    existing = db.scalar(
-        select(MaskingRun.id)
+    runs = db.scalars(
+        select(MaskingRun)
         .where(
             MaskingRun.context_id == context_id,
             MaskingRun.operation_type == "mask",
             MaskingRun.status == "in_progress",
         )
-        .limit(1)
-    )
-    if existing is not None:
-        raise ExportInProgressError(
-            f"bu proje/sicil/branch icin zaten devam eden export var (run_id={existing}). "
-            "Uygulama bu islem sirasinda kapandiysa `python -m app.cli recover-output --hedef <hedef> "
-            "--application-stopped` ile islemi kapatin."
-        )
+    ).all()
+    for run in runs:
+        try:
+            state = (recover_abandoned_output(db, Path(run.target_path))
+                     if run.target_path else RECOVERY_MISSING)
+        except ValueError as exc:
+            raise ValueError(
+                f"Yarım kalan önceki tarama (işlem #{run.id}) otomatik kapatılamadı: {exc} "
+                "Kurulum kılavuzundaki recover-output adımını uygulayın."
+            ) from None
+        if state == RECOVERY_ACTIVE:
+            raise ExportInProgressError(
+                f"bu proje/sicil/branch icin zaten devam eden export var (run_id={run.id})."
+            )
+        # Yeni bir okuma anlik goruntusu: yazici tam bu arada bitirip
+        # gunlugunu silmis olabilir; eski goruntuden 'in_progress' okunmasin.
+        db.commit()
+        db.refresh(run)
+        if run.status == "in_progress":
+            # Gunlugu hic olmayan kayit: geri alinacak cikti yok, yalnizca kapatilir.
+            run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
+            db.add(AuditLog(run_id=run.id, file_path="", action="error",
+                            detail="Yarim kalan export kaydi kapatildi (kurtarma gunlugu yoktu)."))
+            db.commit()
+            logger.warning("abandoned_export_closed run_id=%s", run.id)
+        elif state != RECOVERY_MISSING:
+            logger.warning("abandoned_export_recovered run_id=%s", run.id)
+
+
+# Kullanici durdurdu mu? Durdurduysa export'u guvenli hata yolundan keser
+# (staging silinir, onceki hedef korunur, run 'failed' olur).
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise ExportCancelledError("Tarama kullanici tarafindan durduruldu.")
+
+
+_CANCEL_POLL_SECONDS = 0.5
+
+
+# Uzun sureli bir tespit/denetim beklemesini durdurma istegiyle yaristirir:
+# durdurulursa bekleyen LLM istekleri iptal edilir ve hemen kesilir.
+async def _await_unless_cancelled(awaitable, cancel_event: threading.Event | None):
+    if cancel_event is None:
+        return await awaitable
+    task = asyncio.ensure_future(awaitable)
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=_CANCEL_POLL_SECONDS)
+        if done:
+            return task.result()
+        if cancel_event.is_set():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            _raise_if_cancelled(cancel_event)
 
 
 # Bir dosyanin isleminde beklenmeyen bir istisna cikip DB SAVEPOINT'i geri
@@ -2434,7 +2490,10 @@ def _acquire_write_lock(db: Session, run_id: int) -> None:
     db.execute(sql_text("UPDATE maskeleme_calismalari SET durum = durum WHERE id = :id"), {"id": run_id})
 
 
-def _mark_run_failed(db: Session, run_id: int) -> bool:
+def _mark_run_failed(
+    db: Session, run_id: int,
+    detail: str = "Export yarida kesildi; cikti yayimlanmadi, onceki hedef korundu.",
+) -> bool:
     """Ara commit'lerden sonra kalici olan run'i 'failed' yapar.
 
     Aksi halde 'in_progress' kalan run ayni proje/sicil/branch icin yeni
@@ -2449,10 +2508,7 @@ def _mark_run_failed(db: Session, run_id: int) -> bool:
             return True
         row.status = "failed"
         row.completed_at = datetime.now(timezone.utc)
-        db.add(AuditLog(
-            run_id=run_id, file_path="", action="error",
-            detail="Export yarida kesildi; cikti yayimlanmadi, onceki hedef korundu.",
-        ))
+        db.add(AuditLog(run_id=run_id, file_path="", action="error", detail=detail))
         db.commit()
         return True
     except Exception:
@@ -2476,6 +2532,7 @@ async def export_project(
     max_inline_size: int | None = None,
     enable_path_masking: bool = DEFAULT_ENABLE_PATH_MASKING,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> ExportReport:
     # Karisik surum (TypeError olayi) ya da yeniden baslatilmamis backend:
     # hicbir DB/dosya yazmasindan once fail-closed (API, is ve CLI yollari).
@@ -2490,6 +2547,10 @@ async def export_project(
 
     context = get_or_create_context(db, project_name, sicil_no, branch_name)
     _ensure_no_in_progress_run(db, context.id)
+    # Hedefte baska bir islemden (ornegin cokmus bir geri donusumden) kalmis
+    # terk edilmis gunluk varsa run olusturulmadan once kurtarilir; calisan
+    # bir islemin gunlugune dokunulmaz (OutputPublication onu "kilitli" der).
+    recover_abandoned_output(db, target)
 
     run = MaskingRun(
         context_id=context.id,
@@ -2640,6 +2701,7 @@ async def export_project(
         all_files = list(iter_project_files(source, exclude_specs, prune_ignored=True))
         total_files = len(all_files)
         processed = 0
+        _raise_if_cancelled(cancel_event)
 
         # Butun hedef yollarini TEK bir dosya yazmadan once hesapla. Iki
         # farkli kaynak yol ayni maskeli hedefe donusurse sessiz overwrite
@@ -2759,7 +2821,8 @@ async def export_project(
             next_detection = _start_detection(orchestrator, prepared_next, detection_slots)
 
         for batch_number in range(len(batches)):
-            prepared, outcome_by_index = prepared_next, await next_detection
+            _raise_if_cancelled(cancel_event)
+            prepared, outcome_by_index = prepared_next, await _await_unless_cancelled(next_detection, cancel_event)
             prepared_next = next_detection = None
             batch = prepared.files
             preps = prepared.preps
@@ -2880,9 +2943,9 @@ async def export_project(
             # Phase C audits every supported, prepared text file, including
             # files for which the initial detectors found no matches.
             masked_indices = [i for i, r in enumerate(batch_results) if isinstance(r, _MaskedFile)]
-            audit_results = await asyncio.gather(
+            audit_results = await _await_unless_cancelled(asyncio.gather(
                 *(_bounded(_audit_masked_file(batch_results[i]), audit_slots) for i in masked_indices)
-            )
+            ), cancel_event)
             audit_by_index = dict(zip(masked_indices, audit_results))
 
             # Faz D (sirali, DB+dosya yazan): audit karari + sozdizimi + yazma.
@@ -2936,10 +2999,10 @@ async def export_project(
             # _MAX_REMEDIATION_ROUNDS tur; kalan her dosya insan onayina doner.
             while pending:
                 db.commit()
-                reaudits = await asyncio.gather(
+                reaudits = await _await_unless_cancelled(asyncio.gather(
                     *(_bounded(_labeled(preps[i].log_label, _audit_one(item.current.masked_text, preps[i].rel)), audit_slots)
                       for i, item in pending)
-                )
+                ), cancel_event)
                 _acquire_write_lock(db, run.id)
                 next_pending: list[tuple[int, _PendingRemediation]] = []
                 for (i, item), reaudit in zip(pending, reaudits):
@@ -3001,6 +3064,7 @@ async def export_project(
                 processed += 1
                 if progress_callback is not None:
                     progress_callback(processed, total_files, str(scanned.relative_path))
+                _raise_if_cancelled(cancel_event)
 
             # Batch'in rapor/cikti kayitlari kalici olsun; siradaki batch'in
             # tespiti bu sirada zaten yazma kilidi tutulmadan yuruyor.
@@ -3013,6 +3077,7 @@ async def export_project(
         # gecis bulgu varsa dosyayi YENIDEN YAZAR (replacement), tam da
         # SCAN_ONLY politikasinin yasakladigi sey ("Lock -> tara + degistirme
         # yok") - lock/integrity dosyalari byte-identical kalmayi GARANTI eder.
+        _raise_if_cancelled(cancel_event)
         _acquire_write_lock(db, run.id)
         consistency_output_files = [f for f in output_files if not f.scan_only]
         _run_consistency_pass(
@@ -3069,7 +3134,7 @@ async def export_project(
                         restored_bytes = document.rebuild(restored_view)
                         if hashlib.sha256(restored_bytes).hexdigest() != output_file.original_binary_digest:
                             raise ClassFormatError("Java class bayt bazlı geri dönüş doğrulaması başarısız")
-                    mode = (source / output_file.source_relative_path).stat().st_mode & 0o777
+                    mode = extended_length_path(source / output_file.source_relative_path).stat().st_mode & 0o777
                     output_file.path.chmod(mode)
                     manifest_entry = {
                         "encoding": output_file.encoding or "utf-8",
@@ -3138,13 +3203,19 @@ async def export_project(
         run.completed_at = report.completed_at
         run.files_scanned = report.files_scanned
         run.match_count = report.total_matches
+        # Yayin bir kez basladiysa durdurulamaz; son durdurma noktasi burasi.
+        _raise_if_cancelled(cancel_event)
         publish_run(db, run, report, publication)
-    except BaseException:
+    except BaseException as exc:
         failed = True
         report.status = "failed"
         await _cancel_detection(next_detection)
         db.rollback()
-        failure_recorded = _mark_run_failed(db, run_id)
+        if isinstance(exc, ExportCancelledError):
+            failure_recorded = _mark_run_failed(
+                db, run_id, "Export kullanici tarafindan durduruldu; cikti yayimlanmadi, onceki hedef korundu.")
+        else:
+            failure_recorded = _mark_run_failed(db, run_id)
         raise
     finally:
         stop_llm_usage(llm_usage_token)
@@ -3152,6 +3223,10 @@ async def export_project(
         # DB'ye hata durumu yazilamazsa kurtarma gunlugunu silme.
         if publication is not None and failure_recorded:
             publication.close()
+        elif publication is not None:
+            # Gunluk kurtarma icin kalir, kilit birakilir: sonraki export onu
+            # terk edilmis sayip otomatik kurtarabilsin.
+            publication.release_lock()
         if failed:
             report.completed_at = datetime.now(timezone.utc)
 

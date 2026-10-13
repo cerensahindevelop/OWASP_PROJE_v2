@@ -23,6 +23,7 @@ from pathlib import Path
 from app.services.file_type import DEFAULT_LEGACY_TEXT_ENCODINGS, guess_full_text_encoding, peek_classify
 from app.services.file_classifier import is_archive_filename, is_lock_filename, is_opaque_binary_filename
 from app.services.java_classfile import JAVA_CLASS_ENCODING, JavaClass, ClassFormatError, parse_class
+from app.services.long_paths import display_path
 
 
 # read_scanned_file'in bir dosya icin varabilecegi olasi sonuc durumlari.
@@ -78,7 +79,7 @@ LAST_RESORT_ENCODING = "latin-1"
 # Windows MAX_PATH teshisi icin) ile anlatir. Ornek: Errno 2'nin kaynak mi
 # hedef mi, hangi adimda oldugu mesajdan anlasilsin.
 def describe_file_error(stage: str, path: Path, exc: BaseException) -> str:
-    failing = getattr(exc, "filename", None) or path
+    failing = display_path(getattr(exc, "filename", None) or path)
     return (f"{stage} basarisiz (yol={failing}, yol_uzunlugu={len(str(failing))}, "
             f"hata={type(exc).__name__}): {exc}")
 

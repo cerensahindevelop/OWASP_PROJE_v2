@@ -8,6 +8,7 @@ sorgulayıp "işlenen/toplam dosya" ilerleme çubuğu gösterir. Böylece uzun
 
 from __future__ import annotations
 
+import hashlib
 import io
 import time
 import zipfile
@@ -27,8 +28,10 @@ from app.webapp.common import page_intro, show_error
 from app.webapp.identity import get_identity, render_project_branch_inputs, validate_project_branch
 from app.webapp.path_guard import allowed_roots_configured
 # Hizli metin modu ve yan yana karsilastirma Geri Donustur ekraniyla ortak.
+from app.services.failure_messages import explain_failure
 from app.webapp.quick_text import (
-    QUICK_TEXT_TYPES, InMemoryUpload, quick_text_file_name, render_side_by_side,
+    InMemoryUpload, quick_text_file_name, quick_text_type_label, render_editable_side_by_side,
+    render_quick_text_type_select, resolve_quick_text_type,
 )
 
 _MODE_UPLOAD = "📦 Dosya / .ZIP Yükle"
@@ -51,20 +54,35 @@ _VALIDATION_FAILURE_FALLBACKS: dict[str, str] = {
     "error": "Dosya işlenirken beklenmeyen bir hata oluştu.",
     "failed_finalization": "Dosya tüm kontrollerden geçti ama son kayıt adımında bir hata oluştu.",
     "failed_detection": "Bağımlılık/lock dosyası için tarama güvenilir şekilde tamamlanamadı.",
-    "quarantined_pending_audit": "Otomatik güvenlik denetimi (yapay zekâ kontrolü) bu dosya için tamamlanamadı.",
+    "quarantined_pending_audit": "Dosya güvenlik kontrolünde durduruldu.",
 }
 
 
+# Dosyayi ciktidan alikoyan sebep ve yapilacak is. Kayitli kontrol kodu varsa
+# inceleme ekraniyla AYNI aciklama kullanilir (bkz. failure_messages).
 def _validation_failure_reason(outcome) -> str:
+    explained = explain_failure(getattr(outcome, "failed_check", None), outcome.error)
+    if explained is not None:
+        summary, next_step = explained
+        return f"{summary} **Ne yapmalı:** {next_step}"
     if outcome.error:
         return outcome.error
     return _VALIDATION_FAILURE_FALLBACKS.get(outcome.status, "Teknik bir nedenle güvenli kabul edilemedi.")
 
 
-# "Klasor Yolu" moduyla (sunucudaki bir yolu dogrudan girerek) baslatilan
-# export akisi: backend'e HTTP istegi atar, sonucu session_state'e yazar
-# (render() bunu okuyup gosterir).
 _JOB_POLL_SECONDS = 1.0
+# "Oncekini durdur ve yeniden baslat": onceki isin kapanmasi icin azami bekleme.
+_STOP_WAIT_SECONDS = 120.0
+_FINISHED_JOB_STATES = ("completed", "failed", "cancelled")
+# Takip edilen is ve "ayni proje icin calisan is var" secimi session_state'te
+# tutulur: sayfa yenilense, baska ekrana gidilip donulse ya da ekranda bir
+# seye tiklansa da (Streamlit betigi bastan calistirir) ilerleme kaybolmaz.
+_ACTIVE_JOB_KEY = "export_active_job"
+_CONFLICT_KEY = "export_conflict"
+
+
+class _JobCancelled(Exception):
+    """Takip edilen is kullanici tarafindan durduruldu."""
 
 
 def _wait_for_export_job(job_id: str):
@@ -75,13 +93,17 @@ def _wait_for_export_job(job_id: str):
             job = api_client.get_export_job(job_id)
             if job.status == "completed":
                 return job.result
+            if job.status == "cancelled":
+                raise _JobCancelled(job.error_message or "Tarama durduruldu.")
             if job.status == "failed":
                 raise ApiError(job.error_message or "Tarama tamamlanamadı.", job.error_detail,
                                job.error_status or 500)
-            if job.status == "queued":
+            fraction = min(job.processed / job.total, 1.0) if getattr(job, "total", 0) else 0.0
+            if getattr(job, "cancel_requested", False):
+                bar.progress(fraction, text="Tarama durduruluyor... Yarım kalan çıktı temizleniyor.")
+            elif job.status == "queued":
                 bar.progress(0.0, text="Sıradasınız. Çalışan işlemler tamamlandığında taramanız başlayacak.")
             elif job.total:
-                fraction = min(job.processed / job.total, 1.0)
                 if job.processed >= job.total:
                     text = f"{job.total} dosya işlendi — son tutarlılık ve bütünlük kontrolleri yapılıyor..."
                 else:
@@ -94,86 +116,178 @@ def _wait_for_export_job(job_id: str):
         bar.empty()
 
 
-def _run_export(source_path: str, target_path: str, *, project_name: str, branch_name: str) -> None:
+# Taramayi backend'de baslatir ve takibe alir. Ayni proje/sicil/branch icin
+# calisan bir is varsa hata yerine "durdur ve yeniden baslat" secimi sunulur.
+# request: {"kind": "path"|"upload", "project_name", "branch_name", ...}
+def _start_export(request: dict) -> None:
     identity = get_identity()
+    common = dict(
+        project_name=request["project_name"], sicil_no=identity["sicil_no"],
+        branch_name=request["branch_name"], initiated_by=identity["sicil_no"],
+    )
+    st.session_state["export_last_result"] = None
     try:
-        job_id = api_client.start_export_job_by_path(
-            source_path=source_path,
-            target_path=target_path,
-            project_name=project_name,
-            sicil_no=identity["sicil_no"],
-            branch_name=branch_name,
-            initiated_by=identity["sicil_no"],
-        )
-        result = _wait_for_export_job(job_id)
+        if request["kind"] == "path":
+            job_id = api_client.start_export_job_by_path(
+                source_path=request["source_path"], target_path=request["target_path"], **common,
+            )
+        else:
+            with st.spinner("Dosyalar yükleniyor..."):
+                job_id = api_client.start_export_job_upload(
+                    request["files"], is_directory_upload=request.get("is_directory_upload", False), **common,
+                )
     except ApiError as exc:
-        st.session_state["export_last_result"] = None
-        show_error(exc)
+        if exc.active_job_id:
+            st.session_state[_CONFLICT_KEY] = {"active_job_id": exc.active_job_id, "request": request}
+        else:
+            show_error(exc)
         return
+    st.session_state[_CONFLICT_KEY] = None
+    st.session_state[_ACTIVE_JOB_KEY] = {"job_id": job_id, "quick_text": request.get("quick_text")}
 
-    st.session_state["export_last_result"] = {
+
+# Tamamlanan isin sonucunu (yukleme modunda indirilebilir paketle) saklar.
+def _store_result(result, quick_text: dict | None) -> None:
+    entry = {
         "report": result.report,
         "pending_count": result.pending_count,
         "quarantined_count": result.quarantined_count,
         "validation_failed_count": getattr(result, "validation_failed_count", 0),
     }
-
-
-# "Dosya Yükle" moduyla baslatilan export akisi: yuklenen dosyalari backend'e
-# HTTP ile gonderir, sonucu (indirilebilir bayt dizisiyle birlikte)
-# session_state'e yazar.
-def _run_export_upload(
-    uploaded_files: list, *, project_name: str, branch_name: str, is_directory_upload: bool = False,
-) -> None:
-    identity = get_identity()
-    try:
-        with st.spinner("Dosyalar yükleniyor..."):
-            job_id = api_client.start_export_job_upload(
-                uploaded_files,
-                is_directory_upload=is_directory_upload,
-                project_name=project_name,
-                sicil_no=identity["sicil_no"],
-                branch_name=branch_name,
-                initiated_by=identity["sicil_no"],
-            )
-        result = _wait_for_export_job(job_id)
-    except ApiError as exc:
-        st.session_state["export_last_result"] = None
-        show_error(exc)
-        return
-
-    download_bytes: bytes | None = None
-    download_name: str | None = None
-    if result.output_token:
+    if getattr(result, "output_token", None):
+        entry["download_bytes"] = None
+        entry["download_name"] = None
         try:
             # Upload API'sinin bu is icin dondurdugu opak cikti token'i
             # dogrudan dosya paketini adresler.
-            download_bytes = api_client.download_export_output(result.output_token)
-            download_name = "maskelenmis_cikti.zip"
+            entry["download_bytes"] = api_client.download_export_output(result.output_token)
+            entry["download_name"] = "maskelenmis_cikti.zip"
         except ApiError as exc:
             show_error(exc)
+    if quick_text is not None:
+        entry["quick_text"] = quick_text
+    st.session_state["export_last_result"] = entry
 
-    st.session_state["export_last_result"] = {
-        "report": result.report,
-        "pending_count": result.pending_count,
-        "quarantined_count": result.quarantined_count,
-        "validation_failed_count": getattr(result, "validation_failed_count", 0),
-        "download_bytes": download_bytes,
-        "download_name": download_name,
-    }
+
+# Takip edilen isin ilerlemesini "Durdur" dugmesiyle gosterir; is bitince
+# sonucu saklar. Her render'da cagrilir, boylece yarim kalan takip surer.
+def _follow_active_job() -> None:
+    active = st.session_state.get(_ACTIVE_JOB_KEY)
+    if not active:
+        return
+    job_id = active["job_id"]
+    stop_slot = st.empty()
+    if stop_slot.button("⏹ Taramayı Durdur", key=f"export_stop_{job_id}",
+                        help="Tarama güvenli şekilde durdurulur: yarım kalan çıktı silinir, "
+                        "varsa önceki çıktı korunur. Ardından yeniden tarayabilirsiniz."):
+        try:
+            api_client.cancel_export_job(job_id)
+        except ApiError as exc:
+            show_error(exc)
+    try:
+        result = _wait_for_export_job(job_id)
+    except _JobCancelled as exc:
+        st.session_state[_ACTIVE_JOB_KEY] = None
+        stop_slot.empty()
+        st.info(f"⏹ {exc}")
+        return
+    except ApiError as exc:
+        st.session_state[_ACTIVE_JOB_KEY] = None
+        stop_slot.empty()
+        show_error(exc)
+        return
+    st.session_state[_ACTIVE_JOB_KEY] = None
+    stop_slot.empty()
+    _store_result(result, active.get("quick_text"))
+
+
+# Onceki isi durdurur ve kapanmasini bekler. True: is artik calismiyor.
+def _stop_and_wait(job_id: str) -> bool:
+    try:
+        api_client.cancel_export_job(job_id)
+    except ApiError as exc:
+        if exc.status_code == 404:
+            return True
+        show_error(exc)
+        return False
+    with st.spinner("Önceki tarama durduruluyor..."):
+        deadline = time.monotonic() + _STOP_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                job = api_client.get_export_job(job_id)
+            except ApiError as exc:
+                if exc.status_code == 404:
+                    return True
+                show_error(exc)
+                return False
+            if job.status in _FINISHED_JOB_STATES:
+                return True
+            time.sleep(_JOB_POLL_SECONDS)
+    st.error("Önceki tarama henüz durmadı (son yayımlama adımında olabilir). Birkaç saniye sonra tekrar deneyin.")
+    return False
+
+
+# Ayni proje/branch icin calisan bir is varken taramaya basildiysa secenekleri gosterir.
+def _render_conflict() -> None:
+    conflict = st.session_state.get(_CONFLICT_KEY)
+    if not conflict:
+        return
+    slot = st.empty()
+    with slot.container():
+        st.warning(
+            "Bu proje ve branch için şu anda devam eden bir tarama var. Önceki taramayı durdurup "
+            "yenisini başlatabilir ya da devam eden taramanın ilerlemesini izleyebilirsiniz."
+        )
+        restart_col, follow_col, dismiss_col = st.columns(3)
+        restart = restart_col.button("⏹ Öncekini durdur ve yeniden başlat", type="primary",
+                                     key="export_conflict_restart")
+        follow = follow_col.button("Devam eden taramayı izle", key="export_conflict_follow")
+        dismiss = dismiss_col.button("Vazgeç", key="export_conflict_dismiss")
+    if restart:
+        if _stop_and_wait(conflict["active_job_id"]):
+            slot.empty()
+            st.session_state[_CONFLICT_KEY] = None
+            _start_export(conflict["request"])
+    elif follow:
+        slot.empty()
+        st.session_state[_CONFLICT_KEY] = None
+        st.session_state[_ACTIVE_JOB_KEY] = {"job_id": conflict["active_job_id"], "quick_text": None}
+    elif dismiss:
+        slot.empty()
+        st.session_state[_CONFLICT_KEY] = None
+
+
+# "Klasor Yolu" moduyla (sunucudaki bir yolu dogrudan girerek) baslatilan export.
+def _run_export(source_path: str, target_path: str, *, project_name: str, branch_name: str) -> None:
+    _start_export({
+        "kind": "path", "source_path": source_path, "target_path": target_path,
+        "project_name": project_name, "branch_name": branch_name,
+    })
+
+
+# "Dosya Yükle" moduyla baslatilan export: yuklenen dosyalar backend'e gider;
+# sonuc indirilebilir paketle birlikte saklanir.
+def _run_export_upload(
+    uploaded_files: list, *, project_name: str, branch_name: str, is_directory_upload: bool = False,
+    quick_text: dict | None = None,
+) -> None:
+    _start_export({
+        "kind": "upload", "files": list(uploaded_files), "is_directory_upload": is_directory_upload,
+        "project_name": project_name, "branch_name": branch_name, "quick_text": quick_text,
+    })
 
 
 # "Hızlı Metin / Kod" modu: yapistirilan metni tek dosyalik bir yukleme
 # olarak tarar. Maskeli metin, indirme paketinden (karantina karari sonrasi
 # yenilenen paket dahil) her gosterimde yeniden okunur.
-def _run_export_text(text: str, extension: str, *, project_name: str, branch_name: str) -> None:
+def _run_export_text(
+    text: str, extension: str, *, project_name: str, branch_name: str, detected: bool = False,
+) -> None:
     name = quick_text_file_name(extension)
     _run_export_upload(
         [InMemoryUpload(name, text.encode("utf-8"))], project_name=project_name, branch_name=branch_name,
+        quick_text={"name": name, "original": text, "extension": extension, "detected": detected},
     )
-    result = st.session_state.get("export_last_result")
-    if result is not None:
-        result["quick_text"] = {"name": name, "original": text}
 
 
 # Export indirme paketinden hizli metnin maskeli halini cikarir; dosya
@@ -192,8 +306,8 @@ def _masked_quick_text(download_bytes: bytes, name: str) -> str | None:
         return None
 
 
-# Hizli metin sonucunu: orijinal ve maskeli metni yan yana, maskeli metni
-# tek dosya olarak indirme dugmesiyle gosterir.
+# Hizli metin sonucunu: orijinal metni salt okunur, maskeli metni duzenlenebilir
+# olarak yan yana; maskeli metni (duzenlenmis haliyle) indirme dugmesiyle gosterir.
 def _render_quick_text_result(result: dict) -> None:
     quick = result["quick_text"]
     download_bytes = result.get("download_bytes")
@@ -205,6 +319,11 @@ def _render_quick_text_result(result: dict) -> None:
         return
     masked = _masked_quick_text(download_bytes, quick["name"])
     st.subheader("Yan Yana Karşılaştırma")
+    if quick.get("detected"):
+        st.caption(
+            f"Algılanan dosya türü: **{quick_text_type_label(quick['extension'])}**. Yanlışsa "
+            "\"Dosya türü\" listesinden doğrusunu seçip taramayı tekrar başlatın."
+        )
     if masked is None:
         st.warning(
             "Maskelenmiş metin güvenlik kontrollerinden geçemediği için gösterilmiyor. "
@@ -213,13 +332,30 @@ def _render_quick_text_result(result: dict) -> None:
         return
     if masked == quick["original"]:
         st.caption("Metinde hassas bilgi bulunamadı; içerik değiştirilmedi.")
-    render_side_by_side(quick["name"], ("Orijinal Metin", quick["original"]), ("Maskelenmiş Metin", masked))
-    st.download_button(
+    # Anahtar maskeli metne baglidir: karantina karari sonrasi metin
+    # yenilenirse eski duzenleme yeni sonucun ustune tasinmaz.
+    edit_key = f"export_quick_edit_{hashlib.sha256(masked.encode('utf-8')).hexdigest()[:16]}"
+    edited = render_editable_side_by_side(
+        quick["name"], ("Orijinal Metin", quick["original"]), ("Maskelenmiş Metin (düzenlenebilir)", masked),
+        key=edit_key,
+    )
+    st.caption(
+        "Sağdaki metni düzenleyebilirsiniz; indirilen dosya düzenlenmiş hali içerir. Düzenlemeler "
+        "yeniden taranmaz: gizlenmiş gerçek değerleri metne geri yazmayın."
+    )
+    download_column, reset_column = st.columns([1, 1])
+    download_column.download_button(
         "⬇️ Maskelenmiş Metni İndir",
-        data=masked.encode("utf-8"),
+        data=edited.encode("utf-8"),
         file_name=f"maskelenmis_{quick['name']}",
         type="primary",
+        width="stretch",
     )
+    if edited != masked:
+        reset_column.button(
+            "↺ Düzenlemeleri Geri Al", key=f"{edit_key}_reset", width="stretch",
+            on_click=lambda: st.session_state.update({edit_key: masked}),
+        )
 
 
 # Rapordaki dosya sayilarindan ("N dosya tarandi, M dosyada bulgu bulundu, ...")
@@ -312,10 +448,15 @@ def _render_result(result: dict) -> None:
 
     if quarantined_count:
         st.error(
-            f"🔴 {quarantined_count} dosya, maskeleme sonrası bağımsız denetimden geçemediği için "
-            "hedef klasöre KOPYALANMADI. Bu, sıradan bir şüpheli bulgudan daha ciddi bir durumdur "
-            "— insan onayı gerekiyor."
+            f"🔴 {quarantined_count} dosya güvenlik kontrolünde durduruldu ve hedef klasöre KOPYALANMADI. "
+            "Her dosyanın sebebi aşağıda; karar vermek için uyarılar ekranına gidin."
         )
+        quarantined = [o for o in report.outcomes if o.status == "quarantined_pending_audit"
+                       and o.final_state != "VALIDATION_FAILED"]
+        if quarantined:
+            with st.expander(f"Durdurulan {len(quarantined)} dosyayı ve sebebini gör", expanded=True):
+                for outcome in quarantined:
+                    st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
         if st.button("⚠️ Maskeleme Denetim Uyarılarını İncele →", type="primary", key="goto_audit_warnings"):
             st.switch_page(st.session_state["_nav_pages"]["review"])
 
@@ -336,7 +477,7 @@ def _render_result(result: dict) -> None:
         )
         with st.expander(f"Doğrulanamayan {len(unverifiable)} dosyayı ve nedenini gör", expanded=True):
             for outcome in unverifiable:
-                st.write(f"- `{outcome.relative_path}`: {outcome.error}")
+                st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
         if st.button("⚠️ Maskeleme Denetim Uyarılarını İncele →", type="primary", key="goto_unverifiable"):
             st.switch_page(st.session_state["_nav_pages"]["review"])
 
@@ -377,7 +518,7 @@ def _render_result(result: dict) -> None:
         )
         with st.expander(f"Sözdizimi hatası olan {len(syntax_failed)} dosyayı gör"):
             for outcome in syntax_failed:
-                st.write(f"- `{outcome.relative_path}`: {outcome.error}")
+                st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
 
     round_trip_failed = [o for o in report.outcomes if o.status == "failed_round_trip_validation"]
     if round_trip_failed:
@@ -388,18 +529,17 @@ def _render_result(result: dict) -> None:
         )
         with st.expander(f"Round-trip doğrulaması başarısız olan {len(round_trip_failed)} dosyayı gör"):
             for outcome in round_trip_failed:
-                st.write(f"- `{outcome.relative_path}`: {outcome.error}")
+                st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
 
     consistency_failed = [o for o in report.outcomes if o.status == "failed_consistency_validation"]
     if consistency_failed:
         st.error(
-            f"🔴 {len(consistency_failed)} dosyada final tutarlılık taraması, ilk turda doğrulanmış "
-            "hassas değerlerin tamamen kapatıldığını garanti edemedi. Bu dosyalar hedef pakete "
-            "ALINMADI ve başarısız_dosyalar klasörüne taşındı."
+            f"🔴 {len(consistency_failed)} dosya son tutarlılık kontrolünden geçemedi; hedef pakete "
+            "ALINMADI ve başarısız_dosyalar klasörüne taşındı. Her dosyanın sebebi aşağıda."
         )
-        with st.expander(f"Tutarlılık doğrulaması başarısız olan {len(consistency_failed)} dosyayı gör"):
+        with st.expander(f"Tutarlılık kontrolünden geçemeyen {len(consistency_failed)} dosyayı gör", expanded=True):
             for outcome in consistency_failed:
-                st.write(f"- `{outcome.relative_path}`: {outcome.error}")
+                st.write(f"- `{outcome.relative_path}`: {_validation_failure_reason(outcome)}")
 
     if pending_count:
         st.warning(f"⚠️ {pending_count} adet şüpheli bulgu var, onaylanması gerekiyor.")
@@ -514,12 +654,10 @@ def render() -> None:
                 placeholder="Maskelenecek kod parçasını veya metni buraya yapıştırın.",
                 key="export_text_input",
             )
-            type_label = st.selectbox(
-                "Dosya türü",
-                list(QUICK_TEXT_TYPES),
+            type_label = render_quick_text_type_select(
+                key="export_text_type",
                 help="Metin bu türde tek bir dosya olarak taranır; türe özgü kurallar (ör. .properties "
                 "anahtarları) buna göre uygulanır.",
-                key="export_text_type",
             )
             submitted = st.form_submit_button("Taramayı Başlat", type="primary", width="stretch")
 
@@ -530,7 +668,8 @@ def render() -> None:
             elif not text.strip():
                 st.error("Taranacak metin boş bırakılamaz.")
             else:
-                _run_export_text(text, QUICK_TEXT_TYPES[type_label], **target)
+                extension, detected = resolve_quick_text_type(type_label, text)
+                _run_export_text(text, extension, detected=detected, **target)
     else:
         with st.form("export_form"):
             source_path = st.text_input(
@@ -557,6 +696,9 @@ def render() -> None:
                 # sadece backend tarafindan kullanilir); backend reddederse
                 # _run_export bunu ApiError -> show_error ile gosterir.
                 _run_export(source_path.strip(), target_path.strip(), **target)
+
+    _render_conflict()
+    _follow_active_job()
 
     result = st.session_state.get("export_last_result")
     if result:

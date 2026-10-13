@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from streamlit.testing.v1 import AppTest
 
 from app.webapp import export_page
+from app.webapp.quick_text import AUTO_DETECT_LABEL
 
 APP_TEST_TIMEOUT_SECONDS = 30
 IDENTITY = {"sicil_no": "TEST-1"}
@@ -90,8 +91,26 @@ def test_quick_text_mode_shows_original_and_masked_side_by_side(monkeypatch):
     assert uploaded[0].name == "hizli_metin.properties"
     assert kwargs["is_directory_upload"] is False
     assert (kwargs["project_name"], kwargs["sicil_no"], kwargs["branch_name"]) == ("test", "TEST-1", "main")
-    assert [code.value for code in app.code] == ["db.password=gercek-parola", "db.password=__SECRET_1__"]
+    assert [code.value for code in app.code] == ["db.password=gercek-parola"]
+    [masked_box] = app.text_area[1:]  # [0]: giris kutusu
+    assert masked_box.value == "db.password=__SECRET_1__"
     assert any("Maskelenmiş Metin" in markdown.value for markdown in app.markdown)
+
+
+def test_quick_text_output_is_editable_and_resettable(monkeypatch):
+    _patch_export(monkeypatch, mask=lambda text: text.replace("gercek-parola", "__SECRET_1__"))
+    app = _submit_quick_text("db.password=gercek-parola", "Properties (.properties)")
+    masked_box = app.text_area[1]
+
+    masked_box.input("db.password=__SECRET_1__\n# not eklendi").run()
+
+    assert not app.exception
+    assert app.text_area[1].value == "db.password=__SECRET_1__\n# not eklendi"
+    reset = [b for b in app.button if "Geri Al" in b.label]
+    assert reset, "duzenleme sonrasi geri alma dugmesi gorunmeli"
+    reset[0].click().run()
+    assert app.text_area[1].value == "db.password=__SECRET_1__"
+    assert not [b for b in app.button if "Geri Al" in b.label]
 
 
 def test_quick_text_not_shown_when_file_is_withheld(monkeypatch):
@@ -122,3 +141,92 @@ def test_export_requires_project_and_branch(monkeypatch):
     assert not app.exception
     assert calls == []
     assert any("Proje Adı boş" in error.value for error in app.error)
+
+
+def test_conflict_offers_stop_and_restart(monkeypatch):
+    from app.webapp.api_client import ApiError
+
+    attempts, cancelled = [], []
+
+    def fake_start(uploaded_files, **kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            raise ApiError("devam eden tarama var", None, 409, active_job_id="old-job")
+        return "new-job"
+
+    def fake_job(job_id):
+        if job_id == "old-job":
+            return SimpleNamespace(status="cancelled", error_message="Tarama durduruldu.")
+        result = SimpleNamespace(report=_report(), pending_count=0, quarantined_count=0,
+                                 validation_failed_count=0, output_token="ab" * 16)
+        return SimpleNamespace(status="completed", result=result)
+
+    monkeypatch.setattr(export_page, "get_identity", lambda: IDENTITY)
+    monkeypatch.setattr(export_page.api_client, "start_export_job_upload", fake_start)
+    monkeypatch.setattr(export_page.api_client, "get_export_job", fake_job)
+    monkeypatch.setattr(export_page.api_client, "cancel_export_job", lambda job_id: cancelled.append(job_id))
+    monkeypatch.setattr(export_page.api_client, "download_export_output", lambda token: _zip({"hizli_metin.txt": "x"}))
+
+    app = _submit_quick_text("x=1", "Düz metin (.txt)")
+    assert not app.exception
+    assert any("devam eden bir tarama var" in warning.value for warning in app.warning)
+
+    app.button(key="export_conflict_restart").click().run()
+
+    assert not app.exception
+    assert cancelled == ["old-job"]
+    assert len(attempts) == 2
+    assert app.session_state["export_last_result"]["quick_text"]["original"] == "x=1"
+    assert not any("devam eden bir tarama var" in warning.value for warning in app.warning)
+
+
+def test_running_job_survives_rerun_and_can_be_stopped(monkeypatch):
+    states = {"status": "running"}
+    cancelled = []
+
+    def fake_cancel(job_id):
+        cancelled.append(job_id)
+        states["status"] = "cancelled"
+
+    monkeypatch.setattr(export_page, "get_identity", lambda: IDENTITY)
+    monkeypatch.setattr(export_page.api_client, "cancel_export_job", fake_cancel)
+    def fake_wait(job_id):
+        if states["status"] == "cancelled":
+            raise export_page._JobCancelled("Tarama durduruldu.")
+        # Gercekte bekleme, kullanici bir seye tiklayip betik yeniden
+        # calisana kadar surer; burada o ani st.stop() ile taklit ederiz.
+        export_page.st.stop()
+
+    monkeypatch.setattr(export_page, "_wait_for_export_job", fake_wait)
+
+    app = AppTest.from_string(
+        "from app.webapp.export_page import render\nrender()", default_timeout=APP_TEST_TIMEOUT_SECONDS,
+    )
+    app.session_state["export_active_job"] = {"job_id": "job-9", "quick_text": None}
+    # Takip edilen is varken sayfa (yeniden) acilinca Durdur dugmesi gorunur.
+    app.run()
+    assert not app.exception
+    app.button(key="export_stop_job-9").click().run()
+
+    assert not app.exception
+    assert cancelled == ["job-9"]
+    assert app.session_state["export_active_job"] is None
+    assert any("durduruldu" in info.value for info in app.info)
+
+
+def test_quick_text_auto_detects_type_and_says_so(monkeypatch):
+    calls = _patch_export(monkeypatch, mask=lambda text: text)
+    app = _submit_quick_text('{"db": {"host": "10.0.0.5"}}', AUTO_DETECT_LABEL)
+    assert not app.exception
+    [(uploaded, _kwargs)] = calls
+    assert uploaded[0].name == "hizli_metin.json"
+    assert any("Algılanan dosya türü" in caption.value and "JSON" in caption.value for caption in app.caption)
+
+
+def test_quick_text_defaults_to_auto_detect():
+    app = AppTest.from_string(
+        "from app.webapp.export_page import render\nrender()", default_timeout=APP_TEST_TIMEOUT_SECONDS,
+    ).run()
+    app.radio(key="export_mode").set_value(export_page._MODE_TEXT).run()
+    assert app.selectbox(key="export_text_type").value == AUTO_DETECT_LABEL
+

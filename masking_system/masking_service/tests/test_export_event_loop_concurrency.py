@@ -29,6 +29,7 @@ from app.db.session import SessionLocal
 from app.services import exporter as exporter_module
 from app.services.detectors import DetectorOutput
 from app.services.mapping_service import get_or_create_context
+from app.services.output_publication import OutputPublication
 from app.webapp import uploads
 
 _IDENTITY_PREFIX = "pytest-export-event-loop"
@@ -168,19 +169,22 @@ def test_two_concurrent_export_requests_isolate_mappings_and_one_failure_does_no
     monkeypatch.setattr(exporter_module, "build_orchestrator", lambda *a, **kw: _BlockingFakeOrchestrator(0.05))
     monkeypatch.setattr(uploads, "UPLOADS_OUTPUT_ROOT", tmp_path / "uploads_output")
 
+    running_target = (tmp_path / "already-running-target").resolve()
     with SessionLocal() as db:
         context = get_or_create_context(db, project_conflict, _SICIL_NO, _BRANCH)
-        db.add(
-            MaskingRun(
-                context_id=context.id,
-                operation_type="mask",
-                source_path="/already-running",
-                initiated_by=_SICIL_NO,
-                status="in_progress",
-            )
+        running = MaskingRun(
+            context_id=context.id,
+            operation_type="mask",
+            source_path="/already-running",
+            target_path=str(running_target),
+            initiated_by=_SICIL_NO,
+            status="in_progress",
         )
+        db.add(running)
         db.commit()
         conflict_context_id = context.id
+        # Calisan yazici: gunluk kilidi tutuluyor, otomatik kurtarma dokunmaz.
+        publication = OutputPublication(running_target, running.id)
 
     async def _scenario():
         async with httpx.AsyncClient(
@@ -191,7 +195,10 @@ def test_two_concurrent_export_requests_isolate_mappings_and_one_failure_does_no
                 _post_export_upload(client, project_conflict),
             )
 
-    response_ok, response_conflict = asyncio.run(_scenario())
+    try:
+        response_ok, response_conflict = asyncio.run(_scenario())
+    finally:
+        publication.close()
 
     assert response_ok.status_code == 200, response_ok.text
     assert response_ok.json()["report"]["files_scanned"] == 1
@@ -216,3 +223,61 @@ def test_two_concurrent_export_requests_isolate_mappings_and_one_failure_does_no
         ).all()
         assert len(conflict_runs) == 1
         assert conflict_runs[0].source_path == "/already-running"
+
+
+def test_stopping_a_running_upload_job_end_to_end(cleanup, tmp_path, monkeypatch):
+    """Gercek is kuyrugu + gercek export: yavas tespit sirasinda durdurulan is
+    'cancelled' olur, run 'failed' kaydedilir, cikti klasorune hicbir dosya
+    yazilmaz ve ayni proje/branch hemen yeniden taranabilir."""
+    from fastapi.testclient import TestClient
+
+    from app.api import export_jobs
+
+    project = f"{_IDENTITY_PREFIX}-stop"
+    cleanup.append(project)
+    async_sleep = asyncio.sleep
+
+    class _SlowAsyncOrchestrator:
+        async def scan(self, text, metadata=None):
+            await async_sleep(0.3)
+            return DetectorOutput()
+
+    monkeypatch.setattr(exporter_module, "build_orchestrator", lambda *a, **kw: _SlowAsyncOrchestrator())
+    monkeypatch.setattr(exporter_module.settings.vllm, "file_batch_size", 1)
+    monkeypatch.setattr(exporter_module.settings.vllm, "max_concurrent_requests", 1)
+    monkeypatch.setattr(uploads, "UPLOADS_OUTPUT_ROOT", tmp_path / "uploads_output")
+    monkeypatch.setattr(export_jobs, "registry", export_jobs.ExportJobRegistry())
+    monkeypatch.setattr(export_jobs, "executor", export_jobs.ExportJobExecutor(1, 2))
+
+    data = {"project_name": project, "sicil_no": _SICIL_NO, "branch_name": _BRANCH,
+            "initiated_by": _SICIL_NO, "is_directory_upload": "false"}
+    files = [("files", (f"dosya{i}.txt", f"icerik {i}\n".encode(), "text/plain")) for i in range(8)]
+    client = TestClient(app, raise_server_exceptions=False)
+
+    job_id = client.post("/export/upload/jobs", data=data, files=files).json()["job_id"]
+    deadline = time.monotonic() + 10
+    while client.get(f"/export/jobs/{job_id}").json()["status"] != "running":
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    duplicate = client.post("/export/upload/jobs", data=data, files=files)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["active_job_id"] == job_id
+
+    assert client.post(f"/export/jobs/{job_id}/cancel").status_code == 200
+    while (job := client.get(f"/export/jobs/{job_id}").json())["status"] not in ("cancelled", "completed", "failed"):
+        assert time.monotonic() < deadline, job
+        time.sleep(0.05)
+    assert job["status"] == "cancelled", job
+
+    outputs = [p for p in (tmp_path / "uploads_output").rglob("*") if p.is_file()]
+    assert outputs == []
+    with SessionLocal() as db:
+        context = get_or_create_context(db, project, _SICIL_NO, _BRANCH)
+        statuses = db.scalars(select(MaskingRun.status).where(MaskingRun.context_id == context.id)).all()
+    assert statuses == ["failed"]
+
+    again = client.post("/export/upload/jobs", data=data, files=files[:1]).json()["job_id"]
+    while (job := client.get(f"/export/jobs/{again}").json())["status"] in ("queued", "running"):
+        assert time.monotonic() < deadline + 10
+        time.sleep(0.05)
+    assert job["status"] == "completed", job

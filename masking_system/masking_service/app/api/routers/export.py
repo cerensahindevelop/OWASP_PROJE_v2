@@ -35,6 +35,7 @@ from app.api.deps import get_request_db
 from app.api.errors import _status_for
 from app.api.schemas import ExportJobOut, ExportJobStartOut, ExportPathRequest, ExportReportOut, ExportResultOut
 from app.core.build_info import ensure_export_allowed
+from app.core.exceptions import ExportInProgressError
 from app.core.error_translation import friendly_error
 from app.db.session import SessionLocal
 from app.services.audit_warning_service import AuditWarningService
@@ -186,9 +187,10 @@ def _job_error(exc: Exception) -> tuple[str, str | None, int]:
 
 
 def _export_job_work(kwargs: dict, output_token: str | None):
-    def work(progress) -> dict:
+    def work(progress, cancel_event) -> dict:
         with SessionLocal() as db:
-            report = asyncio.run(export_project(db, progress_callback=progress, **kwargs))
+            report = asyncio.run(export_project(
+                db, progress_callback=progress, cancel_event=cancel_event, **kwargs))
             pending_count, quarantined_count, validation_failed_count = _pending_and_quarantined_counts(
                 db, project_name=kwargs["project_name"], sicil_no=kwargs["sicil_no"],
                 branch_name=kwargs["branch_name"], run_id=report.run_id,
@@ -204,17 +206,31 @@ def _export_job_work(kwargs: dict, output_token: str | None):
     return work
 
 
+# Ayni proje/sicil/branch icin bu surecte sirada bekleyen ya da calisan bir is
+# varsa ikinci isi kuyruga hic almaz; arayuz donen is kimligiyle "durdur ve
+# yeniden baslat" secenegi sunar.
+def _reject_if_active(project_name: str, sicil_no: str, branch_name: str) -> tuple[str, str, str]:
+    identity = (project_name, sicil_no, branch_name)
+    active = export_jobs.registry.find_active(identity)
+    if active is not None:
+        raise ExportInProgressError(
+            "bu proje/sicil/branch icin zaten devam eden bir tarama var", active_job_id=active.job_id,
+        )
+    return identity
+
+
 # Sunucu uzerindeki bir klasor icin arka planda export baslatir.
 @router.post("/jobs", response_model=ExportJobStartOut, status_code=202,
              dependencies=[Depends(ensure_export_allowed)])
 def start_export_job_by_path(payload: ExportPathRequest) -> ExportJobStartOut:
     ensure_path_allowed(payload.source_path, label="Kaynak Klasör")
     ensure_path_allowed(payload.target_path, label="Hedef Klasör")
+    identity = _reject_if_active(payload.project_name, payload.sicil_no, payload.branch_name)
     kwargs = dict(
         source_path=payload.source_path, project_name=payload.project_name, sicil_no=payload.sicil_no,
         branch_name=payload.branch_name, target_path=payload.target_path, initiated_by=payload.initiated_by,
     )
-    job = export_jobs.start_job(_export_job_work(kwargs, None), _job_error)
+    job = export_jobs.start_job(_export_job_work(kwargs, None), _job_error, identity=identity)
     return ExportJobStartOut(job_id=job.job_id)
 
 
@@ -229,6 +245,7 @@ async def start_export_job_upload(
     is_directory_upload: bool = Form(False),
     files: list[UploadFile] = File(...),
 ) -> ExportJobStartOut:
+    identity = _reject_if_active(project_name, sicil_no, branch_name)
     adapted = [_UploadedFileAdapter(f.filename or "", await f.read()) for f in files]
     source_dir = save_uploaded_files_to_temp_dir(adapted, is_directory_upload=is_directory_upload)
     try:
@@ -243,7 +260,7 @@ async def start_export_job_upload(
     try:
         job = export_jobs.start_job(
             _export_job_work(kwargs, target_dir.name), _job_error,
-            cleanup=lambda: cleanup_temp_dir(source_dir),
+            cleanup=lambda: cleanup_temp_dir(source_dir), identity=identity,
         )
     except BaseException:
         cleanup_temp_dir(target_dir)
@@ -255,6 +272,16 @@ async def start_export_job_upload(
 @router.get("/jobs/{job_id}", response_model=ExportJobOut)
 def get_export_job(job_id: str) -> ExportJobOut:
     job = export_jobs.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="İşlem bulunamadı (servis yeniden başlatılmış olabilir).")
+    return ExportJobOut.model_validate(job.snapshot())
+
+
+# Calisan ya da sirada bekleyen bir export isini durdurur. Is bir sonraki
+# durdurma noktasinda kesilir; durum GET ile "cancelled" olarak izlenir.
+@router.post("/jobs/{job_id}/cancel", response_model=ExportJobOut)
+def cancel_export_job(job_id: str) -> ExportJobOut:
+    job = export_jobs.registry.cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="İşlem bulunamadı (servis yeniden başlatılmış olabilir).")
     return ExportJobOut.model_validate(job.snapshot())
