@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from sqlalchemy import select
@@ -41,6 +42,33 @@ def mask_review_values(db, run, content: str, file_path: str, values: list[tuple
     if not verify_round_trip(original, masked, _reverse_map(db, run)).ok:
         raise ValueError("Otomatik maskeleme geri dönüş doğrulamasından geçemedi; dosya çıktıya eklenmedi.")
     return masked
+
+
+def _is_word_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+def _exact_beside_placeholders(
+    content: str, result: DetectionResult, found: list[Match], protected: list[tuple[int, int]],
+) -> list[Match] | None:
+    """String literal'in tamamina genisletilen span mevcut bir yer tutucuyu
+    da kapsiyorsa (`"mask_x_1 Ankara Subesi"`: kisa sozluk terimi daha once
+    maskelenmis, kalani acikta) degerin kendi tam gecisleri yerinde maskelenir.
+    Literal'de yer tutucu ve ayiricilar disinda acik harf/rakam kalirsa ya da
+    gecis bir kelimenin ortasindaysa None: kismi maskeleme degeri acik birakir."""
+    inside = [m for m in found if result.start <= m.start and m.end <= result.end]
+    covered = protected + [(m.start, m.end) for m in inside]
+    if not inside or any(
+        content[pos].isalnum() and not any(a <= pos < b for a, b in covered)
+        for pos in range(result.start, result.end)
+    ):
+        return None
+    for m in inside:
+        if (m.start > 0 and _is_word_char(content[m.start - 1])) or (
+            m.end < len(content) and _is_word_char(content[m.end])
+        ):
+            return None
+    return inside
 
 
 # Yalnizca sozluk kurali ya da insan onayi kesin sayilir; diger kaynaklar
@@ -105,10 +133,19 @@ def mask_known_values(
             if any(content[pos].isalnum() for pos in range(candidate.start, candidate.end)
                    if not any(a <= pos < b for a, b in covered)):
                 raise NarrowedValueError("Riskli ifadenin bir kısmı maskelenemiyor; dosya değiştirilmedi.")
+    found = candidates
     candidates = []
     for result in validated:
         if any(result.start < b and a < result.end for a, b in protected):
-            raise ValueError("Riskli ifade mevcut bir yer tutucuyla çakışıyor; dosya değiştirilmedi.")
+            exact = _exact_beside_placeholders(content, result, found, protected)
+            if exact is None:
+                raise ValueError("Riskli ifade mevcut bir yer tutucuyla çakışıyor; dosya değiştirilmedi.")
+            source = source_by_rule[result.rule.rule_name]
+            candidates.extend(replace(
+                match, original_value=content[match.start:match.end], entity_type=match.rule.category,
+                source_detector=source, confidence=_confidence_for(source),
+            ) for match in exact)
+            continue
         candidates.append(Match(
             rule=result.rule, original_value=result.deger, start=result.start, end=result.end,
             entity_type=result.rule.category, source_detector=source_by_rule.get(result.rule.rule_name),

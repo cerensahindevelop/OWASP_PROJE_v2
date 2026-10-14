@@ -157,6 +157,33 @@ def test_overlapping_values_and_existing_placeholders_restore_exactly(db_session
     assert reverse_text(output, mapping_values(db_session, run))[0] == 'OLD=PreviousPrivate\nNEW=ApolloPrivate'
 
 
+def _json_with_masked_prefix(db, tmp_path, rest: str):
+    from app.services.detectors import synthetic_llm_rule
+    from app.services.mapping_service import get_or_create_mapping
+    run, _, _ = make_file(db, tmp_path, "unused")
+    mapping, _ = get_or_create_mapping(db, run.context_id, synthetic_llm_rule("ORG"), "Akbank", run_id=run.id)
+    content = '[\n  {"sube": "%s %s"},\n  {"sube": "%s %s"}\n]' % (
+        mapping.placeholder_value, rest, mapping.placeholder_value, rest)
+    return run, content, content.replace(mapping.placeholder_value, "Akbank")
+
+
+def test_value_beside_existing_placeholder_in_json_string_is_masked_in_place(db_session, tmp_path):
+    # Sozluk "Akbank"i maskelemis, sube adinin kalani acikta: literal'in
+    # tamamina genisletme yer tutucuyu yutacagi icin deger yerinde maskelenir.
+    from app.services.review_masking import mask_review_values
+    run, content, original = _json_with_masked_prefix(db_session, tmp_path, "Ankara Analitik Test Şubesi")
+    output = mask_review_values(db_session, run, content, "veri/a.json", [("Ankara Analitik Test Şubesi", "POST_MASK_AUDIT")])
+    assert "Ankara" not in output
+    assert reverse_text(output, mapping_values(db_session, run))[0] == original
+
+
+def test_value_beside_placeholder_with_other_open_words_is_still_rejected(db_session, tmp_path):
+    from app.services.review_masking import mask_review_values
+    run, content, _ = _json_with_masked_prefix(db_session, tmp_path, "Ankara Subesi Merkez")
+    with pytest.raises(ValueError, match="yer tutucuyla"):
+        mask_review_values(db_session, run, content, "veri/a.json", [("Ankara Subesi", "POST_MASK_AUDIT")])
+
+
 def test_review_action_discards_stale_zip_and_fetches_fresh_output(monkeypatch):
     from app.webapp import review_page, export_page
     result = {"report": SimpleNamespace(run_id=42), "download_bytes": b"old zip"}

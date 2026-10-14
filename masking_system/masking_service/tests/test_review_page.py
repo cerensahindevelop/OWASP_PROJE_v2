@@ -4,6 +4,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from app.webapp import review_page
+from app.webapp.api_client import ApiError
 
 # AppTest varsayilan 3 sn: yuk altindaki makinede (tam test takimi, CI)
 # sayfanin ilk cizimi bunu asabiliyor ("AppTest script run timed out after
@@ -160,3 +161,43 @@ def test_file_opened_from_export_result_is_first_and_expanded(monkeypatch):
     assert not app.exception
     labels = [(e.label, e.proto.expanded) for e in app.expander if "İncele ve karar ver" in e.label]
     assert labels == [("📄 Profiller.json — İncele ve karar ver", True), ("📄 ilk.md — İncele ve karar ver", False)]
+
+
+def _quarantined_file(monkeypatch, pending):
+    monkeypatch.setattr(review_page, "get_identity", lambda: {"project_name": "p", "sicil_no": "S", "branch_name": "b"})
+    monkeypatch.setattr(review_page.api_client, "list_pending_audit_warnings", lambda **_: list(pending))
+    monkeypatch.setattr(review_page.api_client, "list_pending_reviews", lambda **_: [])
+    monkeypatch.setattr(review_page.api_client, "list_runs", lambda **_: [])
+    pending.append(SimpleNamespace(
+        id=32, run_id=49, file_path="veri/a.json", audit_failed=False, failed_check="llm_denetimi",
+        reasoning="ad (ilgili bolum: 'Ankara Şubesi')", summary="Maskelenmemiş şube adı.", location="Satır 3",
+        next_step="", evidence=[SimpleNamespace(line=3, column=1, found_value="Ankara Şubesi", excerpt="e", label="Kurum")],
+    ))
+
+
+def test_failed_mask_explains_why_inside_the_files_box(monkeypatch):
+    # Hata panelin basinda gosterilirse kullanici (asagidaki dosya kutusunda)
+    # gormez ve "hicbir sey olmadi" sanip butona tekrar tekrar basar.
+    pending = []
+    _quarantined_file(monkeypatch, pending)
+
+    def fail(warning_id):
+        raise ApiError("Otomatik maskeleme sonrası dosya çıktıya eklenmedi: Riskli ifade mevcut bir yer tutucuyla çakışıyor", None, 400)
+    monkeypatch.setattr(review_page.api_client, "mask_audit_warning", fail)
+    app = _review_app().run()
+    app.button(key="audit_mask_32").click().run()
+    assert not app.exception
+    box = app.expander[0]
+    assert any("yer tutucuyla çakışıyor" in w.value and "Ne yapmalı" in w.value for w in box.warning)
+    assert [toast.value for toast in app.toast] == ["Dosya çıktıya eklenmedi; sebebi dosyanın kutusunda yazıyor."]
+
+
+def test_successful_mask_is_announced(monkeypatch):
+    pending = []
+    _quarantined_file(monkeypatch, pending)
+    monkeypatch.setattr(review_page.api_client, "mask_audit_warning", lambda warning_id: pending.clear())
+    app = _review_app().run()
+    app.button(key="audit_mask_32").click().run()
+    assert not app.exception
+    assert any("dosya çıktıya eklendi" in s.value for s in app.success)
+    assert [toast.value for toast in app.toast] == ["İşlem tamamlandı."]

@@ -138,11 +138,41 @@ def _apply_audit_action(action: str, warning_id: int) -> tuple[str, str]:
         return ("error", exc.message)
 
 
+_AUDIT_ACTION_SPINNERS = {
+    "mask": "Riskli ifadeler maskeleniyor ve dosya yeniden doğrulanıyor...",
+    "dismiss": "Dosya yeniden doğrulanıyor...",
+    "accept_syntax": "Dosya diğer güvenlik kontrollerinden geçiriliyor...",
+    "confirm": "Karar kaydediliyor...",
+}
+_AUDIT_FAILURE_NEXT_STEP = (
+    "**Ne yapmalı:** Dosya karantinada kalmaya devam ediyor ve çıktıya eklenmedi. Aynı butona tekrar basmak "
+    "aynı sonucu verir. Yukarıdaki sebebi giderip projeyi yeniden dışa aktarın ya da aşağıdaki diğer "
+    "seçeneklerden birini kullanın."
+)
+
+
+# Karar sonucu: dosya hala listedeyse (islem basarisiz) mesaj o dosyanin
+# kutusunda butonlarin ustunde, degilse panelin basinda gosterilir. Bildirim
+# (toast) sayfa kaydirma konumundan bagimsiz gorunur.
+def _show_audit_flash(flash: tuple[str, str, int | None], *, inline: bool) -> None:
+    kind, text, _warning_id = flash
+    if inline:
+        getattr(st, kind)(f"{text}\n\n{_AUDIT_FAILURE_NEXT_STEP}")
+        st.toast("Dosya çıktıya eklenmedi; sebebi dosyanın kutusunda yazıyor.", icon="⚠️")
+        return
+    getattr(st, kind)(text)
+    if kind == "success":
+        st.toast("İşlem tamamlandı.", icon="✅")
+    else:
+        st.toast(text.split("\n", 1)[0], icon="⚠️")
+
+
 # Denetim uyarisi satirindaki confirm/dismiss butonuna basildiginda
 # cagirilir: islemi uygular, duruma gore Turkce bir flash mesaji birakip
 # sayfayi yeniler.
 def _run_single_audit_action(action: str, warning_id: int) -> None:
-    status, message = _apply_audit_action(action, warning_id)
+    with st.spinner(_AUDIT_ACTION_SPINNERS[action]):
+        status, message = _apply_audit_action(action, warning_id)
     if status == "ok":
         if action == "confirm":
             flash_text = (
@@ -163,10 +193,10 @@ def _run_single_audit_action(action: str, warning_id: int) -> None:
             )
         else:
             flash_text = "✅ Yanlış alarm kararı kaydedildi; dosya yeniden doğrulanarak çıktıya eklendi."
-        st.session_state["audit_flash"] = ("warning" if action == "confirm" else "success", flash_text)
+        st.session_state["audit_flash"] = ("warning" if action == "confirm" else "success", flash_text, warning_id)
         st.session_state[REVIEW_FOCUS_KEY] = None
     else:
-        st.session_state["audit_flash"] = ("warning", message)
+        st.session_state["audit_flash"] = ("warning", message, warning_id)
     st.rerun()
 
 
@@ -181,11 +211,6 @@ def _render_audit_warnings_section(identity: dict, review_count: int = 0) -> Non
 
 
 def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
-    flash = st.session_state.pop("audit_flash", None)
-    if flash:
-        kind, text = flash
-        getattr(st, kind)(text)
-
     try:
         revalidation = api_client.revalidate_pending_audit_warnings(
             project_name=identity["project_name"], sicil_no=identity["sicil_no"], branch_name=identity["branch_name"],
@@ -251,6 +276,16 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
 
     quarantine_rows.sort(key=lambda row: not is_focused(row))
 
+    # Yukaridaki olasi st.rerun()'dan SONRA okunur; aksi halde mesaj gosterilmeden kaybolur.
+    flash = st.session_state.pop("audit_flash", None)
+    boxed_ids = {row["id"] for row in quarantine_rows} | {
+        row["id"] for row in validation_rows
+        if row["failed_check"] == FailedCheck.SOZDIZIMI and not row["file_path"].lower().endswith(".class")
+    }
+    flash_id = flash[2] if flash and flash[2] in boxed_ids else None
+    if flash and flash_id is None:
+        _show_audit_flash(flash, inline=False)
+
     ready_count = 0
     try:
         latest = next((run for run in api_client.list_runs(
@@ -295,10 +330,11 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
         # Sozdizimi hatasi: dosya maskelenmis ve diger kontrollere hazir; kullanici
         # bozuk haliyle de isteyebilir. Java .class bozuk haliyle yeniden kurulamaz.
         for row in validation_rows:
-            if row["failed_check"] != FailedCheck.SOZDIZIMI or row["file_path"].lower().endswith(".class"):
+            if row["id"] not in boxed_ids:
                 continue
             file_name = row["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-            with st.expander(f"📄 {file_name} — sözdizimi hatasının konumu ve seçenekler", expanded=is_focused(row)):
+            with st.expander(f"📄 {file_name} — sözdizimi hatasının konumu ve seçenekler",
+                             expanded=is_focused(row) or row["id"] == flash_id):
                 st.caption(f"{row['project']} · {row['file_path']} · İşlem #{row['run_id']}")
                 st.markdown(f"**Sebep:** {row['summary']}")
                 st.markdown(f"**Konum:** {row['location']}")
@@ -309,6 +345,8 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
                     st.caption(f"{where} — maskelenmiş hali (⟦ ⟧ işaretli yer tutucu sorunlu maskeleme)")
                     st.code(evidence.excerpt, language=None)
                 st.info(row["next_step"])
+                if row["id"] == flash_id:
+                    _show_audit_flash(flash, inline=True)
                 if st.button(ACCEPT_SYNTAX_ACTION_LABEL, key=f"audit_accept_syntax_{row['id']}", width="stretch"):
                     _run_single_audit_action("accept_syntax", row["id"])
 
@@ -325,7 +363,7 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
 
     for row in quarantine_rows:
         file_name = row["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-        with st.expander(f"📄 {file_name} — İncele ve karar ver", expanded=is_focused(row)):
+        with st.expander(f"📄 {file_name} — İncele ve karar ver", expanded=is_focused(row) or row["id"] == flash_id):
             header_col, badge_col = st.columns([4, 1.4])
             with header_col:
                 st.markdown(f"**📄 {file_name}**")
@@ -369,6 +407,8 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
                 f"- **{DISMISS_ACTION_LABEL}:** Bunlar gerçek veri değilse seçin. Dosya yeniden kontrol edilip çıktıya eklenir.\n"
                 f"- **{CONFIRM_ACTION_LABEL}:** Dosya dışarı çıkmaz. Maskeleme kurallarını düzeltip projeyi yeniden dışa aktarmanız gerekir."
             )
+            if row["id"] == flash_id:
+                _show_audit_flash(flash, inline=True)
             action_col1, action_col2, action_col3 = st.columns(3)
             with action_col1:
                 if st.button(MASK_ACTION_LABEL, key=f"audit_mask_{row['id']}", type="primary", width="stretch",
