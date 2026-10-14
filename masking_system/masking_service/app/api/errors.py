@@ -54,6 +54,9 @@ async def _masking_system_exception_handler(request: Request, exc: Exception) ->
     active_job_id = getattr(exc, "active_job_id", None)
     if active_job_id:
         body["active_job_id"] = active_job_id
+    code = getattr(exc, "code", None)
+    if isinstance(code, str):
+        body["code"] = code
     return JSONResponse(body, status_code=status_code)
 
 

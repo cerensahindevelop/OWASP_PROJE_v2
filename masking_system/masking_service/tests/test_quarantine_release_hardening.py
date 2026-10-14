@@ -19,10 +19,12 @@ import pytest
 from sqlalchemy import event, select
 
 from app.core.config import settings
+from app.core.exceptions import AuditFindingsUpdatedError
 from app.db.models import AuditWarning, LearnedDecision, MaskingContext, MaskingRun
 from app.db.session import SessionLocal
 from app.services import audit_warning_service as service_module
 from app.services.audit_reviewer import AuditFinding, AuditVerdict
+from app.services.audit_warning_details import describe_audit_warning
 from app.services.audit_warning_service import AuditWarningService
 from app.services.integrity_manifest import read_manifest, write_manifest
 from app.services.learned_decisions import covered_by_values
@@ -225,9 +227,10 @@ def test_shorter_quote_elsewhere_in_the_file_is_still_a_finding(db_session, tmp_
     _, _, warning = _make(db_session, tmp_path, content, values=["Hakan Yilmaz"])
     _audit_returns(monkeypatch, "Hakan")
 
-    with pytest.raises(ValueError, match="bastırılmamış risk"):
+    with pytest.raises(ValueError, match="yeni bilgi buldu"):
         asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
     assert warning.status == "pending"
+    assert "(ilgili bolum: 'Hakan')" in warning.reasoning
 
 
 @pytest.mark.parametrize(("value", "text", "suppressed", "expected"), [
@@ -477,18 +480,20 @@ def test_changed_content_is_audited_again(db_session, tmp_path, monkeypatch):
     assert calls["n"] == 1
 
 
-def test_failed_attempt_is_repeatable_with_the_same_verdict(db_session, tmp_path, monkeypatch):
+def test_new_finding_keeps_its_recorded_verdict_for_the_next_decision(db_session, tmp_path, monkeypatch):
     _enable_llm(monkeypatch)
     content = "# sahibi KisiGizli\n# yedek Ahmet\n"
     _, _, warning = _make(db_session, tmp_path, content, values=["KisiGizli"])
     calls = _counting_audit(monkeypatch, "Ahmet")
 
-    with pytest.raises(ValueError, match="bastırılmamış risk"):
+    with pytest.raises(ValueError, match="yeni bilgi buldu"):
         asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
-    # Model artik "temiz" dese bile ayni icerik ayni karari alir.
+    assert "(ilgili bolum: 'Ahmet')" in warning.reasoning
+    # Model artik "temiz" dese bile ayni icerik yeniden sorulmaz; kullanici
+    # yeni bulguyu da zararsiz sayinca dosya cikar.
     _counting_audit(monkeypatch)
-    with pytest.raises(ValueError, match="bastırılmamış risk"):
-        asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
+    released = asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
+    assert released.status == "dismissed"
     assert calls["n"] == 1
 
 
@@ -544,3 +549,70 @@ def test_export_records_the_verdict_and_dismiss_reuses_it(tmp_path, monkeypatch)
         assert (target / "notes.txt").is_file()
     finally:
         cleanup_project(project)
+
+
+# Final denetim kararin disinda YENI bulgu bulursa: karar uygulanir, dosya
+# bekler, yeni bulgu "Ne bulundu?" kutusunda gosterilir.
+
+def test_mask_keeps_its_masking_and_shows_a_new_final_finding(db_session, tmp_path, monkeypatch):
+    content = "owner = 'KisiGizli'\nbackup = 'AhmetYedek'\n"
+    _, _, warning = _make(db_session, tmp_path, content, values=["KisiGizli"])
+    _audit_returns(monkeypatch, "AhmetYedek")
+
+    with pytest.raises(AuditFindingsUpdatedError, match="Seçtiğiniz 1 değer maskelendi") as raised:
+        asyncio.run(AuditWarningService(db_session).mask(warning.id))
+    assert "AhmetYedek" not in str(raised.value)  # hata mesajlari loglanabilir
+
+    assert warning.status == "pending"
+    assert "KisiGizli" not in warning.masked_content
+    assert "(ilgili bolum: 'AhmetYedek')" in warning.reasoning
+    assert not (tmp_path / "output" / "src" / "config.py").exists()
+    details = describe_audit_warning(warning, db_session)
+    assert details["summary"].startswith("Seçtiğiniz 1 değer maskelendi, ancak son kontrol dosyada yeni bilgi buldu.")
+    assert [item["found_value"] for item in details["evidence"]] == ["AhmetYedek"]
+
+    released = asyncio.run(AuditWarningService(db_session).mask(warning.id))
+    assert released.status == "dismissed"
+    output = (tmp_path / "output" / "src" / "config.py").read_text()
+    assert "KisiGizli" not in output and "AhmetYedek" not in output
+
+
+def test_after_mask_dismiss_accepts_only_the_new_finding(db_session, tmp_path, monkeypatch):
+    content = "owner = 'KisiGizli'\nbackup = 'AhmetYedek'\n"
+    _, _, warning = _make(db_session, tmp_path, content, values=["KisiGizli"])
+    _audit_returns(monkeypatch, "AhmetYedek")
+    with pytest.raises(AuditFindingsUpdatedError):
+        asyncio.run(AuditWarningService(db_session).mask(warning.id))
+
+    released = asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
+
+    assert released.status == "dismissed"
+    output = (tmp_path / "output" / "src" / "config.py").read_text()
+    assert "KisiGizli" not in output and "AhmetYedek" in output
+
+
+def test_dismiss_keeps_its_suppression_and_then_masks_the_new_finding(db_session, tmp_path, monkeypatch):
+    content = "owner = 'KisiGizli'\nbackup = 'AhmetYedek'\n"
+    context, _, warning = _make(db_session, tmp_path, content, values=["KisiGizli"])
+    _audit_returns(monkeypatch, "KisiGizli", "AhmetYedek")
+    with pytest.raises(AuditFindingsUpdatedError, match="Zararsız dediğiniz 1 değer kabul edildi"):
+        asyncio.run(AuditWarningService(db_session).dismiss(warning.id))
+    assert db_session.scalars(select(LearnedDecision).where(
+        LearnedDecision.context_id == context.id, LearnedDecision.decision_type == "suppression",
+    )).all()
+
+    released = asyncio.run(AuditWarningService(db_session).mask(warning.id))
+
+    assert released.status == "dismissed"
+    output = (tmp_path / "output" / "src" / "config.py").read_text()
+    assert "KisiGizli" in output and "AhmetYedek" not in output
+
+
+def test_api_error_body_names_the_updated_findings_code():
+    import json
+    from app.api.errors import _masking_system_exception_handler
+
+    response = asyncio.run(_masking_system_exception_handler(None, AuditFindingsUpdatedError("yeni bilgi")))
+
+    assert response.status_code == 400
+    assert json.loads(response.body) == {"message": "yeni bilgi", "detail": None, "code": "audit_findings_updated"}

@@ -112,6 +112,21 @@ def _line_excerpt(content: str, line_number: int, value: str = "", reverse: Call
     return line
 
 
+# Kullanici karari uygulanip final denetim yeni bulgu bulunca gerekcenin
+# sonuna eklenen not: "(onceki_karar_uygulandi maskelendi=4)" ya da
+# "(onceki_karar_uygulandi zararsiz=4)" (bkz. AuditWarningService._record_new_findings).
+PRIOR_DECISION_NOTE = "onceki_karar_uygulandi"
+_PRIOR_DECISION_RE = re.compile(rf"\({PRIOR_DECISION_NOTE} (maskelendi|zararsiz)=(\d+)\)")
+
+
+def _prior_decision_note(reason: str) -> str:
+    match = _PRIOR_DECISION_RE.search(reason)
+    if match is None:
+        return ""
+    done = "maskelendi" if match.group(1) == "maskelendi" else "zararsız kabul edildi"
+    return f"Seçtiğiniz {match.group(2)} değer {done}, ancak son kontrol dosyada yeni bilgi buldu. "
+
+
 _RECORDED_TERM_RE = re.compile(
     r"Satır (\d+), sütun (\d+): [^\n]*?; açık değer=('(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\")"
 )
@@ -314,6 +329,7 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
         " Sistem dosyayı otomatik düzeltmeyi denedi, ancak dosya son kontrolden geçemedi."
         if "otomatik düzeltme denendi" in reason else ""
     )
+    prior_note = _prior_decision_note(reason)
     if evidence:
         values = list(dict.fromkeys(str(item["found_value"]) for item in evidence))
         labels = list(dict.fromkeys(str(item["label"]).casefold() for item in evidence))
@@ -323,7 +339,8 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
             location += f" ve {len(lines) - 6} satır daha"
         return {
             "summary": (
-                f"Bu dosyada gizlenmemiş görünen {len(values)} bilgi var: {', '.join(labels[:4])}."
+                prior_note
+                + f"Bu dosyada gizlenmemiş görünen {len(values)} bilgi var: {', '.join(labels[:4])}."
                 + auto_fix_note
             ),
             "location": location,

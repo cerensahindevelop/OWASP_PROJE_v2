@@ -135,13 +135,15 @@ def _apply_audit_action(action: str, warning_id: int) -> tuple[str, str]:
         _invalidate_export_download()
         return ("ok", "")
     except ApiError as exc:
+        if exc.code == "audit_findings_updated":
+            return ("updated", exc.message)
         return ("error", exc.message)
 
 
 _AUDIT_ACTION_SPINNERS = {
-    "mask": "Riskli ifadeler maskeleniyor ve dosya yeniden doğrulanıyor...",
-    "dismiss": "Dosya yeniden doğrulanıyor...",
-    "accept_syntax": "Dosya diğer güvenlik kontrollerinden geçiriliyor...",
+    "mask": "Değerler maskeleniyor, ardından yapay zekâ son kontrolü yapılıyor. Bu biraz sürebilir...",
+    "dismiss": "Yapay zekâ son kontrolü yapılıyor. Bu biraz sürebilir...",
+    "accept_syntax": "Dosya diğer güvenlik kontrollerinden ve yapay zekâ son kontrolünden geçiriliyor...",
     "confirm": "Karar kaydediliyor...",
 }
 _AUDIT_FAILURE_NEXT_STEP = (
@@ -149,13 +151,37 @@ _AUDIT_FAILURE_NEXT_STEP = (
     "aynı sonucu verir. Yukarıdaki sebebi giderip projeyi yeniden dışa aktarın ya da aşağıdaki diğer "
     "seçeneklerden birini kullanın."
 )
+_AUDIT_UPDATED_NEXT_STEP = (
+    "**Ne yapmalı:** Yeni bulgular yukarıda “Ne bulundu?” bölümünde listelendi. Önceki kararınız kaydedildi, "
+    f"tekrar sorulmaz. Yeni bulgular gerçek veriyse “{MASK_ACTION_LABEL}”, zararsızsa “{DISMISS_ACTION_LABEL}” seçin."
+)
+
+
+# Yeni bulgulardan her tur icin ilk deger: "**Kişi adı:** `AKB-M-0001` …"
+def _first_values_by_label(evidence: list) -> str:
+    by_label: dict[str, list[str]] = {}
+    for item in evidence:
+        value = getattr(item, "found_value", "")
+        if value:
+            values = by_label.setdefault(getattr(item, "label", "") or "Hassas bilgi", [])
+            if value not in values:
+                values.append(value)
+    return "; ".join(
+        f"**{label}:** `{values[0]}`" + (" …" if len(values) > 1 else "") for label, values in by_label.items()
+    )
 
 
 # Karar sonucu: dosya hala listedeyse (islem basarisiz) mesaj o dosyanin
 # kutusunda butonlarin ustunde, degilse panelin basinda gosterilir. Bildirim
 # (toast) sayfa kaydirma konumundan bagimsiz gorunur.
-def _show_audit_flash(flash: tuple[str, str, int | None], *, inline: bool) -> None:
+def _show_audit_flash(flash: tuple[str, str, int | None], *, inline: bool, evidence: list | None = None) -> None:
     kind, text, _warning_id = flash
+    if kind == "updated":
+        # Karar uygulandi, son kontrol yeni bilgi buldu: ornek deger + yeni bulgular icin karar.
+        examples = _first_values_by_label(evidence or [])
+        st.warning(f"{text}" + (f"\n\n{examples}" if examples else "") + f"\n\n{_AUDIT_UPDATED_NEXT_STEP}")
+        st.toast("Kararınız uygulandı; son kontrol yeni bilgi buldu.", icon="⚠️")
+        return
     if inline:
         getattr(st, kind)(f"{text}\n\n{_AUDIT_FAILURE_NEXT_STEP}")
         st.toast("Dosya çıktıya eklenmedi; sebebi dosyanın kutusunda yazıyor.", icon="⚠️")
@@ -196,7 +222,7 @@ def _run_single_audit_action(action: str, warning_id: int) -> None:
         st.session_state["audit_flash"] = ("warning" if action == "confirm" else "success", flash_text, warning_id)
         st.session_state[REVIEW_FOCUS_KEY] = None
     else:
-        st.session_state["audit_flash"] = ("warning", message, warning_id)
+        st.session_state["audit_flash"] = ("updated" if status == "updated" else "warning", message, warning_id)
     st.rerun()
 
 
@@ -408,7 +434,7 @@ def _render_audit_warnings_panel(identity: dict, review_count: int = 0) -> None:
                 f"- **{CONFIRM_ACTION_LABEL}:** Dosya dışarı çıkmaz. Maskeleme kurallarını düzeltip projeyi yeniden dışa aktarmanız gerekir."
             )
             if row["id"] == flash_id:
-                _show_audit_flash(flash, inline=True)
+                _show_audit_flash(flash, inline=True, evidence=row["evidence"])
             action_col1, action_col2, action_col3 = st.columns(3)
             with action_col1:
                 if st.button(MASK_ACTION_LABEL, key=f"audit_mask_{row['id']}", type="primary", width="stretch",

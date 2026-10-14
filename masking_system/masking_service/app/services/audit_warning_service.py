@@ -25,6 +25,9 @@ dismiss()/mask() uc asamada calisir:
      geri alinir (bkz. _register_release_undo) - "dosya disarida ama DB
      'karantinada' diyor" durumu olusmaz. Basarisiz dogrulama hicbir karari
      (suppression, esleme) kalici yapmaz; yalnizca denetim kaydi yazilir.
+     Tek istisna: final denetim kullanicinin karar verdigi degerler disinda
+     YENI bir bulgu dogrularsa karar kalici olur ve uyari yeni bulgularla
+     guncellenir (bkz. _record_new_findings); dosya yine karantinada kalir.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ from app.core.config import settings
 from app.core.crypto import decrypt_value
 from app.db.models import AuditLog, AuditWarning, FilterRule, MaskingContext, MaskingRun, ValueMapping
 from app.services.consistency_masking import SensitiveValueRegistry, find_consistency_occurrences, registry_authority
-from app.core.exceptions import ReviewAlreadyProcessedError
+from app.core.exceptions import AuditFindingsUpdatedError, ReviewAlreadyProcessedError
 from app.services.long_paths import extended_length_path
 from app.services.integrity_manifest import manifest_lock, read_manifest, write_manifest, file_digest, source_tag
 from app.services.mapping_service import load_active_rules, mapping_scope_for_run, mask_relative_path
@@ -50,13 +53,14 @@ from app.services.roundtrip_validator import text_digest
 from app.services.rule_engine import reverse_text
 from app.repository.audit_warning_repository import SqlAlchemyAuditWarningRepository
 from app.services.audit_reviewer import (
-    AuditFinding, audit_masked_text, audit_record_key, decode_audit_record, encode_audit_record,
+    AuditFinding, AuditFindingVerifier, AuditVerdict, audit_masked_text, audit_record_key, decode_audit_record,
+    encode_audit_record,
 )
 from app.services.llm_transport import llm_http_scope
 from app.services.llm_runtime import llm_file_context
 from app.services.runtime_params import build_runtime_params
 from app.services.log_refs import file_label, file_ref, log_file_label
-from app.services.audit_warning_details import describe_audit_warning
+from app.services.audit_warning_details import PRIOR_DECISION_NOTE, describe_audit_warning, friendly_label
 from app.services.file_type import write_text_preserving_encoding
 from app.services.learned_decisions import LearnedDecisionPolicy, covered_by_values, remember_decision
 from app.services.llm_recognizer import LLMRecognitionError
@@ -365,6 +369,13 @@ class AuditWarningService:
         if error is None:
             error = await self._ai_check(candidate.content, warning, run, extra_suppressions=suppressions)
         if error is not None:
+            if self._unresolved_findings and (mask_values or suppressions) and revalidation_token is None:
+                message = self._record_new_findings(
+                    warning_id, run, candidate, mask_values=mask_values, suppressions=suppressions,
+                    learned_sensitive=learned_sensitive, decision_detail=decision_detail,
+                )
+                if message is not None:
+                    raise AuditFindingsUpdatedError(message)
             self._record_failure(warning, run, decision_detail, error, revalidation_token=revalidation_token)
             raise ValueError(f"{failure_message}: {error}")
 
@@ -457,6 +468,70 @@ class AuditWarningService:
             detail=f"warning_id={warning.id} {decision_detail} revalidation=failed final_output=blocked reason={error}",
         ))
         self.db.commit()
+
+    def _record_new_findings(
+        self, warning_id: int, run: MaskingRun, candidate: _Candidate, *,
+        mask_values: list[tuple[str, str]], suppressions: list[str],
+        learned_sensitive: Sequence[str], decision_detail: str,
+    ) -> str | None:
+        """Kullanicinin karari uygulandi ama final denetim YENI bulgu buldu.
+
+        Karar (maskeleme eslemeleri ya da zararsiz kabulu) kalici olur, dosya
+        karantinada kalir ve uyarinin gerekcesi yeni bulgularla degisir: ekran
+        "Ne bulundu?" kutusunda bunlari gosterir, kullanici onlar icin ayrica
+        karar verir. Aday asama A'dakiyle ayni uretilemezse ya da yeni bulgu
+        icerikte dogrulanamazsa None doner; cagiran eski basarisizlik yolunu
+        kullanir (hicbir karar kalici olmaz).
+        """
+        savepoint = self.db.begin_nested()
+        try:
+            warning = self.db.get(AuditWarning, warning_id)
+            self.db.refresh(warning)
+            previous_content = warning.masked_content
+            again = self._prepare_candidate(warning, run, mask_values)
+            verified, _ = AuditFindingVerifier(again.content, warning.file_path).verify(list(self._unresolved_findings))
+            if warning.status != "pending" or again.error is not None or again.content != candidate.content or not verified:
+                savepoint.rollback()
+                return None
+            decided = len(mask_values) if mask_values else len(suppressions)
+            note = f"maskelendi={decided}" if mask_values else f"zararsiz={decided}"
+            updated = self.db.scalar(update(AuditWarning).where(
+                AuditWarning.id == warning_id, AuditWarning.status == "pending",
+                AuditWarning.masked_content == previous_content,
+            ).values(
+                masked_content=again.content,
+                reasoning=f"{AuditVerdict(risky=True, findings=verified).reasoning_text()}\n({PRIOR_DECISION_NOTE} {note})",
+                failed_check=FailedCheck.LLM_DENETIMI,
+                audit_record=self._fresh_audit_record or warning.audit_record,
+            ).returning(AuditWarning.id))
+            if updated is None:
+                savepoint.rollback()
+                return None
+            self._log_consistency(warning, run, again.consistency_count)
+            for decision_type, values in (("suppression", suppressions), ("sensitive", learned_sensitive)):
+                for value in values:
+                    remember_decision(
+                        self.db, context_id=run.context_id, decision_type=decision_type,
+                        value=value, entity_type="POST_MASK_AUDIT", file_path=warning.file_path,
+                        source_review_id=None,
+                    )
+            self.db.add(AuditLog(
+                run_id=run.id, file_path=warning.file_path, action="error",
+                detail=(f"warning_id={warning_id} {decision_detail} decision_applied=true "
+                        f"revalidation=new_findings findings={len(verified)} final_output=blocked"),
+            ))
+            savepoint.commit()
+        except BaseException:
+            savepoint.rollback()
+            raise
+        self.db.commit()
+        labels = list(dict.fromkeys(friendly_label(finding.aciklama).casefold() for finding in verified))
+        done = (f"Seçtiğiniz {decided} değer maskelendi" if mask_values
+                else f"Zararsız dediğiniz {decided} değer kabul edildi")
+        return (
+            f"Son kontrol dosyada yeni bilgi buldu ({', '.join(labels[:3])}: {len(verified)} değer). "
+            f"{done}, ancak dosya henüz çıktıya eklenmedi."
+        )
 
     def _prepare_candidate(
         self, warning: AuditWarning, run: MaskingRun, mask_values: list[tuple[str, str]],

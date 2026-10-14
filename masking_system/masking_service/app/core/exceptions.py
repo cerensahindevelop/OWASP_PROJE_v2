@@ -35,5 +35,17 @@ class ReviewAlreadyProcessedError(MaskingSystemError):
     """A review queue item was already approved/rejected/ignored."""
 
 
+class AuditFindingsUpdatedError(MaskingSystemError, ValueError):
+    """Kullanicinin karari uygulandi, ancak final AI denetimi yeni bulgu buldu.
+
+    Dosya karantinada kalir; uyari yeni bulgularla guncellenmistir ve
+    kullanici onlar icin ayrica karar verir. `code` API yanitina eklenir:
+    arayuz bunu "ayni butona basmak ayni sonucu verir" hatasindan ayirir.
+    Mesaj bulgu degerlerini icermez (hata mesajlari loglanabilir).
+    """
+
+    code = "audit_findings_updated"
+
+
 class BuildMismatchError(MaskingSystemError):
     """Running code is a mixed version (stamp mismatch or files changed since start)."""

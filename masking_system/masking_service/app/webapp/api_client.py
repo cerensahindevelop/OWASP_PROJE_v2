@@ -38,13 +38,15 @@ class ApiError(Exception):
     `message`/`detail` zaten Turkce/kullaniciya-hazirdir (bkz. modul docstring'i)."""
 
     def __init__(self, message: str, detail: str | None, status_code: int,
-                 active_job_id: str | None = None) -> None:
+                 active_job_id: str | None = None, code: str | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.detail = detail
         self.status_code = status_code
         # 409: ayni proje/sicil/branch icin calisan isin kimligi (varsa).
         self.active_job_id = active_job_id
+        # Hata turunun makine-okunur kodu (orn. "audit_findings_updated"), varsa.
+        self.code = code
 
 
 def _to_namespace(value: Any) -> Any:
@@ -99,11 +101,13 @@ def _request(method: str, path: str, **kwargs: Any) -> httpx.Response:
             message = body.get("message") or f"HTTP {resp.status_code}"
             detail = body.get("detail")
             active_job_id = body.get("active_job_id")
+            code = body.get("code")
         except ValueError:
             message = resp.text or f"HTTP {resp.status_code}"
             detail = None
             active_job_id = None
-        raise ApiError(message, detail, resp.status_code, active_job_id)
+            code = None
+        raise ApiError(message, detail, resp.status_code, active_job_id, code)
     return resp
 
 

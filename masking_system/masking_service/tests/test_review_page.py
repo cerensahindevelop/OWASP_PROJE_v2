@@ -201,3 +201,30 @@ def test_successful_mask_is_announced(monkeypatch):
     assert not app.exception
     assert any("dosya çıktıya eklendi" in s.value for s in app.success)
     assert [toast.value for toast in app.toast] == ["İşlem tamamlandı."]
+
+
+def test_new_final_findings_after_mask_are_shown_with_their_values(monkeypatch):
+    # Karar uygulandi, son kontrol yeni bilgi buldu: "ayni butona basmak ayni
+    # sonucu verir" denmez; yeni deger ve ne yapilacagi dosyanin kutusunda yazar.
+    pending = []
+    _quarantined_file(monkeypatch, pending)
+
+    def updated(warning_id):
+        pending[0].summary = "Seçtiğiniz 1 değer maskelendi, ancak son kontrol dosyada yeni bilgi buldu."
+        pending[0].evidence = [
+            SimpleNamespace(line=2, column=1, found_value="AKB-M-0001", excerpt="e", label="Kişi adı"),
+            SimpleNamespace(line=9, column=1, found_value="AKB-M-0002", excerpt="e", label="Kişi adı"),
+        ]
+        raise ApiError("Son kontrol dosyada yeni bilgi buldu (kişi adı: 72 değer). Seçtiğiniz 1 değer maskelendi, "
+                       "ancak dosya henüz çıktıya eklenmedi.", None, 400, code="audit_findings_updated")
+    monkeypatch.setattr(review_page.api_client, "mask_audit_warning", updated)
+    app = _review_app().run()
+    app.button(key="audit_mask_32").click().run()
+
+    assert not app.exception
+    box = app.expander[0]
+    assert box.proto.expanded
+    [message] = [w.value for w in box.warning]
+    assert "kişi adı: 72 değer" in message and "**Kişi adı:** `AKB-M-0001` …" in message
+    assert "Önceki kararınız kaydedildi" in message and "Aynı butona tekrar basmak" not in message
+    assert [toast.value for toast in app.toast] == ["Kararınız uygulandı; son kontrol yeni bilgi buldu."]

@@ -18,6 +18,8 @@ from pathlib import Path
 # streamlit: form/spinner/sonuc gosterimi gibi tum ekran bilesenleri icin.
 import streamlit as st
 
+# settings: ilerleme metni yapay zeka son kontrolunun acik olup olmadigini soyler.
+from app.core.config import settings
 # api_client: tarama isteklerini backend'e HTTP ile ileten fonksiyonlar.
 # ApiError: bu cagrilardan biri basarisiz olursa firlatilir.
 from app.webapp import api_client
@@ -125,6 +127,8 @@ def _wait_for_export_job(job_id: str):
                     text = f"{job.total} dosya işlendi — son tutarlılık ve bütünlük kontrolleri yapılıyor..."
                 else:
                     text = f"{job.processed} / {job.total} dosya işlendi"
+                    if settings.vllm.enabled:
+                        text += " — her dosya maskelendikten sonra yapay zekâ son kontrolünden geçiriliyor"
                 bar.progress(fraction, text=text)
             else:
                 bar.progress(0.0, text="Dosyalar listeleniyor ve hazırlanıyor...")
