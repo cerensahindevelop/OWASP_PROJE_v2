@@ -1,158 +1,125 @@
-# Maskeleme Sistemi – Intra Kurulum ve Kullanım Kılavuzu
+# Maskeleme Sistemi – Intra Kurulum Kılavuzu
 
-Bu kılavuz, bu flash bellekteki paketi **internetsiz kurum içi (intra) Windows
-makinesine** kurmak, güncellemek ve kullanmak içindir. Adımları sırayla
-uygulayın, hiçbirini atlamayın.
+Bu kılavuz, flash bellekteki paketi internetsiz Windows makinesine kurmak ve
+kullanmak içindir. Kılavuzdaki hiçbir komut internete çıkmaz.
 
-**Hangi bölüm size uygun?**
+## Başlamadan önce
 
-- Makinede daha önce hiç kurulmadıysa: **Bölüm A – İlk kurulum**
-- Makinede eski bir sürüm varsa: **Bölüm B – Güncelleme**
-- Kurulum bittiyse ve sadece kullanacaksanız: **Bölüm C – Günlük kullanım**
+**Gerekenler**
 
-**Bu kılavuzdaki sabit değerler:**
+- 64 bit Windows ve **Python 3.14**
+- vLLM sunucusunun adresi ve model adı (sunucu yöneticisinden öğrenin)
+
+**Kılavuzdaki sabit değerler**
 
 - Kurulum klasörü: `C:\masking_system`
-- Flash bellek sürücüsü: `E:`
+- Flash bellek: `E:`. Sizinki farklıysa komutlarda `E:` yerine kendi harfinizi
+  yazın. Harfi öğrenmek için:
+  `Get-Volume | Where-Object DriveType -eq Removable`
 
-Sizin klasörünüz ya da sürücü harfiniz farklıysa komutlarda bunları kendi
-değerlerinizle değiştirin. Tüm komutlar **PowerShell** içindir ve hiçbiri
-internete çıkmaz.
+**Komutları nerede çalıştıracaksınız**
+
+Başlat menüsüne `PowerShell` yazıp **Windows PowerShell**'i açın. Bir bölümü
+bitirene kadar aynı pencereyi kullanın.
+
+Her adımın altında **Beklenen** sonuç yazar. Farklı bir sonuç görürseniz
+devam etmeyin, **Bölüm 6 – Sorun giderme**'ye bakın.
+
+**Hangi bölümden başlamalısınız?**
+
+| Durum | Bölüm |
+|---|---|
+| Makinede hiç kurulum yok | **1 – İlk kurulum** |
+| Makinede eski sürüm var | **2 – Güncelleme** |
+| Kurulum bitti, kullanacaksınız | **3 – Günlük kullanım** |
 
 ---
 
-## Bölüm A – İlk kurulum
+## 1. İlk kurulum
 
-### A1. PowerShell'i açın
-
-Başlat menüsüne `PowerShell` yazın ve **Windows PowerShell**'i açın. Bu bölüm
-boyunca aynı pencereyi kullanın.
-
-### A2. Python sürümünü kontrol edin
+### 1.1 Python'u kontrol edin
 
 ```powershell
-python --version
+python -c "import sys, platform; print(sys.version.split()[0], platform.machine())"
 ```
 
-Çıktı `Python 3.14.x` olmalı.
+**Beklenen:** `3.14.x AMD64` (x herhangi bir sayı olabilir). Farklıysa devam
+etmeyin; paket yalnızca 64 bit Windows ve Python 3.14 içindir.
 
-```powershell
-python -c "import platform; print(platform.machine())"
-```
-
-Çıktı `AMD64` olmalı.
-
-İkisinden biri farklıysa **devam etmeyin**. Paket yalnızca Python 3.14 ve
-64 bit Windows için hazırlanmıştır.
-
-### A3. Flash belleğin sürücü harfini bulun
-
-```powershell
-Get-Volume | Where-Object DriveType -eq Removable
-```
-
-`DriveLetter` sütunundaki harf flash belleğinizdir. `E` değilse sonraki
-adımlarda `E:` yerine bu harfi yazın.
-
-### A4. Hedef klasörün henüz olmadığını kontrol edin
+### 1.2 Paketi flash bellekten diske kopyalayın
 
 ```powershell
 Test-Path C:\masking_system
 ```
 
-Çıktı `False` olmalı. `True` ise makinede eski bir kurulum vardır; bu bölüm
-yerine **Bölüm B – Güncelleme**'yi uygulayın.
-
-### A5. Paketi flash bellekten yerel diske kopyalayın
-
-Flash bellekteki `masking_system` klasörü adı değişmeden `C:\` altına kopyalanır
-ve `C:\masking_system` olur:
+**Beklenen:** `False`. `True` çıkarsa makinede eski bir kurulum var demektir;
+**Bölüm 2**'ye geçin.
 
 ```powershell
-Copy-Item -Recurse "E:\masking_system" C:\
+Copy-Item -Recurse E:\masking_system C:\
 ```
 
-Uygulamayı **hiçbir zaman doğrudan flash bellekten çalıştırmayın**. Flash
-bellekte veritabanı bozulabilir ve çalışma çok yavaşlar.
+Uygulamayı hiçbir zaman doğrudan flash bellekten çalıştırmayın. Veritabanı
+bozulabilir, uygulama da çok yavaşlar.
 
-### A6. Kopyanın eksiksiz geldiğini kontrol edin
-
-```powershell
-cd C:\masking_system
-Get-ChildItem -Force
-```
-
-Listede şunlar görünmeli: `masking_service`, `wheels`, `install_offline.ps1`,
-`.env.example`, `manifest.json`, `requirements.lock`, `README.md`.
-
-### A7. Bağımlılıkları kurun
+### 1.3 Bağımlılıkları kurun
 
 ```powershell
 cd C:\masking_system
 powershell -ExecutionPolicy Bypass -File .\install_offline.ps1
 ```
 
-Birkaç dakika sürer. Son satırda
-`Offline dependencies and parsers are ready.` yazmalı. Kırmızı bir hata
-görürseniz durun ve **Bölüm E – Sorun giderme**'ye bakın.
+Birkaç dakika sürer.
 
-Python `python` komutuyla açılmıyorsa Python'un tam yolunu verin:
+**Beklenen son satır:** `Offline dependencies and parsers are ready.`
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install_offline.ps1 -Python "C:\Program Files\Python314\python.exe"
-```
+Hata `python` komutunun bulunamadığını söylüyorsa, komutun sonuna Python'un
+tam yolunu ekleyin:
+`-Python "C:\Program Files\Python314\python.exe"`
 
-### A8. `.env` ayar dosyasını oluşturun
+### 1.4 Ayar dosyasını ve şifreleme anahtarını oluşturun
+
+Dört satırı sırayla çalıştırın:
 
 ```powershell
 cd C:\masking_system
 Copy-Item .env.example .env
-```
-
-`.env` dosyası `masking_service` klasörünün **yanında**
-(`C:\masking_system\.env`) olmalıdır.
-
-### A9. Şifreleme anahtarını üretip `.env`'ye yazın
-
-```powershell
-cd C:\masking_system
 $key = & "masking_service\.venv\Scripts\python.exe" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 (Get-Content .env) -replace '^SECURITY_ENCRYPTION_KEY=.*', "SECURITY_ENCRYPTION_KEY=$key" | Set-Content .env
 ```
 
-### A10. Anahtarın yazıldığını kontrol edin
+Kontrol:
 
 ```powershell
 Select-String -Path .env -Pattern "^SECURITY_ENCRYPTION_KEY="
 ```
 
-`CHANGE_ME` değil, uzun ve rastgele bir değer görünmeli.
+**Beklenen:** `CHANGE_ME` değil, uzun ve rastgele bir değer.
 
-### A11. `.env` dosyasını güvenli bir yere yedekleyin
+### 1.5 Ayar dosyasını yedekleyin
 
 ```powershell
-Copy-Item C:\masking_system\.env "C:\masking_system-env-yedek.env"
+Copy-Item C:\masking_system\.env C:\masking_system-env-yedek.env
 ```
 
-Bu yedeği ayrıca kurumunuzun onayladığı güvenli bir yerde de saklayın.
-**Şifreleme anahtarı kaybolursa ya da değişirse o ana kadar maskelenmiş hiçbir
-çıktı geri dönüştürülemez.** Yeni anahtar üretmek bunu düzeltmez.
+Bu yedeği kurumunuzun onayladığı güvenli bir yerde de saklayın.
 
-### A12. LLM ayarlarını yazın
+> **Önemli:** Şifreleme anahtarı kaybolursa o ana kadar maskelenmiş hiçbir
+> çıktı geri dönüştürülemez. Yeni anahtar üretmek bunu düzeltmez.
 
-`.env` dosyasını Not Defteri ile açın:
+### 1.6 LLM ayarlarını yazın
 
 ```powershell
 notepad C:\masking_system\.env
 ```
 
-Aşağıdaki satırları ayarlayın. Satır dosyada **zaten varsa değerini
-değiştirin**, **yoksa dosyanın en altına ekleyin**:
+Aşağıdaki satırları ayarlayın. Satır dosyada varsa değerini değiştirin, yoksa
+dosyanın sonuna ekleyin:
 
 ```
 VLLM_ENABLED=true
-VLLM_HOST=http://<vllm-sunucusunun-adresi>:8000
-VLLM_MODEL=<vllm sunucusundaki model adı (--served-model-name)>
+VLLM_HOST=http://<vllm-sunucu-adresi>:8000
+VLLM_MODEL=<sunucudaki model adı>
 VLLM_DISABLE_THINKING=true
 VLLM_MAX_CONCURRENT_REQUESTS=4
 VLLM_FILE_BATCH_SIZE=16
@@ -160,214 +127,122 @@ VLLM_MAX_TOKENS=2048
 VLLM_TRANSIENT_RETRIES=2
 ```
 
-- `VLLM_HOST` ve `VLLM_MODEL` değerlerini vLLM sunucusunu yöneten kişiden öğrenin.
-- `VLLM_DISABLE_THINKING=true` **zorunludur**. Kapatılmazsa model yanıt
-  bütçesini düşünmeye harcar, yanıtlar kesilir ve dosyalar karantinaya düşer.
-- `VLLM_MAX_CONCURRENT_REQUESTS=4` bir başlangıç değeridir; A16'daki ölçümle
-  kesinleşecek.
-- `VLLM_REASONING_EFFORT` satırını yazmayın (vLLM bu ayarı reddedebilir).
-- LLM kullanılmayacaksa yalnızca `VLLM_ENABLED=false` yazmanız yeterlidir.
+- `VLLM_DISABLE_THINKING=true` **zorunludur.** Yoksa modelin yanıtları kesilir
+  ve dosyalar karantinaya düşer.
+- `VLLM_REASONING_EFFORT` satırını eklemeyin; vLLM bu ayarı reddedebilir.
+- `VLLM_MAX_CONCURRENT_REQUESTS=4` bir başlangıç değeridir. Asıl değeri
+  1.8'deki ölçümle belirleyeceksiniz.
 
-Dosyayı kaydedip Not Defteri'ni kapatın.
-
-### A13. LLM ayarlarını kontrol edin
+Kaydedip Not Defteri'ni kapatın. Kontrol:
 
 ```powershell
 Select-String -Path C:\masking_system\.env -Pattern "^VLLM_"
 ```
 
-A12'deki her ayar **bir kez** görünmeli ve `CHANGE_ME` hiçbir yerde kalmamalı.
-Aynı ayar iki kez görünüyorsa Not Defteri'nde birini silin.
+**Beklenen:** Yukarıdaki her satır **bir kez** görünür ve hiçbirinde
+`CHANGE_ME` kalmaz. Bir satır iki kez görünüyorsa Not Defteri'nde birini
+silin.
 
-### A14. Veritabanını oluşturun
+### 1.7 Veritabanını oluşturun ve ön kontrolü çalıştırın
 
 ```powershell
 cd C:\masking_system\masking_service
 .venv\Scripts\python.exe -m alembic upgrade head
-```
-
-Hata vermeden bitmeli. Veritabanı dosyası
-`C:\masking_system\masking.db` olarak oluşur.
-
-### A15. Ön kontrolü çalıştırın
-
-```powershell
-cd C:\masking_system\masking_service
 .venv\Scripts\python.exe scripts\check_llm_preflight.py
 ```
 
-Çıktıda şunlar görünmeli:
+**Beklenen:**
 
-- `PASS stage=build_stamp`
-- `PASS stage=runtime_rules ...`
-- en sonda `RESULT=OFFLINE_OK`
+- İlk komut hatasız biter ve `C:\masking_system\masking.db` dosyası oluşur.
+- İkinci komutun çıktısında `PASS stage=build_stamp` ve en sonda
+  `RESULT=OFFLINE_OK` görünür. Hiçbir satır `FAIL` ile başlamaz.
 
-`FAIL` satırı ya da `RESULT=OFFLINE_FAILED` görürseniz devam etmeyin;
-**Bölüm E**'ye bakın.
+Ön kontrol vLLM sunucusuna bağlanmaz; kodun ve ayarların doğru olduğunu
+kontrol eder.
 
-### A16. LLM eşzamanlılık ölçümünü çalıştırın
+### 1.8 Hız ayarını yapın
 
-`VLLM_MAX_CONCURRENT_REQUESTS`, uygulamanın vLLM sunucusuna aynı anda kaç istek
-gönderdiğini belirler. Değer yükseldikçe iş genelde hızlanır; bir noktadan sonra
-sunucu yetişemez, hız artmaz ve hata başlar. Bu ölçüm o noktayı bulur. Yalnızca
-yapay metin gönderir; veritabanına ve gerçek dosyalara dokunmaz.
+**Bölüm 4**'teki ölçümü yapın ve bulduğunuz değeri `.env` dosyasına yazın.
+Ölçüm vLLM sunucusuyla bağlantıyı da sınamış olur.
 
-```powershell
-cd C:\masking_system\masking_service
-.venv\Scripts\python.exe scripts\benchmark_llm.py --concurrency 1 2 4 8 --files 16 --chars 12000 --max-tokens 2048 > ..\bench-c.json
-```
-
-Birkaç dakika sürer; 1, 2, 4 ve 8 değerleri sırayla denenir.
-
-### A17. Ölçüm sonucunu okuyun
-
-A16'daki gibi `masking_service` klasöründeyken çalıştırın; sonuç dosyası bir üst
-klasördedir:
-
-```powershell
-(Get-Content -Raw ..\bench-c.json | ConvertFrom-Json) | ForEach-Object { "{0} -> {1} sn, hatali dosya: {2}" -f $_.concurrency, $_.elapsed_seconds, @($_.files | Where-Object status -ne 'ok').Count }
-```
-
-Ekranda 4 satır görünür. Aşağıdaki sayılar yalnızca örnektir:
-
-```
-1 -> 120 sn, hatali dosya: 0
-2 -> 65 sn, hatali dosya: 0
-4 -> 38 sn, hatali dosya: 0
-8 -> 35 sn, hatali dosya: 0
-```
-
-### A18. Eşzamanlılık değerini seçin
-
-1. Hatalı dosya sayısı 0 olmayan satırları eleyin.
-2. Kalanlar arasında, bir öncekine göre **belirgin şekilde (en az %15)
-   hızlanan en büyük değeri** seçin.
-
-Örnekte 4'ten 8'e geçmek süreyi yalnızca 38 sn'den 35 sn'ye indiriyor; doğru
-seçim **4**'tür.
-
-- vLLM sunucusu başka uygulamalarla da paylaşılıyorsa bir kademe düşük değer
-  seçin.
-- vLLM sunucusunun `--max-num-seqs` değeri seçtiğiniz sayıdan küçük olmamalıdır;
-  bunu sunucu yöneticisine sorun.
-
-### A19. Seçtiğiniz değeri `.env`'ye yazın
-
-```powershell
-notepad C:\masking_system\.env
-```
-
-`VLLM_MAX_CONCURRENT_REQUESTS=` satırını seçtiğiniz değerle değiştirin
-(ör. `VLLM_MAX_CONCURRENT_REQUESTS=4`), kaydedip kapatın.
-
-### A20. Uygulamayı başlatın
+### 1.9 Uygulamayı başlatın
 
 ```powershell
 cd C:\masking_system\masking_service
 .venv\Scripts\python.exe start.py
 ```
 
-Backend açılır, ardından web arayüzü tarayıcıda açılır. Açılmazsa tarayıcıda
-`http://localhost:8501` adresine gidin. Bu PowerShell penceresi açık kaldığı
-sürece uygulama çalışır.
+**Beklenen:** Web arayüzü tarayıcıda açılır. Açılmazsa tarayıcıda
+`http://localhost:8501` adresine gidin.
 
-İlk kurulum tamamlandı.
+PowerShell penceresi açık kaldığı sürece uygulama çalışır. İlk kurulum
+tamamlandı.
 
 ---
 
-## Bölüm B – Güncelleme (eski sürümün yerine yenisini kurmak)
+## 2. Güncelleme
 
-Eski kurulumdaki **`.env` (şifreleme anahtarı) ve `masking.db` (kurallar,
-eşlemeler, geçmiş) asla kaybedilmemelidir.** Bu bölüm önce onları yedekler,
-sonra eski klasörü siler ve yeni sürümü kurar.
+Eski kurulumdaki iki dosya **asla kaybedilmemelidir:**
 
-### B1. Uygulamayı durdurun
+- `.env`: şifreleme anahtarını içerir.
+- `masking.db`: kuralları, eşlemeleri ve geçmişi içerir.
 
-Uygulamanın çalıştığı PowerShell penceresinde `Ctrl+C`'ye basın.
+Bu bölüm önce bu dosyaları yedekler, sonra yeni sürümü kurar ve dosyaları geri
+koyar.
 
-### B2. Çalışan Python kalmadığını kontrol edin
+### 2.1 Uygulamayı durdurun
+
+Uygulamanın çalıştığı pencerede `Ctrl+C`'ye basın. Sonra **yeni** bir
+PowerShell penceresi açın ve bu bölüm bitene kadar kapatmayın.
 
 ```powershell
 tasklist | findstr python
 ```
 
-Hiçbir satır görünmemeli. Satır görünüyorsa uygulama pencerelerini kapatıp
-komutu tekrarlayın.
+**Beklenen:** Hiçbir satır görünmez. Satır görünüyorsa uygulama pencerelerini
+kapatıp komutu tekrarlayın.
 
-### B3. Eski kurulum klasörünü belirleyin
+### 2.2 Eski kurulumu yedekleyin
 
-Yeni bir PowerShell penceresi açın ve bu bölüm boyunca kapatmayın. Eski
-kurulumunuzun klasörünü yazın (`.env` dosyasının bulunduğu klasör). Eski
-kurulum başka bir yerdeyse (ör. `C:\masking\source`) tırnak içine o yolu yazın:
+İlk satırdaki yol eski kurulumun klasörüdür, yani `.env` dosyasının bulunduğu
+klasör. Eski kurulum başka bir yerdeyse (ör. `C:\masking\source`) bu yolu
+değiştirin.
 
 ```powershell
 $ESKI = "C:\masking_system"
-Test-Path "$ESKI\.env"
-```
-
-Çıktı `True` olmalı. `False` ise klasör yanlıştır; doğru klasörü yazıp tekrar
-deneyin.
-
-### B4. Veritabanının yerini kontrol edin
-
-```powershell
-Select-String -Path "$ESKI\.env" -Pattern "^DB_PATH="
-```
-
-`DB_PATH=masking.db` görünüyorsa veritabanı `$ESKI` klasöründedir. Başka bir
-yol görünüyorsa B6'da `masking.db*` dosyalarını o yoldan kopyalayın.
-
-### B5. Yedek klasörü oluşturun
-
-```powershell
 $YEDEK = "C:\masking_system-yedek-$(Get-Date -Format yyyyMMdd-HHmm)"
 New-Item -ItemType Directory $YEDEK | Out-Null
-```
-
-### B6. `.env`, veritabanı ve web çıktılarını yedekleyin
-
-```powershell
 Copy-Item "$ESKI\.env" $YEDEK
 Copy-Item "$ESKI\masking.db*" $YEDEK
 if (Test-Path "$ESKI\masking_service\uploads_output") { Copy-Item -Recurse "$ESKI\masking_service\uploads_output" $YEDEK }
+Get-ChildItem -Force $YEDEK
 ```
 
-`uploads_output`, web arayüzünden yüklenen projelerin çıktılarıdır; yoksa
-atlanır.
+**Beklenen:** Listede en az `.env` ve `masking.db` görünür. **Görünmüyorsa
+devam etmeyin.** Klasör yanlış yazılmıştır; ilk satırı düzeltip bloğu
+tekrarlayın.
 
-### B7. Yedeği kontrol edin
+> `uploads_output`, web arayüzünden yüklenen projelerin çıktılarıdır; eski
+> kurulumda yoksa atlanır. Eski `.env` dosyasında `DB_PATH=` başka bir yol
+> gösteriyorsa, `masking.db*` dosyalarını o yoldan yedekleyip 2.4'te o yola geri
+> koyun.
 
-```powershell
-Get-ChildItem $YEDEK
-```
-
-En az `.env` ve `masking.db` görünmeli. **Görünmüyorsa devam etmeyin.**
-
-### B8. Eski kurulum klasörünü silin
+### 2.3 Eski klasörü silip yeni paketi kopyalayın
 
 ```powershell
 cd C:\
 Remove-Item -Recurse -Force $ESKI
-```
-
-### B9. Yeni paketi flash bellekten kopyalayın
-
-Önce hedefte eski bir klasör kalmadığını kontrol edin:
-
-```powershell
 Test-Path C:\masking_system
 ```
 
-Çıktı `False` olmalı. `True` ise B8'deki silme tamamlanmamıştır ya da eski
-kurulum başka bir klasördeydi ve `C:\masking_system` ayrıca vardır; bu klasörde
-`.env` ya da `masking.db` varsa onları da yedekleyip klasörü silin. Ardından
-flash bellekteki klasörü adı değişmeden `C:\` altına kopyalayın:
+**Beklenen:** `False`. `True` çıkarsa `C:\masking_system` ayrıca vardır. İçinde
+`.env` ya da `masking.db` varsa onları da yedekleyin, sonra klasörü silin.
 
 ```powershell
-Copy-Item -Recurse "E:\masking_system" C:\
+Copy-Item -Recurse E:\masking_system C:\
 ```
 
-### B10. `.env`, veritabanı ve web çıktılarını geri koyun
+### 2.4 Yedeklenen dosyaları geri koyun
 
 ```powershell
 Copy-Item "$YEDEK\.env" C:\masking_system
@@ -375,25 +250,17 @@ Copy-Item "$YEDEK\masking.db*" C:\masking_system
 if (Test-Path "$YEDEK\uploads_output") { Copy-Item -Recurse "$YEDEK\uploads_output" C:\masking_system\masking_service }
 ```
 
-B4'te veritabanı başka bir yolda çıktıysa `masking.db*` dosyalarını o yola
-geri koyun.
+### 2.5 Ayar dosyasını güncelleyin
 
-### B11. Artık kullanılmayan ayarları `.env`'den silin
-
-`VLLM_PROFILE` ve `VALIDATION_SQL_DIALECT` ayarları bu sürümde kaldırıldı.
+Bu sürümde kaldırılan iki ayarı silin:
 
 ```powershell
 cd C:\masking_system
 (Get-Content .env) | Where-Object { $_ -notmatch '^\s*(VLLM_PROFILE|VALIDATION_SQL_DIALECT)=' } | Set-Content .env
+Select-String -Path .env -Pattern "^VLLM_"
 ```
 
-### B12. LLM ayarlarını kontrol edin
-
-```powershell
-Select-String -Path C:\masking_system\.env -Pattern "^VLLM_"
-```
-
-Şu satırların **her biri bir kez** görünmeli:
+**Beklenen:** Aşağıdaki satırların her biri **bir kez** görünür:
 
 ```
 VLLM_ENABLED=true
@@ -406,346 +273,316 @@ VLLM_MAX_TOKENS=2048
 VLLM_TRANSIENT_RETRIES=2
 ```
 
-Eksik olan varsa `notepad C:\masking_system\.env` ile en alta ekleyin.
-Eskiden yalnızca `VLLM_PROFILE` satırına güvendiyseniz bu satırların hiçbiri
-olmayabilir; hepsini ekleyin. **`VLLM_DISABLE_THINKING=true` eksikse dosyalar
-karantinaya düşer.**
+Eksik satırları `notepad C:\masking_system\.env` ile dosyanın sonuna ekleyin.
+Eski kurulumda yalnızca `VLLM_PROFILE` kullanıldıysa bu satırların hiçbiri
+olmayabilir; hepsini ekleyin.
 
-### B13. Bağımlılıkları kurun
+### 2.6 Bağımlılıkları kurun
 
 ```powershell
 cd C:\masking_system
 powershell -ExecutionPolicy Bypass -File .\install_offline.ps1
 ```
 
-Son satırda `Offline dependencies and parsers are ready.` yazmalı.
+**Beklenen son satır:** `Offline dependencies and parsers are ready.`
 
-### B14. Veritabanını yeni sürüme yükseltin
+### 2.7 Veritabanını yükseltin ve ön kontrolü çalıştırın
 
 ```powershell
 cd C:\masking_system\masking_service
 .venv\Scripts\python.exe -m alembic upgrade head
-```
-
-Hata vermeden bitmeli. Sicil düzeltmesi ilk kez uygulanıyorsa çıktıda
-`sicil_kategori_duzeltme duzeltilen=1` (ya da `=0`) satırı görünür. `DEGISTIRILMEDI`
-ya da `aktif 'sicil_no' parametrik kurali yok` uyarısı görürseniz durun ve
-yöneticinize bildirin.
-
-### B15. Ön kontrolü çalıştırın
-
-```powershell
-cd C:\masking_system\masking_service
 .venv\Scripts\python.exe scripts\check_llm_preflight.py
 ```
 
-En sonda `RESULT=OFFLINE_OK` görünmeli.
+**Beklenen:**
 
-### B16. Eşzamanlılık ölçümünü yapın (gerekiyorsa)
+- İlk komut hatasız biter. Çıktıda `DEGISTIRILMEDI` ya da
+  `aktif 'sicil_no' parametrik kurali yok` uyarısı görürseniz durun ve
+  yöneticinize bildirin.
+- İkinci komutun çıktısında en sonda `RESULT=OFFLINE_OK` görünür.
 
-Bu ölçümü daha önce hiç yapmadıysanız ya da vLLM sunucusu, modeli veya GPU'su
-değiştiyse **A16, A17, A18 ve A19** adımlarını uygulayın. Değişen bir şey yoksa
-bu adımı geçin.
+### 2.8 Uygulamayı başlatın
 
-### B17. Uygulamayı başlatın
+vLLM sunucusu, modeli ya da GPU'su değiştiyse ya da hız ölçümünü hiç
+yapmadıysanız, önce **Bölüm 4**'ü uygulayın.
 
 ```powershell
 cd C:\masking_system\masking_service
 .venv\Scripts\python.exe start.py
 ```
 
-### B18. Yedeği saklayın
-
-Yeni sürümle birkaç export'u sorunsuz yaptıktan sonra bile `$YEDEK` klasörünü
-silmeyin. Bir sorun olursa eski duruma dönmek için gereklidir. Yeni sürümdeki
-veritabanı B14'te yükseltildiği için eski sürüme dönülecekse yedekteki
-`masking.db` kullanılmalıdır.
+**Yedek klasörünü silmeyin.** Bir sorun çıkıp eski sürüme dönmek gerekirse
+yedekteki `masking.db` kullanılır; yeni kurulumdaki veritabanı 2.7'de yeni
+sürüme yükseltilmiştir.
 
 Güncelleme tamamlandı.
 
 ---
 
-## Bölüm C – Günlük kullanım
+## 3. Günlük kullanım
 
-### C1. Uygulamayı başlatmak için
+**Başlatmak için:**
 
 ```powershell
 cd C:\masking_system\masking_service
 .venv\Scripts\python.exe start.py
 ```
 
-### C2. Web arayüzünü açmak için
+**Arayüzü açmak için:** tarayıcıda `http://localhost:8501`. Giriş ekranında
+proje adı, sicil numarası ve branch bilgisini girin.
 
-Tarayıcıda şu adrese gidin:
+**Durdurmak için:** uygulamanın çalıştığı pencerede `Ctrl+C`.
 
-```
-http://localhost:8501
-```
-
-Giriş ekranında proje adı, sicil numarası ve branch bilgisini girin. Sol
-menüdeki ekranlar:
+**Sol menüdeki ekranlar:**
 
 - **Dışarı Çıkar:** projeyi maskeleyip dışarı aktarır.
-- **Onay Bekleyenler:** karantinadaki ve onay bekleyen dosyalar. Her dosya için
-  "Maskele", "Yanlış Alarm" ya da "Düzenle" kararı verilir.
+- **Onay Bekleyenler:** karantinadaki dosyalar. Her dosya için "Maskele",
+  "Yanlış Alarm" ya da "Düzenle" kararı verilir.
 - **Geri Al:** maskeli çıktıyı gerçek değerlere geri dönüştürür.
 - **Geçmiş İşlemler:** önceki işlemler ve JOB ID'leri.
-- **Kurumsal Terim Sözlüğü:** kurum terim listesini (.xlsx) yükler.
+- **Kurumsal Terim Sözlüğü:** kurumsal terim listesini (.xlsx) yükler.
 
-### C3. Uygulamayı durdurmak için
+**Çalışan bir taramayı durdurmak için:** Dışarı Çıkar ekranındaki
+**⏹ Taramayı Durdur** düğmesine basın.
 
-Uygulamanın çalıştığı PowerShell penceresinde `Ctrl+C`'ye basın.
+- Yarım kalan çıktı silinir, varsa önceki tamamlanmış çıktı korunur. Hemen
+  yeniden tarama başlatabilirsiniz.
+- Sayfayı yenileseniz de ilerleme çubuğu ve düğme geri gelir.
+- Bir dosya o sırada LLM'den yanıt bekliyorsa durma birkaç saniye sürebilir.
+- Son yayımlama adımı başladıysa tarama durmaz, tamamlanır.
 
-### C4. Backend'in çalıştığını kontrol etmek için
+**Uygulamanın çalıştığını kontrol etmek için:**
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8001/health
 ```
 
-`status` değeri `ok` olmalı.
-
-### C5. Büyük bir projeden önce iş yükünü tahmin etmek için
-
-LLM'e istek göndermez; hangi dosyaların ağır olduğunu gösterir.
-
-```powershell
-cd C:\masking_system\masking_service
-.venv\Scripts\python.exe -m app.cli llm-is-yuku --kaynak <proje-klasörü>
-```
-
-### C6. Çalışan bir taramayı durdurmak için
-
-Tarama sürerken **Dışarı Çıkar** ekranındaki **⏹ Taramayı Durdur** düğmesine
-basın. Tarama güvenli şekilde durur: yarım kalan çıktı silinir, varsa önceki
-tamamlanmış çıktı korunur. Ardından hemen yeniden tarayabilirsiniz.
-
-- Sayfayı yenileseniz ya da başka ekrana geçip dönseniz de ilerleme çubuğu ve
-  Durdur düğmesi geri gelir.
-- Aynı proje ve branch için tarama sürerken yeniden **Taramayı Başlat**'a
-  basarsanız **Öncekini durdur ve yeniden başlat** seçeneği çıkar.
-- O sırada bir dosya LLM'den yanıt bekliyorsa durma birkaç saniye sürebilir.
-- Son yayımlama adımı başladıysa tarama durmaz, tamamlanır.
+**Beklenen:** `status` değeri `ok`.
 
 ---
 
-## Bölüm D – Komut satırından kullanım (isteğe bağlı)
+## 4. Hız ayarı (LLM eşzamanlılık ölçümü)
 
-Web arayüzü yerine komut satırını kullanmak isterseniz. Tüm komutlar şu
+`VLLM_MAX_CONCURRENT_REQUESTS`, uygulamanın vLLM sunucusuna aynı anda kaç
+istek gönderdiğidir. Değer büyüdükçe tarama hızlanır, ama bir noktadan sonra
+sunucu yetişemez ve hatalar başlar. Bu ölçüm o noktayı bulur. Ölçüm yalnızca
+yapay metin gönderir; gerçek dosyalara ve veritabanına dokunmaz.
+
+### 4.1 Ölçümü çalıştırın
+
+```powershell
+cd C:\masking_system\masking_service
+.venv\Scripts\python.exe scripts\benchmark_llm.py --concurrency 1 2 4 8 --files 16 --chars 12000 --max-tokens 2048 > ..\bench-c.json
+```
+
+Birkaç dakika sürer.
+
+### 4.2 Sonucu okuyun
+
+```powershell
+(Get-Content -Raw ..\bench-c.json | ConvertFrom-Json) | ForEach-Object { "{0} -> {1} sn, hatali dosya: {2}" -f $_.concurrency, $_.elapsed_seconds, @($_.files | Where-Object status -ne 'ok').Count }
+```
+
+Örnek çıktı (sayılar yalnızca örnektir):
+
+```
+1 -> 120 sn, hatali dosya: 0
+2 -> 65 sn, hatali dosya: 0
+4 -> 38 sn, hatali dosya: 0
+8 -> 35 sn, hatali dosya: 0
+```
+
+### 4.3 Değeri seçin
+
+1. Hatalı dosya sayısı 0 olmayan satırları eleyin.
+2. Kalanlardan, bir önceki satıra göre **en az %15 hızlanan en büyük** değeri
+   seçin.
+
+Örnekte 4'ten 8'e geçmek süreyi yalnızca 38 sn'den 35 sn'ye indiriyor
+(%8). Doğru seçim **4**.
+
+- vLLM sunucusu başka uygulamalarla da paylaşılıyorsa bir kademe düşük değer
+  seçin.
+- Sunucunun `--max-num-seqs` ayarı seçtiğiniz değerden küçük olmamalıdır; bunu
+  sunucu yöneticisine sorun.
+
+### 4.4 Değeri ayar dosyasına yazın
+
+```powershell
+notepad C:\masking_system\.env
+```
+
+`VLLM_MAX_CONCURRENT_REQUESTS=` satırına seçtiğiniz değeri yazın, kaydedip
+kapatın. Uygulama çalışıyorsa yeniden başlatın.
+
+---
+
+## 5. Komut satırından kullanım (isteğe bağlı)
+
+Web arayüzü yerine komut satırını kullanmak isterseniz. Tüm komutlar bu
 klasörde çalıştırılır:
 
 ```powershell
 cd C:\masking_system\masking_service
 ```
 
-### D1. Bir projeyi maskeleyip dışarı aktarmak için
+| İş | Komut |
+|---|---|
+| Projeyi maskeleyip dışarı aktarmak | `.venv\Scripts\python.exe -m app.cli export --kaynak <proje-klasörü> --hedef <çıktı-klasörü> --proje <proje-adı> --sicil <sicil> --branch <branch>` |
+| Maskeli çıktıyı geri dönüştürmek | `.venv\Scripts\python.exe -m app.cli unmask --kaynak <maskeli-klasör> --hedef <hedef-klasör> --sicil <sicil>` |
+| Son işlemin raporu | `.venv\Scripts\python.exe -m app.cli rapor-son-islem --proje <proje-adı>` |
+| Geçmiş işlemler | `.venv\Scripts\python.exe -m app.cli rapor-gecmis --proje <proje-adı> --limit 20` |
+| Bir işlemin ayrıntısı | `.venv\Scripts\python.exe -m app.cli rapor-detay --run-id <numara>` |
+| Kuralları listelemek | `.venv\Scripts\python.exe -m app.cli kural-listele --sadece-aktif` |
+| Kuralı açmak | `.venv\Scripts\python.exe -m app.cli kural-aktif <kural-adı>` |
+| Kuralı kapatmak | `.venv\Scripts\python.exe -m app.cli kural-pasif <kural-adı>` |
+| Büyük projede iş yükü tahmini | `.venv\Scripts\python.exe -m app.cli llm-is-yuku --kaynak <proje-klasörü>` |
 
-```powershell
-.venv\Scripts\python.exe -m app.cli export --kaynak <proje-klasörü> --hedef <çıktı-klasörü> --proje <proje-adı> --sicil <sicil> --branch <branch>
-```
+**Geri dönüştürme notu:** Proje adı, branch ve JOB ID maskeli klasördeki
+`.masking-integrity.json` dosyasından okunur; **bu dosyayı silmeyin.** Dosya
+yoksa komuta `--proje <proje-adı> --branch <branch> --job-id <numara>` ekleyin.
 
-### D2. Maskeli çıktıyı geri dönüştürmek için
-
-```powershell
-.venv\Scripts\python.exe -m app.cli unmask --kaynak <maskeli-klasör> --hedef <geri-dönüştürülmüş-klasör> --sicil <sicil>
-```
-
-Proje adı, branch ve JOB ID, maskeli klasördeki `.masking-integrity.json`
-dosyasından okunur; **bu dosyayı silmeyin**. Dosya yoksa (eski paketler ya da
-tek dosya) komuta `--proje <proje-adı> --branch <branch> --job-id <numara>`
-ekleyin.
-
-### D3. Son işlemin raporunu görmek için
-
-```powershell
-.venv\Scripts\python.exe -m app.cli rapor-son-islem --proje <proje-adı>
-```
-
-### D4. Geçmiş işlemleri listelemek için
-
-```powershell
-.venv\Scripts\python.exe -m app.cli rapor-gecmis --proje <proje-adı> --limit 20
-```
-
-### D5. Bir işlemin ayrıntısını görmek için
-
-```powershell
-.venv\Scripts\python.exe -m app.cli rapor-detay --run-id <numara>
-```
-
-### D6. Filtre kurallarını listelemek için
-
-```powershell
-.venv\Scripts\python.exe -m app.cli kural-listele --sadece-aktif
-```
-
-### D7. Yeni filtre kuralı eklemek için
+**Yeni kural eklemek:**
 
 ```powershell
 .venv\Scripts\python.exe -m app.cli kural-ekle --tip <kural-adı> --pattern '<regex>' --placeholder-format 'mask_<kural-adı>_{sayac}'
 ```
 
 Örnek: `--tip tc_kimlik_no --pattern '\b\d{11}\b' --placeholder-format 'mask_tc_kimlik_{sayac}'`.
-Yer tutucu biçimi `_{sayac}` ile bitmelidir.
+Yer tutucu biçimi `_{sayac}` ile bitmelidir. Kurallar silinmez, yalnızca açılıp
+kapatılır; böylece geçmiş eşlemeler bozulmaz.
 
-### D8. Bir kuralı açmak ya da kapatmak için
-
-```powershell
-.venv\Scripts\python.exe -m app.cli kural-aktif <kural-adı>
-.venv\Scripts\python.exe -m app.cli kural-pasif <kural-adı>
-```
-
-Kurallar silinmez, yalnızca açılıp kapatılır; geçmiş eşlemeler bozulmaz.
-
-### D9. Yarıda kalan bir export'u kurtarmak için
-
-Uygulama bir export sırasında kapandıysa, aynı proje ve branch için yapılan bir
-sonraki tarama yarım kalan işlemi **kendiliğinden** kapatır; önceki çıktı geri
-yüklenir. Elle kurtarmak isterseniz uygulamayı durdurup (C3) şunu çalıştırın:
+**Yarıda kalan bir dışa aktarmayı kurtarmak:** Aynı proje ve branch için
+yapılan bir sonraki tarama yarım kalan işlemi kendiliğinden kapatır ve önceki
+çıktıyı geri yükler. Elle kurtarmak isterseniz uygulamayı durdurup şunu
+çalıştırın:
 
 ```powershell
 .venv\Scripts\python.exe -m app.cli recover-output --hedef <çıktı-klasörü> --application-stopped
 ```
 
-Hedef üzerinde hâlâ çalışan bir işlem varsa komut ona dokunmaz ve bunu söyler.
-
 ---
 
-## Bölüm E – Sorun giderme
+## 6. Sorun giderme
 
-### E1. `install_offline.ps1` "This bundle requires Windows / Python 3.14" diyorsa
+### Kurulum betiği "This bundle requires Windows / Python 3.14" diyor
 
-Makinedeki Python 3.14 değildir ya da 64 bit değildir. Doğru Python'u kurun ve
-A7'deki gibi `-Python` ile tam yolunu verin.
+Makinedeki Python 3.14 ya da 64 bit değil. Doğru Python'u kurun ve 1.3'teki
+gibi `-Python` ile tam yolunu verin.
 
-### E2. Betik çalıştırma izni hatası alıyorsanız
+### Betik çalıştırma izni hatası
 
-Kurulum betiğini bu kılavuzdaki gibi `powershell -ExecutionPolicy Bypass -File ...`
-ile çalıştırın. Uygulamayı her zaman `.venv\Scripts\python.exe start.py` ile
-başlatın; bu komut betik izni gerektirmez.
+Kurulum betiğini bu kılavuzdaki gibi
+`powershell -ExecutionPolicy Bypass -File ...` ile çalıştırın. Uygulamayı her
+zaman `.venv\Scripts\python.exe start.py` ile başlatın; bu komut izin
+gerektirmez.
 
-### E3. Ön kontrolde `FAIL stage=build_stamp` görüyorsanız
+### Ön kontrolde `FAIL stage=settings reason=VLLM_ENABLED_false`
 
-`app` klasörü eksik ya da karışık kopyalanmıştır. Uygulamayı durdurun, kurulum
-klasöründeki `masking_service\app` klasörünü silin ve flash bellekten yeniden
-kopyalayın:
+`.env` dosyasında `VLLM_ENABLED=false` yazıyor. Ön kontrol LLM açıkken
+yapılır. LLM'i bilerek kapattıysanız bu satırı yok sayın.
+
+### Ön kontrolde `FAIL stage=build_stamp`
+
+`app` klasörü eksik ya da karışık kopyalanmış. Uygulamayı durdurun, klasörü
+flash bellekten yeniden kopyalayın ve ön kontrolü tekrarlayın:
 
 ```powershell
 Remove-Item -Recurse -Force C:\masking_system\masking_service\app
-Copy-Item -Recurse "E:\masking_system\masking_service\app" C:\masking_system\masking_service
+Copy-Item -Recurse E:\masking_system\masking_service\app C:\masking_system\masking_service
 ```
 
-Ardından ön kontrolü (A15) tekrar çalıştırın.
+### Dışa aktarma "kod değişti" ya da 503 hatasıyla reddediliyor
 
-### E4. Export "kod değişti" ya da 503 hatasıyla reddediliyorsa
+Kod kopyalandıktan sonra uygulama yeniden başlatılmamış. Uygulamayı durdurup
+yeniden başlatın.
 
-Kod kopyalandıktan sonra uygulama yeniden başlatılmamıştır. Uygulamayı
-durdurup (C3) yeniden başlatın (C1).
+### "no such table" hatası
 
-### E5. "no such table" hatası alıyorsanız
-
-Veritabanı yükseltilmemiştir:
+Veritabanı yükseltilmemiş:
 
 ```powershell
 cd C:\masking_system\masking_service
 .venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-### E6. "database is locked" hatası alıyorsanız
+### "database is locked" hatası
 
 1. Yalnızca bir uygulama penceresinin açık olduğunu kontrol edin:
+   `tasklist | findstr python`
+2. `masking.db` dosyasını başka bir programda (ör. DB Browser) açık
+   bırakmayın.
+3. `C:\masking_system` klasörünü antivirüs gerçek zamanlı taramasından ve
+   OneDrive/bulut eşitlemesinden hariç tutun.
+4. Uygulamanın flash bellekten değil `C:\masking_system`'den çalıştığından emin
+   olun.
 
-   ```powershell
-   tasklist | findstr python
-   ```
+### Dosyalar "yanıt kesildi" (`finish_reason=length`) nedeniyle karantinada
 
-2. `masking.db` dosyasını başka bir programda (ör. DB Browser) açık bırakmayın.
-3. Kurulum klasörünü antivirüs gerçek zamanlı taramasından ve OneDrive/bulut
-   eşitlemesinden hariç tutun.
-4. Uygulamanın flash bellekten değil `C:\masking_system` klasöründen çalıştığından emin olun.
-
-### E7. Dosyalar "yanıt kesildi" (`finish_reason=length`) nedeniyle karantinaya düşüyorsa
+`.env` dosyasında `VLLM_DISABLE_THINKING=true` satırının olduğunu kontrol edin:
 
 ```powershell
 Select-String -Path C:\masking_system\.env -Pattern "^VLLM_DISABLE_THINKING="
 ```
 
-`VLLM_DISABLE_THINKING=true` görünmeli. Görünmüyorsa `.env`'ye ekleyip
-uygulamayı yeniden başlatın. Sorun sürerse vLLM sunucusunun
-`--default-chat-template-kwargs '{"enable_thinking": false}'` ile başlatılmasını
-sunucu yöneticisinden isteyin.
+Yoksa ekleyip uygulamayı yeniden başlatın. Sorun sürerse vLLM sunucusunun
+`--default-chat-template-kwargs '{"enable_thinking": false}'` ile
+başlatılmasını sunucu yöneticisinden isteyin.
 
-### E8. Dosyalar LLM zaman aşımı nedeniyle karantinaya düşüyorsa
+### Dosyalar LLM zaman aşımı nedeniyle karantinada
 
-`VLLM_MAX_CONCURRENT_REQUESTS` sunucu için fazla yüksektir. Değeri bir kademe
-düşürün (ör. 4 → 2) ya da A16–A19'daki ölçümü tekrarlayın, ardından uygulamayı
+`VLLM_MAX_CONCURRENT_REQUESTS` sunucu için fazla yüksek. Değeri bir kademe
+düşürün (ör. 4 → 2) ya da Bölüm 4'teki ölçümü tekrarlayın. Ardından uygulamayı
 yeniden başlatın.
 
-### E9. Logda "spaCy NLP modeli yuklenemedi" görüyorsanız
+### Logda "spaCy NLP modeli yuklenemedi"
 
-Kişi/kurum adı tespiti çalışmıyor demektir. Bağımlılık kurulumunu (A7) tekrar
-çalıştırın.
+Kişi adı ve tarih tespiti çalışmıyor demektir. Bağımlılık kurulumunu (1.3)
+tekrar çalıştırın.
 
-### E10. Dosya "Kodlanmış ... hassas veri" nedeniyle karantinadaysa
+### Dosya "Kodlanmış ... hassas veri" nedeniyle karantinada
 
-Dosyada base64/hex ile gizlenmiş bir parola, IP ya da kurum terimi bulunmuştur.
-Değeri kaynakta kaldırıp projeyi yeniden tarayın ya da değer gerçekten hassas
+Dosyada base64 ya da hex ile gizlenmiş bir parola, IP ya da kurumsal terim
+bulunmuş. Değeri kaynaktan kaldırıp yeniden tarayın. Değer gerçekten hassas
 değilse **Onay Bekleyenler** ekranında "Yanlış Alarm" ile serbest bırakın.
 
-### E11. Export çok yavaşsa
+### Dışa aktarma çok yavaş
 
-1. En ağır dosyaları görün (C5).
-2. Gereksiz ağır dosyaları (ör. sıkıştırılmış JavaScript kütüphaneleri) projeden
-   çıkarın.
-3. Eşzamanlılık ölçümünü (A16–A19) yapmadıysanız yapın.
+1. En ağır dosyaları görün: Bölüm 5'teki `llm-is-yuku` komutu. LLM'e istek
+   göndermez.
+2. Gereksiz ağır dosyaları (ör. sıkıştırılmış JavaScript kütüphaneleri)
+   projeden çıkarın.
+3. Hız ölçümünü (Bölüm 4) yapmadıysanız yapın.
 
-### E12. Sözlüğe eklenen bir kurumsal terim çıktıda açık kalıyorsa
+### Sözlüğe eklenen bir terim çıktıda açık kalıyor
 
 Teşhis betiği terimin sözlük kaydını ve dosyadaki geçişlerini kontrol eder.
-Hiçbir şeyi değiştirmez. Çıktıda terim, dosya içeriği ya da dosya yolu
-yazmaz; yalnızca evet/hayır sonuçları ve satır numaraları yazar.
+Hiçbir şeyi değiştirmez. Çıktısında terim, dosya içeriği ya da dosya yolu
+bulunmaz; çıktıyı geliştirici ekibe güvenle iletebilirsiniz.
 
-1. `masking_service` klasörüne geçin:
+```powershell
+cd C:\masking_system\masking_service
+.venv\Scripts\python.exe scripts\diagnose_term.py --term "terim" --file "C:\proje\config\app.env"
+```
 
-   ```powershell
-   cd C:\masking_system\masking_service
-   ```
+`--term` için terimi sözlükteki gibi yazın. `--file` için maskelenmemiş
+**orijinal** projedeki dosyanın tam yolunu verin.
 
-2. Betiği çalıştırın. `--term` için terimi sözlükteki gibi yazın. `--file`
-   için maskelenmemiş **orijinal** projedeki dosyanın tam yolunu verin:
+| Çıktıda | Anlamı ve çözümü |
+|---|---|
+| `sozluk_kaydi_sayisi=0` | Terim sözlükte yok. Kurumsal Terim Sözlüğü ekranından ekleyin. |
+| `aktif=False` | Terim pasif (nedeni `pasif_nedeni` alanında). Terimi aktif yapın. |
+| `kayitli_yazim_nfc=False` ya da `dosyadaki_ayrisik_isaret_sayisi` 0'dan büyük | Türkçe harfler farklı bir Unicode biçiminde kaydedilmiş. Ekranda aynı görünür ama eşleşmez. Genellikle Word, PDF ya da Excel'den kopyalanan terimlerde olur. Terimi elle yazarak yeniden ekleyin. |
+| `dosya_haric_tutma_kuralina_uyuyor=True` | Dosya bir hariç tutma kuralına takılıyor, hiç taranmıyor. |
+| `desenin_kacirdigi` 0'dan büyük | Terim dosyada geçiyor ama tarama deseni bu satırları yakalamıyor (`kacirilan_satirlar` hangi satırlar olduğunu gösterir). Çıktıyı geliştirici ekibe iletin. |
 
-   ```powershell
-   .venv\Scripts\python.exe scripts\diagnose_term.py --term "terim" --file "C:\proje\config\app.env"
-   ```
+Terim ekledikten sonra uygulamayı yeniden başlatmanız gerekmez.
 
-3. Çıktıyı okuyun:
+### "Bu proje/sicil/branch için zaten devam eden bir işlem var"
 
-   - `sozluk_kaydi_sayisi=0`: Terim sözlükte yok. **Kurumsal Terimler**
-     ekranından ekleyin.
-   - `aktif=False`: Terim pasif. `pasif_nedeni` alanı nedenini yazar.
-     Terimi **Kurumsal Terimler** ekranından aktif yapın.
-   - `kayitli_yazim_nfc=False` ya da `dosyadaki_ayrisik_isaret_sayisi` 0'dan
-     büyük: Türkçe harfler (ç, ş, ğ, ı, ö, ü) farklı bir Unicode biçiminde
-     kaydedilmiş. Ekranda aynı görünür ama eşleşmez. Bu durum genellikle
-     terim Word, PDF ya da Excel'den kopyalandığında oluşur.
-   - `dosya_haric_tutma_kuralina_uyuyor=True`: Dosya hariç tutma kuralına
-     takılıyor ve hiç taranmıyor.
-   - `desenin_kacirdigi` 0'dan büyük: Terim dosyada geçiyor ama tarama
-     deseni bu satırları yakalamıyor. `kacirilan_satirlar` hangi satırlar
-     olduğunu gösterir.
+Aynı proje ve branch için başka bir tarama gerçekten çalışıyor.
 
-Çıktıyı geliştirici ekibe iletebilirsiniz; içinde hassas bilgi yoktur.
-
-Terim ekledikten sonra uygulamayı yeniden başlatmanız gerekmez. Yeni tarama
-güncel sözlüğü kullanır.
-
-### E13. "Bu proje/sicil/branch için zaten devam eden bir işlem var" diyorsa
-
-Aynı proje ve branch için başka bir tarama gerçekten çalışıyordur.
-
-- Tarama aynı uygulamadan başlatıldıysa ekranda **Öncekini durdur ve yeniden
-  başlat** ya da **Devam eden taramayı izle** seçeneği çıkar (bkz. C6).
-- Tarama komut satırından (Bölüm D) başlatıldıysa o komutun bitmesini bekleyin
-  ya da o pencerede `Ctrl+C`'ye basın.
-
-Uygulama bir tarama sırasında kapandıysa bu hata çıkmaz: yarım kalan işlem bir
-sonraki taramada kendiliğinden kapatılır (bkz. D9).
+- Tarama arayüzden başlatıldıysa ekranda **Öncekini durdur ve yeniden başlat**
+  ya da **Devam eden taramayı izle** seçeneği çıkar.
+- Tarama komut satırından başlatıldıysa o komutun bitmesini bekleyin ya da o
+  pencerede `Ctrl+C`'ye basın.

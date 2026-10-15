@@ -160,7 +160,7 @@ def copy_project_source(output: Path) -> None:
     # bu damgayla yakalar (bkz. app/core/build_info.py).
     subprocess.run([sys.executable, str(SERVICE / "scripts" / "write_build_stamp.py"),
                     "--app-dir", str(destination / "app")], check=True)
-    shutil.copy2(SERVICE / "scripts" / "OFFLINE_INSTALL.md", output / "README.md")
+    shutil.copy2(SERVICE / "scripts" / "OFFLINE_INSTALL.md", output / "OFFLINE_INSTALL.md")
 
 
 def main() -> None:

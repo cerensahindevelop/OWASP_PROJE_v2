@@ -258,7 +258,7 @@ Yereldeki model ile intradaki Qwen modeli farklı olabilir. Her ortamın
 
 Intra makinede kurulum, güncelleme ve kullanım adımları paketle birlikte gelen
 kılavuzdadır: [`masking_service/scripts/OFFLINE_INSTALL.md`](masking_service/scripts/OFFLINE_INSTALL.md)
-(paketteki adı `README.md`).
+(pakete aynı adla girer).
 
 Paketi internetli makinede hazırlamak için (`masking_service` klasöründe):
 
