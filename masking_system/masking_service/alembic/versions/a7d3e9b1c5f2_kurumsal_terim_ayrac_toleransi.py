@@ -7,7 +7,7 @@ Create Date: 2026-10-06 14:00:00.000000
 "DenizKuvvetleri" gibi birlesik yazilmis bir terim, metindeki "Deniz
 Kuvvetleri", "deniz_kuvvetleri" ve "deniz-kuvvetleri" yazimlarini
 yakalamiyordu; bu gecisler maskelenmeden kaliyordu
-(term_upload.corporate_term_pattern ile duzeltildi).
+(term_upload.separator_tolerant_corporate_term_pattern ile duzeltildi).
 
 Daha once yuklenmis terimlerin desenleri yukleme aninda uretilip sifreli
 saklandigi ve ayni terimin yeniden yuklenmesi mevcut kaydi atladigi icin
@@ -21,7 +21,7 @@ from alembic import op
 import sqlalchemy as sa
 
 from app.core.crypto import decrypt_value, encrypt_value
-from app.services.term_upload import corporate_term_pattern, legacy_corporate_term_pattern
+from app.services.term_upload import legacy_corporate_term_pattern, separator_tolerant_corporate_term_pattern
 
 
 revision: str = "a7d3e9b1c5f2"
@@ -67,8 +67,8 @@ def _migrate(old_pattern, new_pattern) -> None:
 
 
 def upgrade() -> None:
-    _migrate(legacy_corporate_term_pattern, corporate_term_pattern)
+    _migrate(legacy_corporate_term_pattern, separator_tolerant_corporate_term_pattern)
 
 
 def downgrade() -> None:
-    _migrate(corporate_term_pattern, legacy_corporate_term_pattern)
+    _migrate(separator_tolerant_corporate_term_pattern, legacy_corporate_term_pattern)

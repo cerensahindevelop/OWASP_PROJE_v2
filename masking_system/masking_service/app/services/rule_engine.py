@@ -356,9 +356,15 @@ def compound_aware_boundary_pattern(
     connector_class: str,
     include_digit_transitions: bool = True,
     free_right_continuation: bool = False,
+    free_left_continuation: bool = False,
 ) -> str:
     transition = _COMPOUND_WORD_TRANSITION if include_digit_transitions else _CASE_TRANSITION
-    left = rf"(?:(?<![{connector_class}])|{transition})"
+    # free_left_continuation: soldan yapisik yazim ("ETTIVEDA", "eskiveda")
+    # da sinir sayilir. Sadece kurumsal terim sozlugu kullanir ve yalnizca
+    # yeterince uzun terimler icin (bkz. term_upload.allows_glued_prefix) -
+    # kisa kisaltmalar ("TSK") ilgisiz tanimlayicilarin icinde ("agentSkill")
+    # eslesirdi.
+    left = "" if free_left_continuation else rf"(?:(?<![{connector_class}])|{transition})"
     if free_right_continuation:
         # Kurumsal terim sozlugu icin (bkz. term_upload.py cagri yeri): sagda
         # KUCUK harfli bir Turkce ekle devam etse bile ("subeler", "subesi",

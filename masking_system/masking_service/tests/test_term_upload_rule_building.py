@@ -130,7 +130,7 @@ def test_build_filter_rule_suspicious_status_is_inactive():
         # compound_aware_boundary_pattern dokstringi. Terimler elle
         # onaylandigi icin bu risk BILEREK kabul edildi (kullanici talebi).
         ("sicil", "sicilim", True),
-        ("sicil", "kisisicili", False),        # sol sinir hala sikidir (sadece sag gevsetildi) - eslesmemeli
+        ("sicil", "kisisicili", True),         # 4+ harfli terimde soldan yapisik yazim da eslesir
         ("sicil", "sicil01", True),           # rakam sonek
         ("sicil", "01sicil", True),           # rakam onek
         ("atlas", "APIAtlas", True),          # kisaltma->Kelime sinirinin
@@ -142,6 +142,47 @@ def test_build_filter_rule_matches_camelcase_and_separator_adjacent_terms(term, 
     decrypted = decrypt_value(rule.regex_pattern)
     compiled = re.compile(decrypted, _compile_flags(rule.regex_flags))
     assert (compiled.search(text) is not None) == should_match
+
+
+@pytest.mark.parametrize(
+    "term, text, should_match",
+    [
+        # Soldan yapisik yazim: ayrac koymadan birlestirilmis kelimeler.
+        ("veda", "ETTIVEDA", True),
+        ("veda", "ettiveda", True),
+        ("veda", "VEDAETTİ", True),
+        # Kisa kisaltma ve salt rakam terimlerde sol sinir siki kalir: ilgisiz
+        # tanimlayicilarin/sayilarin icinde eslesmemeli.
+        ("TSK", "agentSkill", False),
+        ("TSK", "ESKITSK", False),
+        ("TSK", "eski_TSK", True),
+        ("11111111111", "4111111111111111", False),
+        ("S-100", "hypothesis100", False),
+        # Birlesik terimin parcalari arasinda yatay bosluk dizisi.
+        ("Deniz Kuvvetleri", "Deniz  Kuvvetleri", True),
+        ("Deniz Kuvvetleri", "Deniz\tKuvvetleri", True),
+        ("Deniz Kuvvetleri", "Deniz Kuvvetleri", True),
+        ("DenizKuvvetleri", "deniz   kuvvetleri", True),
+        # Satir sonu ayrac sayilmaz (kodda yorum satirini koda baglardi).
+        ("Deniz Kuvvetleri", "Deniz\nKuvvetleri", False),
+    ],
+)
+def test_build_filter_rule_glued_prefix_and_whitespace_runs(term, text, should_match):
+    rule = build_filter_rule(term=term, category="proje_kodu", status="ok", priority=500)
+    compiled = re.compile(decrypt_value(rule.regex_pattern), _compile_flags(rule.regex_flags))
+    assert (compiled.search(text) is not None) == should_match
+
+
+def test_previous_pattern_version_is_frozen_for_migrations():
+    """Migration'lar saklanan deseni onceki formulle karsilastirir; onceki
+    formul degisirse mevcut kurallar 'elle degistirilmis' sanilip atlanir."""
+    from app.services.term_upload import corporate_term_pattern, separator_tolerant_corporate_term_pattern
+
+    previous = re.compile(separator_tolerant_corporate_term_pattern("veda"), re.I)
+    assert previous.search("ETTIVEDA") is None
+    assert previous.search("Deniz  veda") is not None
+    assert "[ _-]?" in separator_tolerant_corporate_term_pattern("DenizKuvvetleri")
+    assert separator_tolerant_corporate_term_pattern("veda") != corporate_term_pattern("veda")
 
 
 def test_build_filter_rule_regex_pattern_is_never_plaintext_in_the_object():

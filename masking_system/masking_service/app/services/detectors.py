@@ -19,7 +19,9 @@ from typing import Protocol
 # kurallari derleyip eslestiren fonksiyonlar buradan alinir.
 from app.services.encoded_blobs import find_encoded_blobs
 from app.services.log_refs import current_file_label
+from app.services.placeholder_policy import is_corporate_rule
 from app.services.rule_engine import Match, RuleSpec, compile_rules, find_matches_compiled
+from app.services.term_search import find_search_view_matches, is_mixed_case_glued
 
 
 # Bir bulgunun guven seviyesini ifade eden basit string takma adi (orn. "yuksek").
@@ -182,12 +184,24 @@ class RuleBasedDetector:
         # yasadigi surece (bkz. mapping_service.build_orchestrator - run
         # basina bir kez kurulur) her dosyada yeniden kullanilir.
         self._compiled_rules = compile_rules(rules, self.runtime_params)
+        # Kurumsal terimler ayrica metnin arama kopyasinda da aranir (kacis
+        # kodu, gorunmez karakter, benzer harf - bkz. term_search).
+        self._corporate_rules = [c for c in self._compiled_rules if is_corporate_rule(c.rule.rule_name)]
 
     # Derlenmis kurallari icerige uygulayip DetectionResult listesine cevirir.
     # async: gercek await YOK (CPU-bound, aninda doner) - sadece Detector
     # protokolunun tekdüze arayuzune uymak icin (bkz. protokol dokstring'i).
+    # Arama kopyasi yalnizca metinde cozulecek bir sey varsa uretilir; siradan
+    # metinde ek maliyet yoktur.
     async def detect(self, content: str, metadata: dict | None = None) -> DetectorOutput:
         matches, already_masked = find_matches_compiled(self._compiled_rules, content)
+        matches = [
+            match for match in matches
+            if not (is_corporate_rule(match.rule.rule_name) and is_mixed_case_glued(content, match.start, match.end))
+        ]
+        view_matches = find_search_view_matches(self._corporate_rules, content, matches)
+        if view_matches:
+            matches = sorted(matches + view_matches, key=lambda match: match.start)
         return DetectorOutput(
             results=[
                 DetectionResult(

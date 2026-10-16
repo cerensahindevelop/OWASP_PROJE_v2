@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import unicodedata
 
 
-def normalized_view(text: str) -> tuple[str, Sequence[int], Sequence[int]]:
+def normalized_view(text: str, *, casefold: bool = True) -> tuple[str, Sequence[int], Sequence[int]]:
     """Return normalized text and the source span of each normalized character.
 
     Keep a starter and its combining marks together so composed/decomposed
@@ -17,9 +17,13 @@ def normalized_view(text: str) -> tuple[str, Sequence[int], Sequence[int]]:
     A search can hit only part of an expanded character (e.g. s within ß).
     Callers must normalize the recovered source slice and compare it with
     their needle before accepting it.
+
+    casefold=False keeps letter case (NFKC only) for callers whose patterns
+    read case transitions, e.g. camelCase boundaries of corporate terms.
     """
+    fold = str.casefold if casefold else str
     if text.isascii():
-        return text.casefold(), range(len(text)), range(1, len(text) + 1)
+        return fold(text), range(len(text)), range(1, len(text) + 1)
 
     parts: list[str] = []
     starts: list[int] = []
@@ -30,12 +34,12 @@ def normalized_view(text: str) -> tuple[str, Sequence[int], Sequence[int]]:
             # Unchanged combining sequences need no coarse cluster mapping:
             # preserve existing literal matches before a noncomposing mark.
             for offset in range(start, end):
-                folded = text[offset].casefold()
+                folded = fold(text[offset])
                 parts.append(folded)
                 starts.extend([offset] * len(folded))
                 ends.extend([offset + 1] * len(folded))
         else:
-            folded = normalized.casefold()
+            folded = fold(normalized)
             parts.append(folded)
             starts.extend([start] * len(folded))
             ends.extend([end] * len(folded))

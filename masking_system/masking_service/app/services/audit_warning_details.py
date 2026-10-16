@@ -248,7 +248,9 @@ def describe_audit_warning(warning: AuditWarning, db: Session, *, evidence_limit
 
     if reason.startswith(("Kurumsal terim sozlugu son kontrolu", "Kurumsal terim kontrolü:")):
         locations = re.findall(r"Satır (\d+), sütun (\d+): ([^\n;]+)", reason)
-        live_terms = find_leaked_terms(db, warning.masked_content) if db is not None else []
+        live_terms = (
+            find_leaked_terms(db, warning.masked_content, include_separated=True) if db is not None else []
+        )
         basis = ""
         if not locations:
             # Legacy records contain only rule names. Resolve their locations

@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, select
@@ -44,6 +44,9 @@ from app.services.rule_engine import (
 from app.services.identifier_parts import split_identifier
 from app.services.term_classifier import classify_term
 from app.services.term_file_parser import parse_terms_from_file
+from app.services.term_search import (
+    compact_text, compact_view, find_compact, is_mixed_case_glued, structural_parts,
+)
 from app.services.placeholder_policy import CORPORATE_PLACEHOLDER_PREFIX, CORPORATE_RULE_PREFIXES, is_corporate_rule
 from app.services.path_placeholders import PathPlaceholderResolver
 
@@ -126,12 +129,12 @@ class _RuleFields:
     description: str
 
 
-# Birlesik bir terimin harf parcalari arasina istege bagli tek bir ayrac
+# Birlesik bir terimin harf parcalari arasina istege bagli bir ayrac
 # (bosluk, alt cizgi, tire) koyar: "DenizKuvvetleri" terimi "Deniz Kuvvetleri",
 # "deniz_kuvvetleri" ve "deniz-kuvvetleri" yazimlarini da yakalar; tersine
 # "Deniz Kuvvetleri" terimi bitisik yazimi da yakalar. Rakam gecisleri ve
 # baska ayraclar (nokta, egik cizgi) oldugu gibi kalir.
-def _separator_tolerant_escape(term: str) -> str:
+def _separator_tolerant_escape(term: str, separator_pattern: str) -> str:
     parts = split_identifier(term)
     if len(parts) < 2 or parts[0].start != 0 or parts[-1].end != len(term):
         return diacritic_tolerant_escape(term)
@@ -139,7 +142,7 @@ def _separator_tolerant_escape(term: str) -> str:
     for left, right in zip(parts, parts[1:]):
         gap = term[left.end:right.start]
         if gap in _TERM_SEPARATORS and left.text[-1].isalpha() and right.text[0].isalpha():
-            pieces.append(_TERM_SEPARATOR_PATTERN)
+            pieces.append(separator_pattern)
         else:
             pieces.append(diacritic_tolerant_escape(gap))
         pieces.append(diacritic_tolerant_escape(right.text))
@@ -147,19 +150,48 @@ def _separator_tolerant_escape(term: str) -> str:
 
 
 _TERM_SEPARATORS = ("", " ", "_", "-")
-_TERM_SEPARATOR_PATTERN = "[ _-]?"
+_SINGLE_SEPARATOR_PATTERN = "[ _-]?"
+# Parcalar arasinda tek alt cizgi/tire ya da yatay bosluk dizisi (cift bosluk,
+# sekme, Word'den gelen bolunmez bosluk). Satir sonu BILEREK yok: kodda bir
+# yorum satirinin sonundaki parcayi alt satirdaki koda baglayip tek yer
+# tutucuyla degistirmek sozdizimini bozar; satira bolunmus terimleri son
+# kontrol (bkz. term_search) yakalar.
+_TERM_SEPARATOR_PATTERN = r"(?:[_-]|[ \t\u00a0]+)?"
+
+# Soldan yapisik yazimin ("ETTIVEDA") da eslesmesi icin gereken en az harf
+# sayisi. Olcum (2026-10-16, 519 aktif terim, ilgisiz 6.376 dosya): sinirsiz
+# serbest birakmak 230 fazladan eslesme uretti; tamami 3 harfli kisaltmalar
+# ("TSK" -> "agentSkill") ve salt rakam terimlerdendi ("11111111111" ->
+# kart numarasi). 4+ harfte 15'e iniyor.
+_GLUED_PREFIX_MIN_LETTERS = 4
+
+
+def allows_glued_prefix(term: str) -> bool:
+    return sum(ch.isalpha() for ch in term) >= _GLUED_PREFIX_MIN_LETTERS
 
 
 def corporate_term_pattern(term: str) -> str:
     return compound_aware_boundary_pattern(
-        _separator_tolerant_escape(term),
+        _separator_tolerant_escape(term, _TERM_SEPARATOR_PATTERN),
+        connector_class=_TERM_CONNECTOR_CLASS,
+        free_right_continuation=True,
+        free_left_continuation=allows_glued_prefix(term),
+    )
+
+
+# Onceki desen surumleri: yalnizca mevcut kurallari yeni desene tasiyan
+# migration'larin "elle degistirilmemis" kontrolu icin.
+#
+# Tek ayrac toleransi, sol sinir her terimde siki.
+def separator_tolerant_corporate_term_pattern(term: str) -> str:
+    return compound_aware_boundary_pattern(
+        _separator_tolerant_escape(term, _SINGLE_SEPARATOR_PATTERN),
         connector_class=_TERM_CONNECTOR_CLASS,
         free_right_continuation=True,
     )
 
 
-# Ayrac toleransindan ONCEKI desen; yalnizca mevcut kurallari yeni desene
-# tasiyan migration'in "elle degistirilmemis" kontrolu icin.
+# Ayrac toleransindan ONCEKI desen.
 def legacy_corporate_term_pattern(term: str) -> str:
     return compound_aware_boundary_pattern(
         diacritic_tolerant_escape(term),
@@ -676,6 +708,88 @@ class LeakedTerm:
     line_number: int
     column_number: int
     matched_value: str
+    # Otomatik duzeltmede ayri maskelenecek parcalar; bos ise matched_value
+    # tek deger olarak maskelenir (bkz. term_search.structural_parts).
+    mask_parts: tuple[str, ...] = ()
+
+
+# Supheli diye PASIF eklenen terimler hicbir taramada maskelenmez (bkz.
+# term_classifier). Kullanici terimi ekledigi icin korundugunu sanabilir;
+# disa aktarma bu desenlerle yalnizca rapor notu uretir (bkz. exporter
+# _measure_passive_terms), dosya engellenmez.
+def compile_passive_term_patterns(db: Session) -> list[re.Pattern]:
+    rows = db.execute(
+        select(FilterRule.rule_name, FilterRule.regex_pattern, FilterRule.regex_flags, FilterRule.is_pattern_encrypted)
+        .where(
+            or_(*(FilterRule.rule_name.startswith(prefix, autoescape=True) for prefix in CORPORATE_RULE_PREFIXES)),
+            FilterRule.is_active.is_(False),
+            FilterRule.corporate_term_deleted_at.is_(None),
+            FilterRule.pattern_type == "regex",
+        )
+    ).all()
+    return [
+        re.compile(decrypt_value(pattern) if is_encrypted else pattern, _compile_flags(flags))
+        for rule_name, pattern, flags, is_encrypted in rows
+        if is_corporate_rule(rule_name)
+    ]
+
+
+def count_passive_terms(patterns: list[re.Pattern], text: str) -> int:
+    protected = [match.span() for match in PLACEHOLDER_RE.finditer(text)]
+    return sum(
+        1 for pattern in patterns for match in pattern.finditer(text)
+        if not any(left <= match.start() and match.end() <= right for left, right in protected)
+    )
+
+
+# Ayractan bagimsiz kaba son kontrolun calistigi en az harf sayisi. Ayraclar
+# atilinca kisa terimler kelime aralarinda rastgele belirir ("TSK" -> "text
+# skipped", "DDO" -> ".md dosyasi"). Olcum (2026-10-16, 519 aktif terim):
+# sinirsiz kontrol ilgisiz 6.376 dosyanin 398'ini onaya dusururdu; 6+ harfte
+# 14'e, sol sinir duzeltmesiyle birlikte 4'e iniyor.
+_SEPARATED_CHECK_MIN_LETTERS = 6
+
+
+def allows_separated_check(term: str) -> bool:
+    return sum(ch.isalpha() for ch in term) >= _SEPARATED_CHECK_MIN_LETTERS
+
+
+def _leaked_term(rule_name: str, category: str, text: str, start: int, end: int) -> LeakedTerm:
+    return LeakedTerm(
+        rule_name=rule_name, category=category,
+        line_number=text.count("\n", 0, start) + 1,
+        column_number=start - text.rfind("\n", 0, start),
+        matched_value=text[start:end],
+    )
+
+
+# Maskeleme deseninin goremedigi yazimlar: "Zeta.Ledger", "Ahmet,Yilmaz",
+# satira bolunmus, harfleri ayrilmis ya da kacis koduyla yazilmis terim.
+# Maskelenmis yer tutucular engeldir: iki yanindaki harfler birlestirilmez.
+def _separated_term_leaks(
+    masked_text: str,
+    terms: list[tuple[str, str, str]],
+    protected_spans: list[tuple[int, int]],
+    reported_spans: list[tuple[int, int]],
+) -> list[LeakedTerm]:
+    needles = [(rule_name, category, term, compact_text(term)) for rule_name, category, term in terms
+               if allows_separated_check(term)]
+    # Kaynak eslemeli gorunum karakter karakter kurulur; cogu dosyada hicbir
+    # terim gecmedigi icin once eslemesiz (C hizinda) on eleme yapilir.
+    quick = compact_text(masked_text)
+    needles = [item for item in needles if item[3] in quick]
+    if not needles:
+        return []
+    view = compact_view(masked_text, protected_spans)
+    leaks: list[LeakedTerm] = []
+    for rule_name, category, term, needle in needles:
+        for start, end in find_compact(view, needle):
+            if any(start < right and left < end for left, right in reported_spans):
+                continue
+            leak = _leaked_term(rule_name, category, masked_text, start, end)
+            parts = structural_parts(leak.matched_value, term)
+            leaks.append(replace(leak, mask_parts=tuple(parts)) if len(parts) > 1 else leak)
+    return leaks
 
 
 # Maskelenmis metni tum aktif kurumsal-terim kurallarina karsi yeniden tarar -
@@ -685,12 +799,19 @@ class LeakedTerm:
 # bileseni ayri tarar. Boylece regex sinirlari da aynidir; birden fazla
 # klasore yayilan terimler veya eksik legacy terim metadata'si sahte
 # alarm uretmez. Dosya ICERIGINDE tam yollar hala denetlenir.
+#
+# include_separated=True: maskeleme deseninden BAGIMSIZ ikinci bir arama
+# (bkz. _separated_term_leaks). Ayni desenle yapilan kontrol, maskelemenin
+# kacirdigini da kacirir. Yalnizca dosya icerigi icin: bulunan deger once
+# otomatik duzeltmeye gider; yollarda ise tek bulgu tum disa aktarmayi
+# durdurur ve insan onay kapisi bir yanlis alarmi gecemezdi.
 def find_leaked_terms(
     db: Session,
     masked_text: str,
     *,
     exclude_path_spanning: bool = False,
     path_placeholders: Iterable[str] | None = None,
+    include_separated: bool = False,
 ) -> list[LeakedTerm]:
     """Check for open terms; paths may supply tokens used in that path.
 
@@ -701,7 +822,7 @@ def find_leaked_terms(
     """
     columns = [
         FilterRule.rule_name, FilterRule.category, FilterRule.regex_pattern,
-        FilterRule.regex_flags, FilterRule.is_pattern_encrypted,
+        FilterRule.regex_flags, FilterRule.is_pattern_encrypted, FilterRule.corporate_term_encrypted,
     ]
     rows = db.execute(
         select(*columns).where(
@@ -722,7 +843,9 @@ def find_leaked_terms(
         if exclude_path_spanning else [(0, masked_text)]
     )
     leaked: list[LeakedTerm] = []
-    for rule_name, category, stored_pattern, regex_flags, is_encrypted in rows:
+    reported_spans: list[tuple[int, int]] = []
+    separated_terms: list[tuple[str, str, str]] = []
+    for rule_name, category, stored_pattern, regex_flags, is_encrypted, encrypted_term in rows:
         # SQLite LIKE is case-insensitive; apply the same exact prefix
         # policy as masking even when the DB query returns a lookalike.
         if not is_corporate_rule(rule_name):
@@ -736,10 +859,13 @@ def find_leaked_terms(
                 # Its surrounding prefix/suffix must still be checked.
                 if any(left <= start and end <= right for left, right in protected_spans):
                     continue
-                leaked.append(LeakedTerm(
-                    rule_name=rule_name, category=category,
-                    line_number=masked_text.count("\n", 0, start) + 1,
-                    column_number=start - masked_text.rfind("\n", 0, start),
-                    matched_value=match.group(0),
-                ))
+                # Maskelemeyle ayni kural: camelCase dilimi yapisik yazim sayilmaz.
+                if is_mixed_case_glued(masked_text, start, end):
+                    continue
+                leaked.append(_leaked_term(rule_name, category, masked_text, start, end))
+                reported_spans.append((start, end))
+        if include_separated and not exclude_path_spanning and encrypted_term:
+            separated_terms.append((rule_name, category, decrypt_value(encrypted_term)))
+    if separated_terms:
+        leaked.extend(_separated_term_leaks(masked_text, separated_terms, protected_spans, reported_spans))
     return leaked

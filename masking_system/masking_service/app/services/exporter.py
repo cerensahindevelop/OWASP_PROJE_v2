@@ -70,7 +70,7 @@ from app.services.output_publication import (
 )
 from app.services.integrity_manifest import MANIFEST_NAME, write_manifest, file_digest, source_tag
 from app.services.path_placeholders import PathPlaceholderResolver, UnsafeUnmaskPathError
-from app.services.term_upload import find_leaked_terms
+from app.services.term_upload import compile_passive_term_patterns, count_passive_terms, find_leaked_terms
 from app.services.mapping_service import (
     DetectionOutcome,
     MappingCache,
@@ -276,6 +276,9 @@ class ExportReport:
     # maskelenen terimin maskeli yolda acik kaldigi dosya etiketi -> terim
     # sayisi. Dosya engellenmez; bkz. _measure_path_content_mismatch.
     path_content_mismatch: dict[str, int] = field(default_factory=dict)
+    # Yalnizca bilgi: yayinlanan dosyalarda gecen PASIF (maskelenmeyen) sozluk
+    # terimi sayisi, dosya etiketi -> gecis. bkz. _measure_passive_terms.
+    passive_term_files: dict[str, int] = field(default_factory=dict)
     # Kullanicinin "uzun surebilir" uyarisinda taramadan cikardigi dosyalar
     # (kaynak goreli yol; files_excluded'a da sayilir). Yollari yalnizca
     # kullanicinin kendi ekrani gosterir; rapor metni sayisini yazar (kural 7).
@@ -1996,7 +1999,9 @@ def _finalize_file(
 
     # Terim sozlugu son kontrolu: ana tespitten bagimsiz ikinci bir tarama - burada
     # hala eslesme varsa kesin sinyaldir, LLM denetimi beklenmeden dosya reddedilir.
-    leaked_terms = find_leaked_terms(db, masked_file.masked_text)
+    # Ayractan bagimsiz arama ("Zeta.Ledger") da yapilir; bulunan deger asagida
+    # once otomatik duzeltmeye gider.
+    leaked_terms = find_leaked_terms(db, masked_file.masked_text, include_separated=True)
 
     # Sizan deger kesin biliniyorsa (acik terim ya da metinde birebir
     # dogrulanmis denetim alintisi) once otomatik duzeltme denenir; caller
@@ -2165,6 +2170,37 @@ def _finalize_file(
     )
 
 
+# Pasif terim olcumu (YALNIZCA RAPOR): yayinlanacak dosyalarda supheli diye
+# pasif eklenmis bir sozluk terimi geciyor mu? Pasif terim bilerek
+# maskelenmez; not, kullanicinin terimi gozden gecirip aktif etmesi icindir.
+# Dosya engellenmez; AuditLog'a ve rapora yalnizca sayi yazilir (deger yok).
+def _measure_passive_terms(db: Session, report: ExportReport, output_files: list, max_inline_size: int) -> None:
+    patterns = compile_passive_term_patterns(db)
+    if not patterns:
+        return
+    for output_file in output_files:
+        if output_file.outcome.final_state != "READY" or not output_file.path.is_file():
+            continue
+        try:
+            text, _encoding, error = _read_consistency_target(
+                output_file.path, max_inline_size, preferred_encoding=output_file.encoding,
+            )
+            if text is None or error is not None:
+                continue
+            count = count_passive_terms(patterns, text)
+        except Exception as exc:
+            # Olcum export sonucunu asla etkilemez; istisna metni loglanmaz.
+            db.add(AuditLog(run_id=report.run_id, file_path=output_file.outcome.relative_path, action="skipped",
+                            detail=f"passive_term_check=error error_type={type(exc).__name__}"))
+            continue
+        if count:
+            report.passive_term_files[report.file_label(output_file.outcome.relative_path)] = count
+            db.add(AuditLog(
+                run_id=report.run_id, file_path=output_file.outcome.relative_path, action="skipped",
+                detail=f"passive_term_check terms={count}",
+            ))
+
+
 # Yol/icerik uyusmazligi olcumunde dikkate alinan en kisa deger (harf/rakam);
 # daha kisa degerler (orn. "01") rastgele yol parcalariyla cakisip olcumu bozar.
 _PATH_CONTENT_MIN_CHARS = 3
@@ -2289,7 +2325,7 @@ def _try_remediation(
         rule = rules_by_name.get(term.rule_name)
         if rule is None:
             return FailedCheck.KURAL
-        values.append((term.matched_value, rule, "dictionary"))
+        values.extend((part, rule, "dictionary") for part in term.mask_parts or (term.matched_value,))
     for finding in request.findings:
         if "\n" in finding.ilgili_bolum or "\r" in finding.ilgili_bolum:
             return FailedCheck.COK_SATIRLI_ALINTI
@@ -2318,7 +2354,7 @@ def _try_remediation(
             reverse_map = _placeholder_reverse_map(db, run_ctx, text)
             if not verify_round_trip(prep.text, text, reverse_map).ok:
                 failure = FailedCheck.GERI_DONUS
-        if failure is None and find_leaked_terms(db, text):
+        if failure is None and find_leaked_terms(db, text, include_separated=True):
             failure = FailedCheck.ACIK_TERIM
         if failure is None and validate_masked_syntax(prep.rel, text, original_text=prep.text):
             failure = FailedCheck.SOZDIZIMI
@@ -3137,6 +3173,7 @@ async def export_project(
             db, run_ctx, consistency_registry, scan_only_output_files, report, max_inline_size,
         )
         _measure_path_content_mismatch(db, run_ctx, report, output_files, max_inline_size)
+        _measure_passive_terms(db, report, output_files, max_inline_size)
 
         # Finalize (chmod + manifest kaydi): bu noktaya kadar dosya butun
         # icerik dogrulamalarindan (syntax/round-trip/consistency/audit)

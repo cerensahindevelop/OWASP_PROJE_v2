@@ -189,6 +189,16 @@ def format_export_report(report: "ExportReport") -> str:
             f"icerikte maskeli ama yolda acik; dosya kimlikleri: {', '.join(refs)}"
         )
 
+    if report.passive_term_files:
+        # Yalnizca kimlik yazilir: yol ve kategori terimin kendisini icerebilir.
+        refs = sorted("#" + label.rsplit("#", 1)[-1] for label in report.passive_term_files)
+        lines.append("")
+        lines.append(
+            f"  Pasif sozluk terimi (maskelenmedi, yalnizca bilgi): {len(refs)} dosyada "
+            f"{sum(report.passive_term_files.values())} gecis; terimi Kurumsal Terim Sozlugu'nde "
+            f"gozden gecirip aktif edebilirsiniz. Dosya kimlikleri: {', '.join(refs)}"
+        )
+
     if report.actionable_validation_warnings:
         lines.append("")
         lines.append("  SOZDIZIMI DOGRULAMA UYARILARI:")
