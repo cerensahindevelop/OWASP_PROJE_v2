@@ -180,7 +180,7 @@ def test_value_beside_existing_placeholder_in_json_string_is_masked_in_place(db_
 def test_value_beside_placeholder_with_other_open_words_is_still_rejected(db_session, tmp_path):
     from app.services.review_masking import mask_review_values
     run, content, _ = _json_with_masked_prefix(db_session, tmp_path, "Ankara Subesi Merkez")
-    with pytest.raises(ValueError, match="yer tutucuyla"):
+    with pytest.raises(ValueError, match="aynı cümlede geçiyor"):
         mask_review_values(db_session, run, content, "veri/a.json", [("Ankara Subesi", "POST_MASK_AUDIT")])
 
 

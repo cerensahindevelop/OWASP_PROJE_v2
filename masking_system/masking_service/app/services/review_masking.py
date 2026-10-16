@@ -139,7 +139,11 @@ def mask_known_values(
         if any(result.start < b and a < result.end for a, b in protected):
             exact = _exact_beside_placeholders(content, result, found, protected)
             if exact is None:
-                raise ValueError("Riskli ifade mevcut bir yer tutucuyla çakışıyor; dosya değiştirilmedi.")
+                raise ValueError(
+                    "Bu ifade, daha önce maskelenmiş bir değerle aynı cümlede geçiyor; yarım maskeleme "
+                    "olmasın diye dosya değiştirilmedi. İfadeyi Kurumsal Terim Sözlüğü'ne ekleyip "
+                    "projeyi yeniden dışa aktarın."
+                )
             source = source_by_rule[result.rule.rule_name]
             candidates.extend(replace(
                 match, original_value=content[match.start:match.end], entity_type=match.rule.category,

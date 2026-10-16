@@ -182,13 +182,13 @@ def test_failed_mask_explains_why_inside_the_files_box(monkeypatch):
     _quarantined_file(monkeypatch, pending)
 
     def fail(warning_id):
-        raise ApiError("Otomatik maskeleme sonrası dosya çıktıya eklenmedi: Riskli ifade mevcut bir yer tutucuyla çakışıyor", None, 400)
+        raise ApiError("Otomatik maskeleme sonrası dosya çıktıya eklenmedi: Bu ifade, daha önce maskelenmiş bir değerle aynı cümlede geçiyor", None, 400)
     monkeypatch.setattr(review_page.api_client, "mask_audit_warning", fail)
     app = _review_app().run()
     app.button(key="audit_mask_32").click().run()
     assert not app.exception
     box = app.expander[0]
-    assert any("yer tutucuyla çakışıyor" in w.value and "Ne yapmalı" in w.value for w in box.warning)
+    assert any("aynı cümlede geçiyor" in w.value and "Ne yapmalı" in w.value for w in box.warning)
     assert [toast.value for toast in app.toast] == ["Dosya çıktıya eklenmedi; sebebi dosyanın kutusunda yazıyor."]
 
 
